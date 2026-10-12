@@ -31,7 +31,7 @@ export const HUDDLE_HTML = `<!doctype html>
   <label for="token">User token</label>
   <input id="token" type="password" autocomplete="off" placeholder="xoxp-…">
   <label for="channel">Conversation</label>
-  <input id="channel" placeholder="#general, or an id">
+  <input id="channel" placeholder="#general, an id, or a user id for a 1:1 call">
   <div class="row">
     <button id="join" class="primary">Join with microphone</button>
     <button id="leave" disabled>Leave</button>
@@ -72,14 +72,6 @@ function gathered(pc, ms = 2500) {
 /** One SDP exchange at a time on the receiving session, as the SFU requires. */
 const serially = (work) => (state.queue = state.queue.then(work, work))
 
-async function resolveChannel(ref) {
-  if (!ref.startsWith("#")) return ref
-  const { channels } = await api("users.conversations", { types: "public_channel,private_channel", limit: 999 })
-  const found = channels.find((c) => c.name === ref.slice(1).toLowerCase())
-  if (!found) throw new Error("you're not in " + ref)
-  return found.id
-}
-
 function render() {
   const ul = $("people")
   ul.replaceChildren(...[...state.people.values()].map((p) => {
@@ -117,7 +109,8 @@ async function join() {
   try {
     status("Joining…")
     state.me = (await api("auth.test")).user_id
-    state.channel = await resolveChannel($("channel").value.trim())
+    // The API takes "#name", an id or a user id; events name the conversation by id, so learn it first.
+    state.channel = (await api("campflare.huddles.info", { channel: $("channel").value.trim() })).channel
     const who = await names()
     const { ice_servers } = await api("campflare.huddles.ice_servers")
 
