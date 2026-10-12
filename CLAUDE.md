@@ -14,9 +14,10 @@ pnpm ready                 # is the checkout ready (deps, secrets, bundles, migr
 pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every test suite with coverage
 pnpm fmt                   # format in place (oxfmt)
 pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
+                           # --web: the app too (free port with --port 0); URLs in .wrangler/campflare-dev.run.json
 pnpm otui                  # opentui-slack against the dev:all server (reads .wrangler/campflare-dev.env)
 pnpm web                   # the app (apps/web) on :5173, signed in to the dev:all server as alex; ?as=vincent
-pnpm shot '#/C123'         # screenshot of the running app + console errors + accessible outline (--as, --dark)
+pnpm shot '#/C123'         # screenshot of the dev:all --web app + console errors + accessible outline (--as, --dark, --state)
 pnpm e2e                   # the app in Chromium against a fresh stack of its own (needs nothing running)
 pnpm desktop               # the Tauri shell around pnpm web (Rust toolchain needed)
 pnpm dev                   # just wrangler dev on :8787 (apply migrations first: see below)
@@ -47,11 +48,12 @@ So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
 not in the hooks: run the affected suite yourself. In a fresh worktree, run
 `pnpm ready --fix` first.
 
-Seeing the app: with `pnpm dev:all --port 0` and `CAMPFLARE_WEB_PORT=<free> pnpm web`
-running in the background, `CAMPFLARE_WEB_PORT=<same> pnpm shot '#/<channel id>'` saves
+Seeing the app: with `pnpm dev:all --port 0 --web` running in the background,
+`pnpm shot '#/<channel id>'` finds it through the run file, saves
 `apps/web/.shots/shot.png` (Read it to look) and prints console errors, failed requests
-and the accessible outline. Every screen is a hash route (`#/C123`, `#/C123/<thread ts>`),
-so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
+and the accessible outline. Several routes give one shot each; `--click 'button:Send'`,
+`--type hi`, `--press Enter` act first, in order. Every screen is a hash route
+(`#/C123`, `#/C123/<thread ts>`), so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
 UI tests select by role and accessible name, as a person would; keep controls
 labelled and the jsx-a11y lint passing so they stay selectable.
 
