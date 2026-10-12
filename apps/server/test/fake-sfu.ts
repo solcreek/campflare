@@ -1,5 +1,6 @@
 import exchanges from "./fixtures/sfu/exchanges.json"
 import videoExchanges from "./fixtures/sfu/exchanges-video.json"
+import adapterExchanges from "./fixtures/sfu/exchanges-adapter.json"
 
 // A Realtime SFU stand-in for offline tests, answering with responses
 // recorded from the real API (tests/live, RECORD_FIXTURES=1) and keeping just
@@ -8,7 +9,7 @@ import videoExchanges from "./fixtures/sfu/exchanges-video.json"
 // real one does (425 session_error).
 
 type Exchange = { operation: string; status: number; response: Record<string, unknown> }
-const recorded = [...exchanges, ...videoExchanges] as Exchange[]
+const recorded = [...exchanges, ...videoExchanges, ...adapterExchanges] as Exchange[]
 
 function fixture(operation: string, match: (e: Exchange) => boolean = () => true): Exchange {
   const found = recorded.find((e) => e.operation === operation && match(e))
@@ -26,6 +27,10 @@ const SUBSCRIBE = fixture(
 )
 const MISSING_TRACK = fixture("POST /sessions/{id}/tracks/new", (e) => !e.response.sessionDescription)
 const UNKNOWN_SESSION = fixture("PUT /sessions/{id}/renegotiate", (e) => e.status === 425)
+const ADAPTER_REFUSED = (
+  fixture("POST /adapters/websocket/new", (e) => e.status === 503).response.tracks as Record<string, unknown>[]
+)[0]!
+const ADAPTER_CLOSED = (fixture("POST /adapters/websocket/close").response.tracks as Record<string, unknown>[])[0]!
 const MISSING_SUBSCRIPTION = fixture(
   "PUT /sessions/{id}/tracks/update",
   (e) => (e.response.tracks as { errorCode?: string }[] | undefined)?.some((t) => t.errorCode) ?? false,
@@ -68,18 +73,14 @@ export function fakeSfu(): FakeSfu {
       return Response.json({ errorCode: failure.errorCode, errorDescription: "injected" }, { status: failure.status })
     }
 
-    // WebSocket adapters: shaped as the docs show them (not yet recorded: the
-    // SFU must reach a public endpoint to create one). An entry for a track
-    // that isn't published fails on its own; all failing is a 503.
+    // WebSocket adapters, answered as the real SFU did (tests/live/transcribe):
+    // an entry for a track that isn't published fails on its own with the
+    // recorded handshake error; all failing is a 503; a close reports bytes.
     if (operation === "POST /adapters/websocket/new") {
       const entries = (body?.tracks ?? []) as { sessionId: string; trackName: string; endpoint: string }[]
       const results = entries.map((e) => {
         if (!published.has(`${e.sessionId}/${e.trackName}`)) {
-          return {
-            trackName: e.trackName,
-            errorCode: "websocket_handshake_failed",
-            errorDescription: "The handshake with the provided endpoint failed.",
-          }
+          return { ...ADAPTER_REFUSED, trackName: e.trackName }
         }
         const adapterId = `fake-adapter-${++counter}`
         adapters.set(adapterId, { ...e, closed: false })
@@ -93,7 +94,7 @@ export function fakeSfu(): FakeSfu {
         const adapter = adapters.get(e.adapterId)
         if (adapter) adapter.closed = true
       }
-      return Response.json({ tracks: entries.map((e) => ({ adapterId: e.adapterId })) })
+      return Response.json({ tracks: entries.map((e) => ({ ...ADAPTER_CLOSED, adapterId: e.adapterId })) })
     }
     if (operation === "POST /sessions/new") {
       const sessionId = `fake-session-${++counter}`

@@ -353,9 +353,13 @@ describe("SFU client details", () => {
     expect(fake.adapters.get(created[0]!.adapterId!)?.closed).toBe(true)
     expect(await client.closeAdapters([])).toEqual([])
     // Every entry failing is an HTTP error.
+    // Every entry failing is a 503, reported with the entries' own error, as the real SFU words it.
     await expect(
       client.streamToWebSocket([{ sessionId: "pub", trackName: "nope", endpoint: "wss://x.test/b" }]),
-    ).rejects.toMatchObject({ status: 503 })
+    ).rejects.toMatchObject({
+      status: 503,
+      code: "websocket_handshake_failed",
+    })
   })
 
   it("raises SfuError for HTTP failures, unreadable bodies and per-track errors", async () => {

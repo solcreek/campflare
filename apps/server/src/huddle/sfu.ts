@@ -80,8 +80,16 @@ export function createSfu(options: SfuOptions) {
       headers: { authorization: `Bearer ${options.appSecret}`, "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-    const data = (await res.json().catch(() => ({}))) as T & { errorCode?: string; errorDescription?: string }
-    if (!res.ok || data.errorCode) throw new SfuError(operation, res.status, data.errorCode ?? `http_${res.status}`)
+    const data = (await res.json().catch(() => ({}))) as T & {
+      errorCode?: string
+      errorDescription?: string
+      tracks?: { errorCode?: string }[]
+    }
+    if (!res.ok || data.errorCode) {
+      // A batch where every entry failed (503) names the cause per entry: report the first.
+      const code = data.errorCode ?? data.tracks?.find((t) => t.errorCode)?.errorCode ?? `http_${res.status}`
+      throw new SfuError(operation, res.status, code)
+    }
     return data
   }
 
