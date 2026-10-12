@@ -86,14 +86,15 @@ describe.skipIf(!configured)("video huddle (live)", () => {
     for (const token of tokens) pages.push(await joinAs(token))
     const ids = await Promise.all(pages.map(me))
 
-    // Everyone decodes the other three cameras.
+    // Everyone decodes the other three cameras. The checks below read the sample that showed it:
+    // sampling again can catch a tile between layers (the speaker's steps up), waiting for a keyframe.
+    let views: Map<string, Video>[] = []
     await waitOrExplain(
       pages,
-      async () => (await Promise.all(pages.map(seeing))).every((m) => m.size === 3),
+      async () => (views = await Promise.all(pages.map(seeing))).every((m) => m.size === 3),
       45_000,
       "everyone to see three cameras",
     )
-    const views = await Promise.all(pages.map(seeing))
     for (const [i, view] of views.entries())
       expect([...view.keys()].toSorted()).toEqual(ids.filter((_, j) => j !== i).toSorted())
     expect(await pages[0]!.locator("audio").count()).toBe(3)
