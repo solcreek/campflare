@@ -1,5 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["node"], "lib": ["es2024", "dom"], "allowImportingTsExtensions": true },
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["es2024", "dom"],
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@campflare/client": ["../../packages/client/src/index.ts"],
+      "@campflare/core": ["../../packages/core/src/index.ts"]
+    }
+  },
   "include": ["*.ts"]
 }
