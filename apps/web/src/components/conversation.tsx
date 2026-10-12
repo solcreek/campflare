@@ -1,11 +1,20 @@
 import { conversationTitle, keyOf } from "@campflare/core"
 import { HashIcon, LockIcon, XIcon } from "lucide-react"
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
-import { Composer } from "./composer"
+import { Composer, type ComposerHandle, useFileDrop } from "./composer"
 import { reportError } from "./message"
 import { MessageList } from "./message-list"
+
+/** Over a conversation while files are dragged across it. */
+function DropHint() {
+  return (
+    <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/50 bg-background/80 text-sm font-medium">
+      Drop files to attach them
+    </div>
+  )
+}
 
 export function ConversationView({ channel, onOpenThread }: { channel: string; onOpenThread: (ts: string) => void }) {
   const workspace = useWorkspace()
@@ -16,6 +25,8 @@ export function ConversationView({ channel, onOpenThread }: { channel: string; o
   const messages = useMemo(() => (line?.keys ?? []).flatMap((k) => messagesById[k] ?? []), [line, messagesById])
   const loaded = Boolean(line)
   const newest = messages.findLast((m) => !m.pending)?.ts
+  const composer = useRef<ComposerHandle>(null)
+  const drop = useFileDrop((files) => composer.current?.attach(files))
 
   useEffect(() => {
     if (!loaded) workspace.loadHistory(channel).catch(reportError("load messages"))
@@ -31,7 +42,8 @@ export function ConversationView({ channel, onOpenThread }: { channel: string; o
   const canJoin = !isDm && conversation.is_member === false
 
   return (
-    <section aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col" {...drop.handlers}>
+      {drop.dragging && <DropHint />}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
         {!isDm && (conversation.is_private ? <LockIcon className="size-4" /> : <HashIcon className="size-4" />)}
         <h1 className="font-semibold">{title}</h1>
@@ -55,6 +67,7 @@ export function ConversationView({ channel, onOpenThread }: { channel: string; o
         </div>
       ) : (
         <Composer
+          ref={composer}
           channel={channel}
           placeholder={isDm ? `Message ${title}` : `Message #${title}`}
           disabled={conversation.is_archived}
@@ -75,6 +88,8 @@ export function ThreadPanel({
 }) {
   const workspace = useWorkspace()
   const key = keyOf(channel, threadTs)
+  const composer = useRef<ComposerHandle>(null)
+  const drop = useFileDrop((files) => composer.current?.attach(files))
   const parent = useWorkspaceState((s) => s.messages[key])
   const replies = useWorkspaceState((s) => s.threads[key])
   const messagesById = useWorkspaceState((s) => s.messages)
@@ -88,7 +103,8 @@ export function ThreadPanel({
   }, [workspace, channel, threadTs])
 
   return (
-    <aside aria-label="Thread" className="flex min-h-0 w-96 shrink-0 flex-col border-l">
+    <aside aria-label="Thread" className="relative flex min-h-0 w-96 shrink-0 flex-col border-l" {...drop.handlers}>
+      {drop.dragging && <DropHint />}
       <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <h2 className="font-semibold">Thread</h2>
         <Button variant="ghost" size="icon-sm" aria-label="Close thread" onClick={onClose}>
@@ -96,7 +112,7 @@ export function ThreadPanel({
         </Button>
       </header>
       <MessageList messages={messages} inThread empty="Loading…" />
-      <Composer channel={channel} threadTs={threadTs} placeholder="Reply…" />
+      <Composer ref={composer} channel={channel} threadTs={threadTs} placeholder="Reply…" />
     </aside>
   )
 }

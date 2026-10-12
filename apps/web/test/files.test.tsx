@@ -1,10 +1,10 @@
-import type { Message } from "@campflare/core"
-import { act, render, screen, waitFor, within } from "@testing-library/react"
+import type { Message, NewFile } from "@campflare/core"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
-import { fakeServer, FakeSocket, hello, VINCENT } from "./server"
+import { ALEX, fakeServer, FakeSocket, hello, VINCENT } from "./server"
 
 afterEach(() => {
   FakeSocket.all = []
@@ -120,5 +120,72 @@ describe("files in messages", () => {
     expect(within(log()).getByRole("img", { name: "Loading slow.png" })).toBeTruthy()
     const external = within(log()).getByRole("group", { name: "File: external" })
     expect(within(external).queryByRole("button")).toBeNull()
+  })
+})
+
+describe("uploads from the composer", () => {
+  it("attaches with the button, shows the upload pending, then the stored message", async () => {
+    const { server, user } = await signedIn([])
+    const box = screen.getByRole("textbox", { name: "Message #general" })
+    const photo = new File([new Uint8Array(2048)], "café.png", { type: "image/png" })
+    const notes = new File(["hola"], "notas.txt", { type: "text/plain" })
+    await user.upload(screen.getByLabelText("Files to attach"), [photo, notes])
+    const attachments = screen.getByRole("list", { name: "Attachments" })
+    expect(within(attachments).getByText("2 KB")).toBeTruthy()
+    await user.click(within(attachments).getByRole("button", { name: "Remove notas.txt" }))
+    expect(within(attachments).queryByText("notas.txt")).toBeNull()
+
+    let finish!: () => void
+    const sent: { files: NewFile[]; opts: unknown }[] = []
+    server.api.client.upload = (files, opts) => {
+      sent.push({ files: files as NewFile[], opts })
+      return new Promise((resolve) => (finish = () => resolve([{ id: "F9", title: "café.png" }])))
+    }
+    await user.type(box, "Voilà{Enter}")
+    const pending = await within(log()).findByRole("group", { name: "File: café.png" })
+    expect(within(pending).getByText("Uploading…")).toBeTruthy()
+    expect(screen.queryByRole("list", { name: "Attachments" })).toBeNull()
+    expect(sent[0]!.files[0]!.bytes.byteLength).toBe(2048)
+    expect(sent[0]!.opts).toMatchObject({ channel: "CGEN", text: "Voilà" })
+
+    server.api.handlers["conversations.history"] = () => ({
+      messages: [
+        {
+          ts: "1700000600.000000",
+          user: ALEX,
+          text: "Voilà",
+          files: [{ id: "F9", name: "café.png", mimetype: "image/png", url_private: `${FILES}F9/caf%C3%A9.png` }],
+        },
+      ],
+    })
+    server.api.files[`${FILES}F9/caf%C3%A9.png`] = new Uint8Array([1])
+    await act(async () => finish())
+    expect(await within(log()).findByRole("img", { name: "café.png" })).toBeTruthy()
+    expect(within(log()).queryByText("Uploading…")).toBeNull()
+  })
+
+  it("takes files dropped on the conversation, and keeps a failed upload for retry", async () => {
+    const { server } = await signedIn([])
+    server.api.handlers["files.getUploadURLExternal"] = () => new Error("file_too_large")
+    const section = screen.getByRole("region", { name: "general" })
+    const file = new File(["x"], "大きい.zip", { type: "application/zip" })
+    const dataTransfer = { types: ["Files"], files: [file] }
+    fireEvent.dragOver(section, { dataTransfer })
+    expect(screen.getByText("Drop files to attach them")).toBeTruthy()
+    fireEvent.dragLeave(section, { dataTransfer, relatedTarget: null })
+    expect(screen.queryByText("Drop files to attach them")).toBeNull()
+    // Text being dragged isn't a file drop.
+    fireEvent.dragOver(section, { dataTransfer: { types: ["text/plain"], files: [] } })
+    expect(screen.queryByText("Drop files to attach them")).toBeNull()
+    fireEvent.drop(section, { dataTransfer: { types: ["text/plain"], files: [] } })
+    fireEvent.dragOver(section, { dataTransfer })
+    fireEvent.drop(section, { dataTransfer })
+    const attachments = screen.getByRole("list", { name: "Attachments" })
+    expect(within(attachments).getByText("大きい.zip")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect((await screen.findByRole("alert")).textContent).toContain("file_too_large")
+    expect(within(log()).getByRole("group", { name: "File: 大きい.zip" })).toBeTruthy()
+    expect(server.api.calls.filter((c) => c.method === "files.getUploadURLExternal")).toHaveLength(1)
   })
 })
