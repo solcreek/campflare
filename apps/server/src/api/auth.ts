@@ -102,16 +102,27 @@ export async function actorFor(env: Env, userId: string): Promise<Auth> {
   return { kind: user.is_bot ? "bot" : "user", team, user, scopes: DEFAULT_USER_SCOPES }
 }
 
-/** Mints a token and stores its hash. The token is returned once. */
-export async function issueToken(
+type TokenOptions = {
+  teamId: string
+  kind: Auth["kind"]
+  userId?: string
+  appId?: string
+  scopes: string[]
+  label?: string
+  /** The OAuth client it is issued to (oauth.v2.access). */
+  clientId?: string
+}
+
+/** A new token and the statement that stores its hash, for a caller that batches it with other writes. */
+export async function prepareToken(
   env: Env,
-  opts: { teamId: string; kind: Auth["kind"]; userId?: string; appId?: string; scopes: string[]; label?: string },
-): Promise<string> {
+  opts: TokenOptions,
+): Promise<{ token: string; insert: D1PreparedStatement }> {
   const random = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("")
   const token = `${PREFIX[opts.kind]}${opts.teamId}-${random}`
-  await run(
+  const insert = stmt(
     env.DB,
-    "INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, client_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     await sha256Hex(token),
     opts.teamId,
     opts.kind,
@@ -119,8 +130,16 @@ export async function issueToken(
     opts.appId ?? null,
     opts.scopes.join(","),
     opts.label ?? "",
+    opts.clientId ?? null,
     Math.floor(Date.now() / 1000),
   )
+  return { token, insert }
+}
+
+/** Mints a token and stores its hash. The token is returned once. */
+export async function issueToken(env: Env, opts: TokenOptions): Promise<string> {
+  const { token, insert } = await prepareToken(env, opts)
+  await insert.run()
   return token
 }
 
