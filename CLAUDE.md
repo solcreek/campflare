@@ -3,7 +3,8 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Campflare is a team chat server that speaks the Slack Web API, on Cloudflare
-Workers + D1 + R2 + Durable Objects. API and CLI first; a UI comes later.
+Workers + D1 + R2 + Durable Objects. API and CLI first; the app
+(web and desktop) is one more client of that API.
 Existing Slack clients and SDKs must work against it after a base-URL change.
 
 ## Commands
@@ -14,6 +15,10 @@ pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every te
 pnpm fmt                   # format in place (oxfmt)
 pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
 pnpm otui                  # opentui-slack against the dev:all server (reads .wrangler/campflare-dev.env)
+pnpm web                   # the app (apps/web) on :5173, signed in to the dev:all server as alex; ?as=vincent
+pnpm shot '#/C123'         # screenshot of the running app + console errors + accessible outline (--as, --dark)
+pnpm e2e                   # the app in Chromium against a fresh stack of its own (needs nothing running)
+pnpm desktop               # the Tauri shell around pnpm web (Rust toolchain needed)
 pnpm dev                   # just wrangler dev on :8787 (apply migrations first: see below)
 pnpm build                 # tsdown bundles for packages/client and apps/cli
 
@@ -42,14 +47,29 @@ So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
 not in the hooks: run the affected suite yourself. In a fresh worktree, run
 `pnpm ready --fix` first.
 
+Seeing the app: with `pnpm dev:all --port 0` and `CAMPFLARE_WEB_PORT=<free> pnpm web`
+running in the background, `CAMPFLARE_WEB_PORT=<same> pnpm shot '#/<channel id>'` saves
+`apps/web/.shots/shot.png` (Read it to look) and prints console errors, failed requests
+and the accessible outline. Every screen is a hash route (`#/C123`, `#/C123/<thread ts>`),
+so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
+UI tests select by role and accessible name, as a person would; keep controls
+labelled and the jsx-a11y lint passing so they stay selectable.
+
 ## Layout
 
 - `apps/server`: the Worker (Hono). Migrations in `migrations/`, tests in `test/`.
   `src/mcp/` is the remote MCP server at `/mcp`.
 - `packages/client`: `@campflare/client`, a dependency-free Web API, Socket Mode and RTM client.
 - `apps/cli`: the `campflare` CLI, bundled by tsdown into one file with the client inlined.
+- `packages/core`: `@campflare/core`, app state on top of the client (see below).
+  `@campflare/core/testing` has the fake Web API and WebSocket its tests and the app's use.
+- `apps/web`: the app, React + shadcn/ui on Base UI (`components.json` style
+  `base-nova`; add components with `npx shadcn@4.21.0 add <name>` in `apps/web`).
+  `src/components/ui/` is generated; our components sit beside it.
+- `apps/desktop`: `apps/web` in a Tauri 2 shell (`src-tauri/`), for macOS, Windows, Linux.
 - `tests/conformance`: the official `@slack/web-api` and `@slack/socket-mode`,
-  unmodified, against `wrangler dev`. This is the compatibility oracle.
+  unmodified, against `wrangler dev`. This is the compatibility oracle. It also
+  runs `@campflare/core` against the real Worker.
 
 ## Server architecture
 
@@ -137,6 +157,37 @@ isolate.
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, tokens and apps (an app is
 a bot user + xoxb + xapp).
+
+## App architecture
+
+The app is another client of the Web API, like the CLI: it never shells out to
+the CLI and never gets an endpoint of its own. Something the app needs that the
+API lacks is a new Slack-shaped (or `campflare.*`) method first, with its server
+test and CLI command, then UI.
+
+**Core.** `@campflare/core` holds what every UI needs and nothing that renders.
+`createWorkspace()` (`src/workspace.ts`) loads `auth.test`, `users.list` and
+`conversations.list`, then follows RTM; after a reconnect it re-lists
+conversations and reloads every loaded timeline's newest page, which is the
+truth for its range. All changes go through one pure `reduce(state, action)`
+(`src/state.ts`): Web API answers and RTM events alike, so tests replay actions
+with no server. Messages are keyed `channel/ts`; a conversation's timeline holds
+top-level messages, a thread's list holds replies. Sends are optimistic: a
+pending message with a `~nnnnnnnn` ts (sorts last) becomes the stored one, or
+stays with `failed` for Retry or Discard. `start()` is idempotent (StrictMode).
+`src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
+never HTML, and only links http(s) and mailto.
+
+**Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
+select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
+`useMemo`. Core's selectors take only the slices they read for that reason.
+`session.ts` keeps `{url, token}` in localStorage (the desktop shell will move it
+to the keychain behind `SessionStore`). The composer ignores Enter while an IME
+composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
+
+**Desktop.** The webview runs the web build and talks to the server itself; the
+Rust side only opens other origins' links in the system browser. The CSP in
+`tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
 
 ## Conventions
 
