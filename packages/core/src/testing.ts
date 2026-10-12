@@ -1,6 +1,7 @@
 import { createClient, type Client } from "@campflare/client"
 
-// A scripted Web API and a WebSocket the test drives by hand.
+// Test doubles for apps built on @campflare/core (import "@campflare/core/testing"):
+// a scripted Web API and a WebSocket the test drives by hand.
 
 export type Handler = (args: Record<string, string>) => Record<string, unknown> | Error
 

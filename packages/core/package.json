@@ -5,7 +5,8 @@
   "description": "Client-side state for Campflare apps: a normalized store kept live by RTM",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "typecheck": "tsc -p .",

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { keyOf, thread, timeline } from "../src/index"
 import { createWorkspace } from "../src/workspace"
-import { fakeApi, FakeSocket, settle, type Handler } from "./fakes"
+import { fakeApi, FakeSocket, settle, type Handler } from "../src/testing"
 
 afterEach(() => {
   FakeSocket.all = []
