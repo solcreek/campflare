@@ -5,6 +5,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds } from "../api/ids"
 import { teamJson, userJson } from "../api/shapes"
+import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
 
 // campflare.* — what Slack does in its admin UI and OAuth flow, as API
@@ -123,20 +124,40 @@ method("campflare.bootstrap", "none", async (ctx) => {
 /** Adds a person to the workspace and returns their first user token. */
 method("campflare.users.create", "user", async (ctx) => {
   requireAdmin(ctx)
+  // An initial password is optional; it needs an email to sign in with.
+  const password = ctx.args.str("password")
+  if (password !== undefined) {
+    checkPassword(password)
+    if (!ctx.args.has("email")) throw new CampflareError("email_required")
+  }
   const user = await createUser(ctx.env, ctx.auth.team.id, {
     name: ctx.args.req("name"),
     realName: ctx.args.str("real_name"),
     email: ctx.args.str("email"),
     admin: ctx.args.bool("is_admin"),
   })
-  const token = await issueToken(ctx.env, {
-    teamId: ctx.auth.team.id,
-    kind: "user",
-    userId: user.id,
-    scopes: DEFAULT_USER_SCOPES,
-    label: "created by admin",
-  })
+  const [token] = await Promise.all([
+    issueToken(ctx.env, {
+      teamId: ctx.auth.team.id,
+      kind: "user",
+      userId: user.id,
+      scopes: DEFAULT_USER_SCOPES,
+      label: "created by admin",
+    }),
+    password === undefined ? undefined : setPassword(ctx.env, user.id, password),
+  ])
   return { user: userJson(user, ctx.origin), token }
+})
+
+/**
+ * Sets the caller's own password, for signing in at /login with their email
+ * address. The user token proves who they are; the password is never returned.
+ */
+method("campflare.users.setPassword", "user", async (ctx) => {
+  const password = ctx.args.req("password")
+  if (!ctx.auth.user.email) throw new CampflareError("email_required")
+  await setPassword(ctx.env, ctx.auth.user.id, password)
+  return {}
 })
 
 method("campflare.users.deactivate", "user", async (ctx) => {

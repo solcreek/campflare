@@ -160,9 +160,29 @@ Node over HTTP (`tests/conformance/mcp.test.ts`), in both protocol eras.
 authorization server for MCP clients. `createAuth()` builds Better Auth per
 request (its URLs follow the request's origin) with `jwt()`, `mcp()` (tokens
 bound to `<origin>/mcp`, RFC 9728 metadata), `cimd()` (MCP 2026-07-28 profile;
-DCR off) and `campflareTokenSignIn()`, a plugin that signs a person in with an
-xoxp token and links them as an `account` (providerId `campflare`, accountId =
-Campflare user id). Routes (`src/auth/routes.ts`): `/auth/*` and
+DCR off) and `campflareSignIn()` (`src/auth/sign-in.ts`), a plugin that signs a
+person in with an email and password (`/sign-in/campflare-password`) or an xoxp
+token (`/sign-in/campflare-token`) and links them as an `account` (providerId
+`campflare`, accountId = Campflare user id); both start the same session, so
+the OAuth flows don't care which was used.
+
+**Passwords.** Not Better Auth's `emailAndPassword`: its emails are global,
+ours unique per workspace only. A password belongs to a Campflare user, in our
+`passwords` table (migration 0007): PBKDF2-SHA256 via WebCrypto at 100,000
+iterations (the Workers maximum; native, unlike a JS scrypt), salted, NFC
+normalized (`src/auth/password.ts`). People set their own with
+`campflare.users.setPassword` (xoxp; at least 10 characters; `invalid_password`,
+`email_required`) or `campflare password set` (stdin or a hidden prompt, never
+argv); an admin may pass `password` to `campflare.users.create`. Sign-in checks
+the password of every active user with that email: one match signs in; more
+than one answers `workspace_required`, and `/login` then asks for the workspace
+(domain or name). An unknown email still costs one hash. Five wrong passwords in
+a row lock those users for a minute (`too_many_attempts`, even with the right
+one; reset by a right one or a new password). That is per account only: there's
+no per-IP rate limit (Better Auth's limiter isn't configured). The `/login` page
+shows email and password first and the token form folded in a `<details>`.
+
+Routes (`src/auth/routes.ts`): `/auth/*` and
 `/.well-known/*` go to Better Auth; `/login` and `/consent` render script-free
 forms whose POSTs are forwarded to Better Auth as JSON (the only body type it
 accepts), turning its `{ url }` answer into a redirect. `/mcp` verifies those

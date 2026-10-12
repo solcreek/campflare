@@ -150,6 +150,16 @@ test("signs in through the browser: the server's sign-in and consent, then back 
     })
   ).json()) as { ok: boolean; token: string }
   expect(created.ok).toBe(true)
+  // The person sets their own password with their token, as `campflare password set` does.
+  const password = `Zoé の合言葉 ${run}`
+  const set = (await (
+    await fetch(`${stack.apiUrl}/api/campflare.users.setPassword`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${created.token}` },
+      body: new URLSearchParams({ password }),
+    })
+  ).json()) as { ok: boolean }
+  expect(set.ok).toBe(true)
 
   const page = await (await browser.newContext()).newPage()
   // ?as=none: the dev server's auto sign-in steps aside for the login screen.
@@ -157,11 +167,12 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   await page.getByLabel("Server").fill(stack.apiUrl)
   await page.getByRole("button", { name: "Sign in with your browser" }).click()
 
-  // The server's own pages: a token of the person's own, then consent for the app.
-  await expect(page.getByLabel("Campflare token")).toBeVisible()
+  // The server's own pages: email and password, then consent for the app.
+  await expect(page.getByLabel("Email")).toBeVisible()
   expect(new URL(page.url()).origin).toBe(stack.apiUrl)
-  await page.getByLabel("Campflare token").fill(created.token)
-  await page.getByRole("button", { name: "Continue" }).click()
+  await page.getByLabel("Email").fill(`zoe-${run}@campflare.test`)
+  await page.getByLabel("Password").fill(password)
+  await page.getByRole("button", { name: "Sign in" }).click()
   await expect(page.getByRole("heading", { name: /^Allow / })).toBeVisible()
   await page.getByRole("button", { name: "Allow" }).click()
 

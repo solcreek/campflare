@@ -38,10 +38,12 @@ function page(title: string, body: string, url: URL): Response {
   h1 { font-size: 1.4rem; margin: 0 0 .5rem; }
   p { color: var(--muted); }
   label { display: block; margin: 1.25rem 0 .35rem; font-weight: 600; }
-  input[type=password] { width: 100%; box-sizing: border-box; padding: .6rem .7rem; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; }
+  input:not([type=hidden]) { width: 100%; box-sizing: border-box; padding: .6rem .7rem; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; }
   .row { display: flex; gap: .75rem; margin-top: 1.5rem; }
   button { font: inherit; padding: .6rem 1.1rem; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  details { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  summary { cursor: pointer; color: var(--muted); }
   ul { padding-left: 1.2rem; } code { font-size: .9em; }
 </style>
 </head>
@@ -61,18 +63,52 @@ function page(title: string, body: string, url: URL): Response {
 /** The signed query Better Auth put on this page's URL, passed back with the form. */
 const oauthQuery = (url: URL) => url.search.replace(/^\?/, "")
 
-export function loginPage(url: URL, error?: string): Response {
+export interface LoginState {
+  /** What went wrong with the last attempt, shown at the top. */
+  error?: string
+  /** The email the person typed, kept so they needn't type it again. */
+  email?: string
+  /** Their email has a password in several workspaces: ask which. */
+  askWorkspace?: boolean
+  /** The last attempt was with a token: open that form. */
+  token?: boolean
+}
+
+/**
+ * Email and password first; a pasted user token is the other way in, folded
+ * away below it (<details> needs no script).
+ */
+export function loginPage(url: URL, state: LoginState = {}): Response {
+  const query = `<input type="hidden" name="oauth_query" value="${escape(oauthQuery(url))}">`
   return page(
     "Sign in",
     `<h1>Sign in to Campflare</h1>
-<p>An app is asking to use Campflare as you. Paste a user token to continue: <code>campflare token create</code> makes one.</p>
-${error ? `<p role="alert"><strong>${escape(error)}</strong></p>` : ""}
+<p>An app is asking to use Campflare as you.</p>
+${state.error ? `<p role="alert"><strong>${escape(state.error)}</strong></p>` : ""}
 <form method="post" action="/login">
-  <label for="token">Campflare token</label>
-  <input id="token" name="token" type="password" autocomplete="off" required placeholder="xoxp-…">
-  <input type="hidden" name="oauth_query" value="${escape(oauthQuery(url))}">
-  <div class="row"><button class="primary" type="submit">Continue</button></div>
-</form>`,
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" autocomplete="username" required value="${escape(state.email ?? "")}">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  ${
+    state.askWorkspace
+      ? `<label for="workspace">Workspace</label>
+  <input id="workspace" name="workspace" type="text" autocomplete="off" required placeholder="its domain or name">`
+      : ""
+  }
+  ${query}
+  <div class="row"><button class="primary" type="submit">Sign in</button></div>
+</form>
+<details${state.token ? " open" : ""}>
+  <summary>Sign in with a token instead</summary>
+  <form method="post" action="/login">
+    <p>Paste a user token: <code>campflare token create</code> makes one. No password yet? <code>campflare password set</code> sets one.</p>
+    <label for="token">Campflare token</label>
+    <input id="token" name="token" type="password" autocomplete="off" required placeholder="xoxp-…">
+    ${query}
+    <div class="row"><button type="submit">Continue with token</button></div>
+  </form>
+</details>`,
     url,
   )
 }
