@@ -241,7 +241,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   async function retry(channel: string, localTs: string) {
     const m = state.messages[keyOf(channel, localTs)]
     if (!m?.failed) return
-    dispatch({ type: "sending", message: { ...m, failed: undefined } })
+    dispatch({ type: "sending", message: { ...m, failed: undefined, uploaded: undefined } })
     const pendingFiles = unsent.get(localTs)
     if (pendingFiles) return uploadNow(channel, localTs, pendingFiles, m.text ?? "", m.thread_ts)
     await post(channel, localTs, m.text ?? "", m.thread_ts, m.client_msg_id)
@@ -251,7 +251,14 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     try {
       await client.upload(
         list.map((f) => ({ name: f.name, bytes: f.bytes })),
-        { channel, text: text || undefined, threadTs },
+        {
+          channel,
+          text: text || undefined,
+          threadTs,
+          // The message completion posts shares these ids: RTM's copy of it, which can beat
+          // the HTTP answer, replaces the pending one (see pendingTwin in state.ts).
+          onUploaded: (done) => dispatch({ type: "uploaded", channel, localTs, fileIds: done.map((f) => f.id) }),
+        },
       )
     } catch (error) {
       unsent.set(localTs, list)
