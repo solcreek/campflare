@@ -121,6 +121,20 @@ test("images show inline, and an upload reaches the other person", async ({ brow
   await expect(messages(alex).getByText("Uploading…")).toHaveCount(0)
 })
 
+test("an image opens full size, and Escape closes it", async ({ browser }) => {
+  const alex = await open(browser)
+  const name = "An orange sunset fading into purple"
+  await messages(alex)
+    .getByRole("button", { name: `Open ${name}` })
+    .first()
+    .click()
+  const viewer = alex.getByRole("dialog")
+  await expectLoaded(viewer.getByRole("img", { name }))
+  await expect(viewer.getByRole("button", { name: /^Download / })).toBeVisible()
+  await alex.keyboard.press("Escape")
+  await expect(viewer).toHaveCount(0)
+})
+
 test("a pasted image is attached under a name of its own", async ({ browser }) => {
   const alex = await open(browser)
   const box = alex.getByRole("textbox", { name: "Message #general" })

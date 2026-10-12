@@ -123,6 +123,90 @@ describe("files in messages", () => {
   })
 })
 
+describe("the image viewer", () => {
+  const twoImages: Message = {
+    ...withFiles,
+    files: [
+      withFiles.files![0]!,
+      { ...withFiles.files![2]!, url_private_download: `${FILES}F3/download/seoul.webp` },
+      withFiles.files![1]!,
+    ],
+  }
+
+  it("opens an image full size, steps through the message's images, downloads and closes", async () => {
+    const { server, user } = await signedIn([twoImages], (s) => {
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+      s.api.files[`${FILES}F3/seoul.webp`] = new Uint8Array([2])
+    })
+    await within(log()).findByRole("img", { name: "서울" })
+    await user.click(await within(log()).findByRole("button", { name: "Open Nachtansicht von Tokio" }))
+
+    let viewer = screen.getByRole("dialog", { name: "東京の夜" })
+    expect(within(viewer).getByText("1 of 2 · tokyo.png · 2 KB")).toBeTruthy()
+    const big = within(viewer).getByRole("img", { name: "Nachtansicht von Tokio" }) as HTMLImageElement
+    expect(big.src).toMatch(/^blob:/)
+    // The same bytes as inline: fetched once.
+    expect(server.api.fileRequests.filter((r) => r.url.endsWith("tokyo.png"))).toHaveLength(1)
+
+    // Arrow keys step through the images and wrap around; the PDF isn't one of them.
+    await user.keyboard("{ArrowRight}")
+    viewer = screen.getByRole("dialog", { name: "서울" })
+    expect(within(viewer).getByText("2 of 2 · seoul.webp · 10 B")).toBeTruthy()
+    await user.keyboard("{ArrowRight}")
+    expect(screen.getByRole("dialog", { name: "東京の夜" })).toBeTruthy()
+    await user.keyboard("{ArrowLeft}")
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Previous image" }))
+    expect(screen.getByRole("dialog", { name: "東京の夜" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Next image" }))
+    viewer = screen.getByRole("dialog", { name: "서울" })
+    // Other keys do nothing.
+    await user.keyboard("a")
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+
+    // Download saves the one shown, under its file name.
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
+    server.api.files[`${FILES}F3/download/seoul.webp`] = new Uint8Array([2])
+    await user.click(within(viewer).getByRole("button", { name: "Download seoul.webp" }))
+    await waitFor(() => expect(click).toHaveBeenCalledOnce())
+    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("seoul.webp")
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    // The close button closes it too.
+    await user.click(within(log()).getByRole("button", { name: "Open 서울" }))
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Close" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    // And so does a click outside it.
+    await user.click(within(log()).getByRole("button", { name: "Open 서울" }))
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(document.body)
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("shows a lone image without stepping, and says when its bytes don't come", async () => {
+    const lone: Message = {
+      ...withFiles,
+      files: [{ id: "F7", name: "größe.png", mimetype: "image/png", url_private: `${FILES}F7/gr%C3%B6%C3%9Fe.png` }],
+    }
+    let fail!: () => void
+    const { user } = await signedIn([lone], (s) => {
+      s.api.client.fetchFile = () => new Promise((_, reject) => (fail = () => reject(new Error("offline"))))
+    })
+    await user.click(within(log()).getByRole("button", { name: "Open größe.png" }))
+    const viewer = screen.getByRole("dialog", { name: "größe.png" })
+    expect(within(viewer).getByRole("img", { name: "Loading größe.png" })).toBeTruthy()
+    expect(within(viewer).queryByRole("button", { name: "Next image" })).toBeNull()
+    await user.keyboard("{ArrowRight}")
+    expect(screen.getByRole("dialog", { name: "größe.png" })).toBeTruthy()
+    await act(async () => fail())
+    expect(await within(viewer).findByText("Couldn't load this image.")).toBeTruthy()
+  })
+})
+
 describe("uploads from the composer", () => {
   it("attaches with the button, shows the upload pending, then the stored message", async () => {
     const { server, user } = await signedIn([])
