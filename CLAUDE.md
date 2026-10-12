@@ -33,6 +33,7 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
 ## Layout
 
 - `apps/server`: the Worker (Hono). Migrations in `migrations/`, tests in `test/`.
+  `src/mcp/` is the remote MCP server at `/mcp`.
 - `packages/client`: `@campflare/client`, a dependency-free Web API, Socket Mode and RTM client.
 - `apps/cli`: the `campflare` CLI, bundled by tsdown into one file with the client inlined.
 - `tests/conformance`: the official `@slack/web-api` and `@slack/socket-mode`,
@@ -91,6 +92,16 @@ The hub's SQLite also holds:
 `files.completeUploadExternal` shares them and posts the message. `url_private`
 is served by `handleDownload` with the same Bearer tokens, with range support,
 and `content-security-policy: sandbox`.
+
+**MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
+`createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
+the stateless fallback for 2025 clients). `requireBearerAuth` gates it with a
+verifier over `authenticate()`; the verified `Actor` rides in `authInfo.extra`.
+Tools call Web API handlers through `invoke()` (`src/mcp/invoke.ts`) rather than
+reimplementing them, then shape results compactly (`src/mcp/format.ts`). Tool
+errors are `CampflareError` codes returned as `isError` results. Tests use the
+official `@modelcontextprotocol/client` in workerd (`test/mcp.test.ts`) and in
+Node over HTTP (`tests/conformance/mcp.test.ts`), in both protocol eras.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a

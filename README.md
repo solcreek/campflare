@@ -135,6 +135,38 @@ missed something. This is live events for clients that can't hold a WebSocket
 open: agents, scripts, scheduled jobs. `follow()` in `@campflare/client` and
 `campflare events --follow` wrap it.
 
+## MCP
+
+`https://<host>/mcp` is a remote MCP server (Streamable HTTP), built on the
+official TypeScript SDK v2. It implements the 2026-07-28 specification
+(`server/discover`, no handshake) and still serves 2025-era clients through the
+SDK's stateless fallback. Agents use it to work in the workspace as a person
+or a bot:
+
+| Tool                                          | What it does                                                 |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| `read_messages`, `read_thread`                | a conversation's recent messages, or a whole thread          |
+| `search_messages`                             | search, with the same syntax as `search.messages`            |
+| `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
+| `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
+| `get_events`                                  | the event log since a cursor, long-polling                   |
+| `wait_for_reply`                              | block until someone else answers in a conversation or thread |
+
+Conversations are named as people name them: `#channel`, `@handle` (your DM)
+or an id. Tools run the same handlers as the Web API, so permissions, events
+and error codes are the same; errors come back as tool errors the model can
+read.
+
+For now the bearer token is a Campflare user or bot token. From Claude Code:
+
+```sh
+claude mcp add --transport http campflare http://localhost:8787/mcp \
+  --header "Authorization: Bearer $CAMPFLARE_TOKEN"
+```
+
+OAuth 2.1 sign-in for MCP clients (an authorization server issuing tokens
+bound to this resource) is the next step.
+
 ## CLI
 
 ```sh
@@ -173,8 +205,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
 
 ## Not yet
 
-- OAuth v2 (`oauth.v2.access`) and per-scope enforcement (tokens carry scopes,
-  but no method checks them yet).
+- OAuth 2.1 for MCP clients, OAuth v2 (`oauth.v2.access`) for Slack apps, and
+  per-scope enforcement (tokens carry scopes, but no method checks them yet).
 - Events API over HTTP (request URLs); Socket Mode and RTM only so far.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
