@@ -1,11 +1,17 @@
 # The desktop app: installers for macOS (universal), Windows and Linux, and
 # the desktop end-to-end tests on Linux. By hand (Actions → Desktop → Run
-# workflow) or on a version tag (v*): macOS and Windows minutes cost 10× and
+# workflow, or `gh workflow run desktop.yml -f e2e-only=true` for just the
+# tests) or on a version tag (v*): macOS and Windows minutes cost 10× and
 # 2× Linux's on private repos, so this doesn't run on every push.
 name: Desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      e2e-only:
+        description: Only the Linux end-to-end tests (no installers)
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -26,6 +32,7 @@ env:
 jobs:
   bundle:
     name: Bundle (${{ matrix.name }})
+    if: ${{ !inputs.e2e-only }}
     strategy:
       fail-fast: false
       matrix:
@@ -158,3 +165,12 @@ jobs:
 
       - name: Desktop end-to-end tests
         run: xvfb-run --auto-servernum pnpm --filter @campflare/desktop e2e --no-build
+
+      # The window's screenshot and page source for each failed test (e2e/login.test.ts).
+      - name: Upload what the window showed
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-e2e
+          path: apps/desktop/e2e/out/
+          if-no-files-found: ignore

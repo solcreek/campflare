@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createFileCache, fileKind, fileLabel, fitImage, formatBytes } from "../src/files"
+import { createFileCache, fileKind, fileLabel, fitImage, formatBytes, pastedFileName } from "../src/files"
 
 afterEach(() => {
   vi.useRealTimers()
@@ -41,6 +41,21 @@ describe("file helpers", () => {
     expect(fitImage({ id: "F1", original_w: 40, original_h: 20 }, 400, 300)).toEqual({ width: 40, height: 20 })
     expect(fitImage({ id: "F1", original_w: 10_000, original_h: 1 }, 400, 300)).toEqual({ width: 400, height: 1 })
     expect(fitImage({ id: "F1" }, 400, 300)).toEqual({ width: 400, height: 300 })
+  })
+
+  it("names pasted files that came with a generic name", () => {
+    const when = new Date(2026, 9, 2, 9, 5, 7)
+    expect(pastedFileName("image.png", "image/png", when)).toBe("Pasted image 2026-10-02 at 09.05.07.png")
+    expect(pastedFileName("Pasted Graphic 3.tiff", "image/jpeg", when, 1)).toBe(
+      "Pasted image 2026-10-02 at 09.05.07 (2).jpg",
+    )
+    expect(pastedFileName("", "image/heic", when)).toBe("Pasted image 2026-10-02 at 09.05.07")
+    expect(pastedFileName("blob", "application/octet-stream", when)).toBe("Pasted file 2026-10-02 at 09.05.07")
+    expect(pastedFileName("image.TIFF", "image/tiff", when)).toBe("Pasted image 2026-10-02 at 09.05.07.tiff")
+    // A real name stays, in any script.
+    expect(pastedFileName("東京タワー.png", "image/png", when)).toBe("東京タワー.png")
+    expect(pastedFileName("서울.jpg", "image/jpeg", when)).toBe("서울.jpg")
+    expect(pastedFileName("Größe-año.webp", "image/webp", when)).toBe("Größe-año.webp")
   })
 })
 

@@ -86,7 +86,9 @@ const port = values.port === "0" ? await freePort() : Number(values.port)
 const url = `http://localhost:${port}`
 const children: ChildProcess[] = []
 let stopping = false
-const child = spawn(wrangler, ["dev", "--port", String(port), "--persist-to", state], {
+// The inspector too: wrangler probes 9229 and takes the next free one, a race two stacks starting at once can lose.
+const inspector = values.port === "0" ? ["--inspector-port", String(await freePort())] : []
+const child = spawn(wrangler, ["dev", "--port", String(port), ...inspector, "--persist-to", state], {
   cwd: server,
   stdio: ["inherit", "inherit", "inherit"],
 })

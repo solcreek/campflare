@@ -17,6 +17,8 @@ export function memoryIo(
     files?: Record<string, string>
     env?: Record<string, string>
     openUrl?: (url: string) => Promise<void>
+    /** Answers to hidden terminal prompts, in order; none means no terminal. */
+    secrets?: string[]
   } = {},
 ) {
   let config: string | undefined
@@ -38,6 +40,7 @@ export function memoryIo(
     configPath: "/memory/config.json",
     interrupted: () => new Promise((resolve) => (interrupt = resolve)),
     openUrl: opts.openUrl,
+    secret: opts.secrets ? async () => opts.secrets!.shift() ?? "" : undefined,
   }
   return {
     io,

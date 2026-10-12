@@ -25,6 +25,7 @@ Account
   bootstrap --url <server> --secret <s> --team <name> --user <handle> [--email <e>]
   whoami                         who the token belongs to
   profiles                       list saved profiles; --use <name> switches
+  password set                   set your password for signing in with your email (asks, or reads stdin)
 
 Messages
   send <#channel|@person|id> [text] [--thread <ts>] [-f <file>]…   text from stdin if piped
@@ -514,6 +515,22 @@ const commands: Record<string, Command> = {
     } else {
       throw new UsageError("admin commands: add-user, add-app")
     }
+  },
+
+  async password(argv, io) {
+    const [sub, ...rest] = argv
+    const { values } = parse(rest)
+    if (sub !== "set") throw new UsageError("password commands: set")
+    const s = await session(io, values)
+    // Never from argv, where shell history and process lists would keep it.
+    let password = (await io.stdin())?.split(/\r?\n/)[0]
+    if (password === undefined) {
+      if (!io.secret) throw new UsageError("password set reads the password from stdin or a terminal prompt")
+      password = await io.secret("New password: ")
+      if ((await io.secret("Again: ")) !== password) throw new UsageError("the two passwords differ")
+    }
+    await s.client.call("campflare.users.setPassword", { password })
+    io.stdout("Password set: sign in with your email and it\n")
   },
 
   async token(argv, io) {

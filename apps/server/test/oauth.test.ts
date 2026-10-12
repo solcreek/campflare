@@ -33,8 +33,13 @@ afterEach(() => setAuthOverrides({}))
 
 type Tokens = { access_token: string; refresh_token?: string; token_type: string }
 
+/** How the person signs in at /login: a user token, or an email and a password. */
+type Credentials = string | { email: string; password: string }
+const loginForm = (credentials: Credentials): Record<string, string> =>
+  typeof credentials === "string" ? { token: credentials } : credentials
+
 /** Runs the browser part of the authorization-code flow, up to the redirect back to the client. */
-async function consentFlow(userToken: string, { deny = false } = {}) {
+async function consentFlow(credentials: Credentials, { deny = false } = {}) {
   const { verifier, challenge } = await pkce()
   const b = browser()
   const authorizeUrl = new URL("/auth/oauth2/authorize", ORIGIN)
@@ -59,7 +64,7 @@ async function consentFlow(userToken: string, { deny = false } = {}) {
   const signIn = await b.go("/login", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ token: userToken, oauth_query: new URL(toLogin, ORIGIN).search.slice(1) }),
+    body: new URLSearchParams({ ...loginForm(credentials), oauth_query: new URL(toLogin, ORIGIN).search.slice(1) }),
   })
   const afterSignIn = await next(signIn)
   let callback: URL
@@ -86,8 +91,8 @@ async function consentFlow(userToken: string, { deny = false } = {}) {
 }
 
 /** The whole flow: consent, then the code exchanged (with the PKCE verifier) for tokens. */
-async function authorize(userToken: string): Promise<{ tokens: Tokens; askedConsent: boolean }> {
-  const { callback, verifier, askedConsent } = await consentFlow(userToken)
+async function authorize(credentials: Credentials): Promise<{ tokens: Tokens; askedConsent: boolean }> {
+  const { callback, verifier, askedConsent } = await consentFlow(credentials)
   const code = callback.searchParams.get("code")!
   const tokenRes = await SELF.fetch(`${ORIGIN}/auth/oauth2/token`, {
     method: "POST",
@@ -194,6 +199,23 @@ describe("OAuth for MCP clients", () => {
         .structuredContent,
     ).toMatchObject({ user_id: bob.id })
     await second.close()
+  })
+
+  it("signs a person in with an email and a password, as the same person their token is", async () => {
+    const w = await workspace()
+    const email = `sofia-${Date.now()}@example.test`
+    const sofia = await w.addUser("sofia", { email })
+    await ok("campflare.users.setPassword", { password: "Sofía y 東京の夜" }, sofia.token)
+    const { tokens, askedConsent } = await authorize({ email, password: "Sofía y 東京の夜" })
+    expect(askedConsent).toBe(true)
+    const client = await mcpAs(tokens.access_token)
+    expect(
+      ((await client.callTool({ name: "whoami", arguments: {} })) as { structuredContent: Record<string, unknown> })
+        .structuredContent,
+    ).toMatchObject({ user_id: sofia.id, workspace_id: w.teamId })
+    await client.close()
+    // The token leads to the same account: the consent just given is remembered.
+    expect((await authorize(sofia.token)).askedConsent).toBe(false)
   })
 
   it("lets the person deny", async () => {
