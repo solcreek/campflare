@@ -247,24 +247,27 @@ export async function loadExtras(env: Env, messages: MessageRow[], reactions?: R
     list.push(r)
     extras.reactions.set(k, list)
   }
+  // Files and bot apps, when there are any, in parallel: two more queries but one more round trip.
   const fileIds = [...new Set(messages.flatMap((m) => (m.files ? (JSON.parse(m.files) as string[]) : [])))]
-  if (fileIds.length > 0) {
-    const rows = await all<FileRow>(
-      env.DB,
-      "SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))",
-      JSON.stringify(fileIds),
-    )
-    for (const f of rows) extras.files.set(f.id, f)
-  }
   const botIds = [...new Set(messages.flatMap((m) => (m.bot_id ? [m.bot_id] : [])))]
-  if (botIds.length > 0) {
-    const rows = await all<AppRow>(
-      env.DB,
-      "SELECT * FROM apps WHERE bot_id IN (SELECT value FROM json_each(?))",
-      JSON.stringify(botIds),
-    )
-    for (const a of rows) extras.apps.set(a.bot_id, a)
-  }
+  const [files, apps] = await Promise.all([
+    fileIds.length
+      ? all<FileRow>(
+          env.DB,
+          "SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))",
+          JSON.stringify(fileIds),
+        )
+      : [],
+    botIds.length
+      ? all<AppRow>(
+          env.DB,
+          "SELECT * FROM apps WHERE bot_id IN (SELECT value FROM json_each(?))",
+          JSON.stringify(botIds),
+        )
+      : [],
+  ])
+  for (const f of files) extras.files.set(f.id, f)
+  for (const a of apps) extras.apps.set(a.bot_id, a)
   return extras
 }
 
