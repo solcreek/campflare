@@ -1,4 +1,5 @@
 import type { Hono } from "hono"
+import { publicOrigin } from "../api/origin"
 import type { Env } from "../env"
 import { AUTH_BASE_PATH } from "./index"
 
@@ -30,7 +31,7 @@ export function mountOAuthV2(app: Hono<{ Bindings: Env }>) {
     if (splitScopes(q.get("scope")).length) {
       return c.text("Campflare signs a person in only: ask for user_scope, not scope (bot scopes).", 400)
     }
-    const target = new URL(`${AUTH_BASE_PATH}/oauth2/authorize`, url)
+    const target = new URL(`${AUTH_BASE_PATH}/oauth2/authorize`, publicOrigin(c.req.raw))
     const pass = ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"]
     target.searchParams.set("response_type", "code")
     for (const name of pass) {

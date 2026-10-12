@@ -208,6 +208,18 @@ describe("OAuth v2 sign-in for a user token", () => {
     expect(await garbled.json()).toMatchObject({ ok: false, error: "invalid_client_id" })
   })
 
+  it("redirects to the origin the browser used, behind a TLS-terminating proxy", async () => {
+    const res = await SELF.fetch(
+      "http://campflare.test/oauth/v2/authorize?client_id=campflare-cli&user_scope=chat:write",
+      {
+        headers: { "x-forwarded-proto": "https" },
+        redirect: "manual",
+      },
+    )
+    expect(res.status).toBe(302)
+    expect(res.headers.get("location")).toMatch(/^https:\/\/campflare\.test\/auth\/oauth2\/authorize\?/)
+  })
+
   it("checks its own arguments", async () => {
     expect((await call("oauth.v2.access", { code: "x" })).error).toBe("invalid_client_id")
     expect((await access({})).error).toBe("invalid_code")
