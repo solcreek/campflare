@@ -70,7 +70,7 @@ method("search.messages", "user", async (ctx) => {
   const q = parseSearch(query)
 
   const where = [
-    "c.team_id = ?",
+    "m.team_id = ?",
     "m.deleted = 0",
     CONTENT,
     "(mem.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))",
