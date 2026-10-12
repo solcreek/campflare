@@ -1,4 +1,4 @@
-// /huddle: the experiment's test page. A person pastes a user token, picks a
+// /huddle: a test page for huddles, until there's a UI. A person pastes a user token, picks a
 // conversation, and joins its call: microphone (and camera, simulcast) are
 // published through the SFU, and everyone else in the call is received. RTM
 // brings joins, leaves and cameras turning on and off. Video layers follow
@@ -38,7 +38,7 @@ export const HUDDLE_HTML = `<!doctype html>
 </style>
 </head>
 <body><main>
-  <h1>Huddle (experiment)</h1>
+  <h1>Huddle</h1>
   <div class="form">
     <div><label for="token">User token</label><input id="token" type="password" autocomplete="off" placeholder="xoxp-…"></div>
     <div><label for="channel">Conversation</label><input id="channel" type="text" placeholder="#general, an id, or a user id for a 1:1 call"></div>

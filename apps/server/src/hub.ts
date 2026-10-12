@@ -99,10 +99,8 @@ export class TeamHub extends DurableObject<Env> {
       body TEXT NOT NULL
     )`)
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS events_at ON events (at)")
-    // Huddles (experiment): who is in each conversation's call, publishing what,
-    // and which SFU sessions belong to whom.
-    // Step 1 kept one audio track per seat; a seat now holds several (audio, camera…).
-    ctx.storage.sql.exec("DROP TABLE IF EXISTS huddle_participants")
+    // Huddles: who is in each conversation's call, publishing what (audio,
+    // camera…), and which SFU sessions belong to whom.
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS huddle_seats (
       channel_id TEXT NOT NULL,
       user_id TEXT NOT NULL,

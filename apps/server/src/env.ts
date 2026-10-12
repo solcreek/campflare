@@ -8,7 +8,7 @@ export interface Env {
   SCRIBE: DurableObjectNamespace<HuddleScribe>
   SIGNING_KEY: string
   BOOTSTRAP_SECRET?: string
-  /** Huddles (experiment): the Realtime SFU app, and an optional TURN key. */
+  /** Huddles (off without them): the Realtime SFU app, and an optional TURN key. */
   REALTIME_APP_ID?: string
   REALTIME_APP_SECRET?: string
   REALTIME_TURN_KEY_ID?: string

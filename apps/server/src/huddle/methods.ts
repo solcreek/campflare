@@ -9,7 +9,7 @@ import { scribeTicket } from "./ticket"
 import { scribeActor, seatScribe } from "./scribe-bot"
 import { createSfu, iceServers, SfuError, type Publication, type SessionDescription, type Sfu } from "./sfu"
 
-// campflare.huddles.* (experiment): calls in a conversation, with media through
+// campflare.huddles.*: calls in a conversation, with media through
 // Cloudflare Realtime SFU and signalling through our own API and events. Each
 // browser keeps two PeerConnections: one publishes its microphone and camera
 // (join, publish, unpublish), one receives everyone else (subscribe, answer,

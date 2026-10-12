@@ -92,7 +92,7 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
 
 mountAuth(app)
 
-/** The huddle experiment's test page. */
+/** A test page for huddles, until there's a UI. */
 app.get("/huddle", () => huddlePage())
 app.get("/huddle.js", () => huddleScript())
 
