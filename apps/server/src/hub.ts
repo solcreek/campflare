@@ -160,7 +160,7 @@ export class TeamHub extends DurableObject<Env> {
     return row?.seq ?? 0
   }
 
-  private record(input: PublishInput, body: Record<string, unknown>): number {
+  private record(input: PublishInput, body: string): number {
     const now = Date.now()
     const [row] = this.ctx.storage.sql
       .exec<{ seq: number }>(
@@ -168,7 +168,7 @@ export class TeamHub extends DurableObject<Env> {
         now,
         JSON.stringify(input.audience),
         input.rtmOnly ? 1 : 0,
-        JSON.stringify(body),
+        body,
       )
       .toArray()
     const seq = row!.seq
@@ -272,8 +272,11 @@ export class TeamHub extends DurableObject<Env> {
     const { event, audience } = input
     const eventTs = (event.event_ts as string | undefined) ?? `${(Date.now() / 1000).toFixed(6)}`
     const body = { ...event, event_ts: eventTs }
-    this.record(input, body)
-    const sees = (users: string[]) => audience === "team" || users.some((u) => audience.includes(u))
+    // Serialised once, for the log and every RTM link.
+    const json = JSON.stringify(body)
+    this.record(input, json)
+    const members = audience === "team" ? undefined : new Set(audience)
+    const sees = (users: string[]) => !members || users.some((u) => members.has(u))
     let delivered = 0
 
     const apps = new Map<string, { ws: WebSocket; conn: Connection }[]>()
@@ -281,7 +284,7 @@ export class TeamHub extends DurableObject<Env> {
       const conn = ws.deserializeAttachment() as Connection | null
       if (!conn || !sees(conn.users)) continue
       if (conn.kind === "rtm") {
-        delivered += send(ws, body)
+        delivered += send(ws, json)
       } else if (!input.rtmOnly && conn.appId) {
         apps.set(conn.appId, [...(apps.get(conn.appId) ?? []), { ws, conn }])
       }
@@ -354,7 +357,7 @@ export class TeamHub extends DurableObject<Env> {
 
 function send(ws: WebSocket, value: unknown): number {
   try {
-    ws.send(JSON.stringify(value))
+    ws.send(typeof value === "string" ? value : JSON.stringify(value))
     return 1
   } catch {
     return 0
