@@ -3,13 +3,16 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+  browsers,
   bundles,
   dependencies,
   devPort,
+  devStack,
   devVars,
   migrations,
   nodeVersion,
   opentuiSlack,
+  playwrightCache,
   pnpmVersion,
   toolchainSource,
 } from "../../scripts/ready-checks.ts"
@@ -111,6 +114,44 @@ describe("pnpm ready checks", () => {
     })
     expect(await devPort(8787, theirs)).toMatchObject({ ok: false, advisory: true })
     expect(await devPort(8787, nobody)).toMatchObject({ ok: true, detail: ":8787 is free (pnpm dev:all starts one)" })
+  })
+
+  it("reports the stack dev:all is serving from the checkout's default state", () => {
+    scratch()
+    const asked: string[] = []
+    const stack = { apiUrl: "http://localhost:4100", envFile: "/x/campflare-dev.env", pid: 7 }
+    const reading = (found: typeof stack | null) => (file: string) => (asked.push(file), found)
+    expect(devStack(root, reading(null))).toMatchObject({
+      ok: true,
+      advisory: true,
+      detail: "none from this checkout (pnpm dev:all --port 0 --web starts one)",
+    })
+    expect(asked).toEqual([join(root, "apps/server/.wrangler/campflare-dev.run.json")])
+    expect(devStack(root, reading(stack)).detail).toBe("server http://localhost:4100, no app (--web) (pid 7)")
+    expect(devStack(root, reading({ ...stack, appUrl: "http://localhost:4200" } as typeof stack)).detail).toBe(
+      "server http://localhost:4100, app http://localhost:4200 (pid 7)",
+    )
+  })
+
+  it("looks for the headless Chromium that the installed Playwright pins", () => {
+    scratch()
+    // apps/web → @playwright/test → playwright → playwright-core, as node resolves them.
+    write("apps/web/package.json", "{}")
+    write("apps/web/node_modules/@playwright/test/package.json", JSON.stringify({ name: "@playwright/test" }))
+    write("node_modules/playwright/package.json", JSON.stringify({ name: "playwright" }))
+    write("node_modules/playwright-core/package.json", JSON.stringify({ name: "playwright-core" }))
+    write(
+      "node_modules/playwright-core/browsers.json",
+      JSON.stringify({ browsers: [{ name: "chromium-headless-shell", revision: "1243" }] }),
+    )
+    expect(browsers(root, join(root, "cache"))).toMatchObject({
+      ok: false,
+      fix: "pnpm --filter @campflare/web exec playwright install chromium",
+    })
+    mkdirSync(join(root, "cache/chromium_headless_shell-1243"), { recursive: true })
+    expect(browsers(root, join(root, "cache"))).toMatchObject({ ok: true, detail: expect.stringContaining("1243") })
+    expect(playwrightCache({ PLAYWRIGHT_BROWSERS_PATH: "/x" })).toBe("/x")
+    expect(playwrightCache({}, "/home/me")).toContain("ms-playwright")
   })
 
   it("finds opentui-slack by its declared entry, and notes where Node comes from", () => {

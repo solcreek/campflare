@@ -1,0 +1,14 @@
+# Actions are pinned by commit SHA; this proposes new SHAs (with the version
+# comment updated) once a week. npm and cargo dependencies are bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # New releases wait two weeks before they're proposed.
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]

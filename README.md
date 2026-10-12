@@ -1,7 +1,8 @@
 # Campflare
 
 A team chat server that speaks the Slack Web API, built on Cloudflare
-Workers, D1, R2 and Durable Objects. API and CLI first; the UI comes later.
+Workers, D1, R2 and Durable Objects. API and CLI first; the app, for the web
+and the desktop, is one more client of the same API.
 
 Because the API matches Slack's, existing Slack clients, bots and SDKs work
 against Campflare after a base-URL change. The official `@slack/web-api` and
@@ -13,6 +14,9 @@ calls against it (verified 2026-10-11).
 apps/server         the Worker: Hono, D1 schema, TeamHub Durable Object
 packages/client     @campflare/client: Web API, Socket Mode and RTM client (no deps)
 apps/cli            the `campflare` command line
+packages/core       @campflare/core: app state kept live over RTM, mrkdwn parsing
+apps/web            the app: React, shadcn/ui on Base UI
+apps/desktop        the app in a Tauri shell for macOS, Windows and Linux
 tests/conformance   the official Slack SDKs against `wrangler dev`
 ```
 
@@ -35,6 +39,18 @@ own stack; `--fresh` starts over and `--no-seed` leaves the server empty.
 pnpm otui                                       # opentui-slack against it (from ~/Projects/solcreek/opentui-slack)
 set -a; . apps/server/.wrangler/campflare-dev.env; set +a
 node apps/cli/dist/index.mjs send '#dev' "hello"  # the CLI, as @alex
+```
+
+The app runs against the same server and signs in by itself in development
+(`?as=vincent` in the URL to be someone else):
+
+```sh
+pnpm web                                        # http://localhost:5173
+pnpm dev:all --port 0 --web                     # or server and app together, on free ports
+pnpm shot '#/<channel id>'                      # screenshot of that app, its console errors and outline
+pnpm desktop                                    # the same app in a desktop window (needs Rust)
+pnpm --filter @campflare/desktop bundle         # installers for this platform
+pnpm e2e                                        # browser tests against a fresh stack of their own
 ```
 
 `wrangler dev` runs everything locally in workerd: D1 is SQLite (with FTS5),
@@ -194,6 +210,7 @@ that guarantee doesn't hold.
 
 ```sh
 campflare login --url https://chat.example.com --token xoxp-…   # or any Slack-compatible server
+campflare login --url https://chat.example.com --oauth          # Campflare: sign in in the browser
 campflare send '#dev' "build is green"
 campflare send @vincent "have a look" -f screenshot.png
 make test 2>&1 | tail -5 | campflare send @me                  # text from stdin
@@ -217,6 +234,10 @@ pnpm check        # oxfmt --check, oxlint, tsc, and every test suite with covera
 pnpm test         # just the tests
 nix develop -c pnpm check                # the same, on the pinned toolchain, on any machine with Nix
 ```
+
+CI (GitHub Actions) runs `pnpm check` and `pnpm e2e` on every push and pull
+request; the desktop installers and the desktop end-to-end tests run by hand
+or on a `v*` tag (`.github/workflows/desktop.yml`).
 
 The toolchain comes from `flake.nix`: Node at the major in `.node-version`,
 pnpm, bun (for `pnpm otui`), sqlite3 (to look inside local D1 state) and jq.

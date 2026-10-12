@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "import", "vitest"],
+  "plugins": ["typescript", "unicorn", "oxc", "import", "vitest", "react", "jsx-a11y"],
   "categories": {
     "correctness": "error",
     "suspicious": "warn"
@@ -14,6 +14,11 @@
       }
     ],
     "typescript/no-explicit-any": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "react/react-in-jsx-scope": "off",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "no-underscore-dangle": ["warn", { "allow": ["__CAMPFLARE_DEV__", "__TAURI__"] }],
     "import/no-unassigned-import": "off",
     "vitest/expect-expect": [
       "error",

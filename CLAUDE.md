@@ -3,7 +3,8 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Campflare is a team chat server that speaks the Slack Web API, on Cloudflare
-Workers + D1 + R2 + Durable Objects. API and CLI first; a UI comes later.
+Workers + D1 + R2 + Durable Objects. API and CLI first; the app
+(web and desktop) is one more client of that API.
 Existing Slack clients and SDKs must work against it after a base-URL change.
 
 ## Commands
@@ -13,7 +14,12 @@ pnpm ready                 # is the checkout ready (deps, secrets, bundles, migr
 pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every test suite with coverage
 pnpm fmt                   # format in place (oxfmt)
 pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
+                           # --web: the app too (free port with --port 0); URLs in .wrangler/campflare-dev.run.json
 pnpm otui                  # opentui-slack against the dev:all server (reads .wrangler/campflare-dev.env)
+pnpm web                   # the app (apps/web) on :5173, signed in to the dev:all server as alex; ?as=vincent
+pnpm shot '#/C123'         # screenshot of the dev:all --web app + console errors + accessible outline (--as, --dark, --state)
+pnpm e2e                   # the app in Chromium against a fresh stack of its own (needs nothing running)
+pnpm desktop               # the Tauri shell around pnpm web (Rust toolchain needed)
 pnpm dev                   # just wrangler dev on :8787 (apply migrations first: see below)
 pnpm build                 # tsdown bundles for packages/client and apps/cli
 
@@ -42,14 +48,44 @@ So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
 not in the hooks: run the affected suite yourself. In a fresh worktree, run
 `pnpm ready --fix` first.
 
+Seeing the app: with `pnpm dev:all --port 0 --web` running in the background,
+`pnpm shot '#/<channel id>'` finds it through the run file, saves
+`apps/web/.shots/shot.png` (Read it to look) and prints console errors, failed requests
+and the accessible outline. Several routes give one shot each; `--click 'button:Send'`,
+`--type hi`, `--press Enter` act first, in order. Every screen is a hash route
+(`#/C123`, `#/C123/<thread ts>`), so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
+UI tests select by role and accessible name, as a person would; keep controls
+labelled and the jsx-a11y lint passing so they stay selectable.
+
+## CI
+
+GitHub Actions, every action pinned by commit SHA (Dependabot bumps them weekly).
+`.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu:
+`pnpm install --frozen-lockfile`, `pnpm build`, `pnpm check`, then `pnpm e2e`
+(Playwright traces and screenshots are uploaded when it fails). A lockfile out
+of step with `package.json` fails the install. `.github/workflows/desktop.yml`
+builds the Tauri installers (macOS universal, Windows, Linux; unsigned so far)
+as run artifacts and runs the desktop end-to-end tests on Linux
+(`apps/desktop/e2e/`, tauri-driver under xvfb). It runs only by hand (Actions →
+Desktop → Run workflow, or `gh workflow run desktop.yml`) and on `v*` tags,
+because macOS and Windows minutes are expensive. `pnpm --filter
+@campflare/desktop e2e` can't run on macOS (no WebDriver for WKWebView).
+
 ## Layout
 
 - `apps/server`: the Worker (Hono). Migrations in `migrations/`, tests in `test/`.
   `src/mcp/` is the remote MCP server at `/mcp`.
 - `packages/client`: `@campflare/client`, a dependency-free Web API, Socket Mode and RTM client.
 - `apps/cli`: the `campflare` CLI, bundled by tsdown into one file with the client inlined.
+- `packages/core`: `@campflare/core`, app state on top of the client (see below).
+  `@campflare/core/testing` has the fake Web API and WebSocket its tests and the app's use.
+- `apps/web`: the app, React + shadcn/ui on Base UI (`components.json` style
+  `base-nova`; add components with `npx shadcn@4.21.0 add <name>` in `apps/web`).
+  `src/components/ui/` is generated; our components sit beside it.
+- `apps/desktop`: `apps/web` in a Tauri 2 shell (`src-tauri/`), for macOS, Windows, Linux.
 - `tests/conformance`: the official `@slack/web-api` and `@slack/socket-mode`,
-  unmodified, against `wrangler dev`. This is the compatibility oracle.
+  unmodified, against `wrangler dev`. This is the compatibility oracle. It also
+  runs `@campflare/core` against the real Worker.
 
 ## Server architecture
 
@@ -103,7 +139,10 @@ The hub's SQLite also holds:
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;
 `files.completeUploadExternal` shares them and posts the message. `url_private`
 is served by `handleDownload` with the same Bearer tokens, with range support,
-and `content-security-policy: sandbox`.
+and `content-security-policy: sandbox`. `/files-pri/*` and `/upload/v1/*` answer
+CORS (any origin, Authorization allowed, no credentials) so browser apps fetch
+with the token; there are no signed download URLs. `/avatars/:id` draws the
+user's initials (one query; a CJK name gives its first character).
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
@@ -133,10 +172,84 @@ xoxp/xoxb. Better Auth's tables (migration 0003, generated by its
 it with `setAuthOverrides()`, which works because tests share the Worker's
 isolate.
 
+**Sign-in for apps (Slack's OAuth v2).** Apps get an xoxp user token the way
+Slack's do: `GET /oauth/v2/authorize` (`src/auth/oauth-v2.ts`; `client_id`,
+`redirect_uri`, `state`, `user_scope`, PKCE S256 required) only translates to
+Better Auth's `/auth/oauth2/authorize` (adding `openid`), so sign-in, consent,
+redirect matching and codes (single-use, 10 minutes, hashed) are Better
+Auth's. `oauth.v2.access` (`src/methods/oauth.ts`) redeems the code at Better
+Auth's token endpoint in process, maps the ID token's `sub` through `account`
+to the Campflare user, and mints an xoxp labelled `OAuth: <client>`. Bot
+`scope` is refused (400); `refresh_token` is `invalid_grant_type` (our tokens
+don't expire). Clients: our own public apps are rows from migration 0005,
+`campflare-cli` and `campflare-desktop` (redirect `http://127.0.0.1:<any
+port>/callback`, RFC 8252) and `campflare-web` (`http://localhost:<port>/`, a
+web app in development); a web app at its own https origin, or anyone else's
+app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
+`campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it;
+the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
+is `@campflare/client`'s (`src/oauth.ts`), shared with the app. The `/login` and
+`/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
+check it on the redirects a POST answers with, so `'self'` alone blocks the return.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, tokens and apps (an app is
 a bot user + xoxb + xapp).
+
+## App architecture
+
+The app is another client of the Web API, like the CLI: it never shells out to
+the CLI and never gets an endpoint of its own. Something the app needs that the
+API lacks is a new Slack-shaped (or `campflare.*`) method first, with its server
+test and CLI command, then UI.
+
+**Core.** `@campflare/core` holds what every UI needs and nothing that renders.
+`createWorkspace()` (`src/workspace.ts`) loads `auth.test`, `users.list` and
+`conversations.list`, then follows RTM; after a reconnect it re-lists
+conversations and reloads every loaded timeline's newest page, which is the
+truth for its range. All changes go through one pure `reduce(state, action)`
+(`src/state.ts`): Web API answers and RTM events alike, so tests replay actions
+with no server. Messages are keyed `channel/ts`; a conversation's timeline holds
+top-level messages, a thread's list holds replies. Sends are optimistic: a
+pending message with a `~nnnnnnnn` ts (sorts last) becomes the stored one, or
+stays with `failed` for Retry or Discard. `start()` is idempotent (StrictMode).
+`src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
+never HTML, and only links http(s) and mailto. `src/files.ts` decides image vs
+card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into
+shared object URLs via `client.fetchFile` (token sent to the server's origin
+only), revoked after a grace period; `workspace.upload` is optimistic like `send`.
+
+**Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
+select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
+`useMemo`. Core's selectors take only the slices they read for that reason.
+`session.ts` keeps `{url, token}` behind an async `SessionStore`: localStorage in
+a browser, the OS keychain in the desktop shell. `platformStore()` tells them apart
+at runtime by `window.__TAURI__` (`withGlobalTauri`), so the web build never
+imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
+`platformSignIn()` chosen the same way): on the web the page leaves for
+`/oauth/v2/authorize` and comes back to `<origin>/?code&state` (verifier in
+sessionStorage under the state; `campflare-web` on loopback, else the CIMD URL
+`<origin>/oauth-client.json`, which a build with `CAMPFLARE_WEB_ORIGIN` emits);
+on the desktop, see below. A pasted token is the second way in. In dev,
+`?as=none` shows the login screen, and a return from the browser is never
+auto-signed-in. The composer ignores Enter while an IME
+composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
+
+**Desktop.** The webview runs the web build and talks to the server itself; the
+Rust side opens other origins' links in the system browser and keeps the session
+in the OS credential store (`src/session.rs`, the `keyring` crate: Keychain,
+Credential Manager, Secret Service), service `com.campflare.desktop`, through
+`session_load`/`session_save`/`session_clear`. Browser sign-in can't redirect to
+the webview, so `src/oauth.rs` (std only) listens like the CLI: `oauth_listen`
+binds `127.0.0.1:0`, `oauth_wait` takes the one `/callback` request (5 minute
+timeout), `oauth_cancel` stops it; client `campflare-desktop`, the authorize URL
+opens through the opener plugin. `build.rs` declares those commands,
+so each needs an `allow-*` grant in `capabilities/default.json`. A session left
+in localStorage by an older build moves into the keychain on first load. macOS may
+ask for Keychain access the first time (and again after a rebuild changes the
+binary's signature); Linux needs a running Secret Service (gnome-keyring, KWallet).
+The CSP in `tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
 
 ## Conventions
 

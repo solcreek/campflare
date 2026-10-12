@@ -88,6 +88,24 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
   await call("reactions.add", { channel: dev, timestamp: question, name: "eyes" }, me)
   await call("reactions.add", { channel: dev, timestamp: question, name: "eyes" }, vincent.token)
   await post(ci.bot_token, dev, "✅ build #128 passed on main (2m 14s)")
+  // A message with an image, so clients show files: a PNG drawn here, not a binary in the repo.
+  const sunset = await sunsetPng(192, 128)
+  const reserved = await call<{ upload_url: string; file_id: string }>(
+    "files.getUploadURLExternal",
+    { filename: "sunset.png", length: sunset.byteLength, alt_txt: "An orange sunset fading into purple" },
+    ada.token,
+  )
+  const uploaded = await fetch(reserved.upload_url, { method: "POST", body: sunset })
+  if (!uploaded.ok) throw new Error(`uploading sunset.png failed: HTTP ${uploaded.status}`)
+  await call(
+    "files.completeUploadExternal",
+    {
+      files: [{ id: reserved.file_id, title: "Sunset from the campsite" }],
+      channel_id: general,
+      initial_comment: "Last night's sunset from the campsite 🌅",
+    },
+    ada.token,
+  )
   await post(vincent.token, random, "Anyone up for lunch? 🍜")
   const lunch = await post(ada.token, random, "Count me in")
   await call("reactions.add", { channel: random, timestamp: lunch, name: "raised_hands" }, minjun.token)
@@ -116,4 +134,62 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
     people: Object.fromEntries(Object.entries(people).map(([k, v]) => [k, v.token])),
     channels: { general, dev, random, world },
   }
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  return c >>> 0
+})
+
+function crc32(bytes: Uint8Array) {
+  let c = 0xffffffff
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff]! ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function chunk(type: string, data: Uint8Array) {
+  const out = new Uint8Array(12 + data.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, data.length)
+  out.set(new TextEncoder().encode(type), 4)
+  out.set(data, 8)
+  view.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)))
+  return out
+}
+
+/** A sky going from orange to purple with a low sun: an RGB PNG, deflated with CompressionStream. */
+export async function sunsetPng(width: number, height: number): Promise<Uint8Array<ArrayBuffer>> {
+  const raw = new Uint8Array((width * 3 + 1) * height)
+  const sun = { x: width / 2, y: height * 0.7, r: height * 0.18 }
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 3 + 1) // each row starts with filter type 0
+    const t = y / (height - 1)
+    for (let x = 0; x < width; x++) {
+      const inSun = (x - sun.x) ** 2 + (y - sun.y) ** 2 < sun.r ** 2
+      const rgb = inSun ? [255, 214, 102] : [255 - 150 * t, 140 - 90 * t, 60 + 80 * t]
+      raw.set(rgb.map(Math.round), row + 1 + x * 3)
+    }
+  }
+  const compressed = new Uint8Array(
+    await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer(),
+  )
+  const header = new Uint8Array(13)
+  const view = new DataView(header.buffer)
+  view.setUint32(0, width)
+  view.setUint32(4, height)
+  header.set([8, 2, 0, 0, 0], 8) // 8-bit RGB, deflate, no filter, no interlace
+  const parts = [
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", compressed),
+    chunk("IEND", new Uint8Array()),
+  ]
+  const png = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let at = 0
+  for (const p of parts) {
+    png.set(p, at)
+    at += p.length
+  }
+  return png
 }

@@ -8,3 +8,5 @@ coverage/
 .claude/worktrees/
 # Nix out-links (GC roots for the toolchain), made by scripts/agent-env.sh
 .dev/
+# Screenshots from apps/web/scripts/shot.ts
+.shots/
