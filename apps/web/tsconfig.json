@@ -12,5 +12,5 @@
       "@campflare/core/testing": ["../../packages/core/src/testing.ts"]
     }
   },
-  "include": ["src", "test", "scripts", "*.config.ts"]
+  "include": ["src", "test", "scripts", "e2e", "*.config.ts"]
 }
