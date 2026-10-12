@@ -39,6 +39,8 @@ export interface FakeSfu {
   published: Map<string, string>
   /** "receivingSessionId/mid" → the publication and simulcast preference it receives. */
   subscriptions: Map<string, { sessionId?: string; trackName?: string; simulcast?: unknown }>
+  /** adapterId → what it streams and where. */
+  adapters: Map<string, { sessionId: string; trackName: string; endpoint: string; closed: boolean }>
   /** Make the next call to this operation ("POST /sessions/new"…) fail with this status and error code. */
   failNext(operation: string, status: number, errorCode: string): void
 }
@@ -48,6 +50,7 @@ export function fakeSfu(): FakeSfu {
   const published = new Map<string, string>()
   const subscriptions: FakeSfu["subscriptions"] = new Map()
   const nextMid = new Map<string, number>()
+  const adapters: FakeSfu["adapters"] = new Map()
   const calls: FakeSfu["calls"] = []
   const failures = new Map<string, { status: number; errorCode: string }>()
   let counter = 0
@@ -65,6 +68,33 @@ export function fakeSfu(): FakeSfu {
       return Response.json({ errorCode: failure.errorCode, errorDescription: "injected" }, { status: failure.status })
     }
 
+    // WebSocket adapters: shaped as the docs show them (not yet recorded: the
+    // SFU must reach a public endpoint to create one). An entry for a track
+    // that isn't published fails on its own; all failing is a 503.
+    if (operation === "POST /adapters/websocket/new") {
+      const entries = (body?.tracks ?? []) as { sessionId: string; trackName: string; endpoint: string }[]
+      const results = entries.map((e) => {
+        if (!published.has(`${e.sessionId}/${e.trackName}`)) {
+          return {
+            trackName: e.trackName,
+            errorCode: "websocket_handshake_failed",
+            errorDescription: "The handshake with the provided endpoint failed.",
+          }
+        }
+        const adapterId = `fake-adapter-${++counter}`
+        adapters.set(adapterId, { ...e, closed: false })
+        return { trackName: e.trackName, adapterId, endpoint: e.endpoint }
+      })
+      return Response.json({ tracks: results }, { status: results.some((r) => r.adapterId) ? 200 : 503 })
+    }
+    if (operation === "POST /adapters/websocket/close") {
+      const entries = (body?.tracks ?? []) as { adapterId: string }[]
+      for (const e of entries) {
+        const adapter = adapters.get(e.adapterId)
+        if (adapter) adapter.closed = true
+      }
+      return Response.json({ tracks: entries.map((e) => ({ adapterId: e.adapterId })) })
+    }
     if (operation === "POST /sessions/new") {
       const sessionId = `fake-session-${++counter}`
       sessions.add(sessionId)
@@ -130,6 +160,7 @@ export function fakeSfu(): FakeSfu {
     sessions,
     published,
     subscriptions,
+    adapters,
     failNext: (operation, status, errorCode) => void failures.set(operation, { status, errorCode }),
   }
 }

@@ -30,6 +30,14 @@ export interface TrackResult {
   errorDescription?: string
 }
 
+export interface AdapterResult {
+  adapterId?: string
+  trackName?: string
+  endpoint?: string
+  errorCode?: string
+  errorDescription?: string
+}
+
 export interface TracksResponse {
   sessionDescription?: SessionDescription
   requiresImmediateRenegotiation?: boolean
@@ -110,6 +118,38 @@ export function createSfu(options: SfuOptions) {
 
     async renegotiate(sessionId: string, answer: SessionDescription): Promise<void> {
       await call("renegotiate", "PUT", `/sessions/${sessionId}/renegotiate`, { sessionDescription: answer })
+    },
+
+    /**
+     * Streams publications to WebSocket endpoints as 48 kHz stereo PCM (the
+     * SFU connects out to each endpoint). One to four per request; each
+     * result has its own adapterId or error, and the batch fails only when
+     * all do (503).
+     */
+    async streamToWebSocket(entries: { sessionId: string; trackName: string; endpoint: string }[]) {
+      const res = await call<{ tracks?: AdapterResult[] }>(
+        "adapters/websocket/new",
+        "POST",
+        "/adapters/websocket/new",
+        {
+          tracks: entries.map((e) => ({ location: "remote", outputCodec: "pcm", ...e })),
+        },
+      )
+      return res.tracks ?? []
+    },
+
+    /** Closes adapters; closing one already closed is fine. */
+    async closeAdapters(adapterIds: string[]): Promise<AdapterResult[]> {
+      if (adapterIds.length === 0) return []
+      const res = await call<{ tracks?: AdapterResult[] }>(
+        "adapters/websocket/close",
+        "POST",
+        "/adapters/websocket/close",
+        {
+          tracks: adapterIds.map((adapterId) => ({ adapterId })),
+        },
+      )
+      return res.tracks ?? []
     },
 
     /** Stops forwarding without negotiation: for cleaning up after someone who has left. */

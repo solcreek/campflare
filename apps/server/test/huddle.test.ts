@@ -332,6 +332,32 @@ describe("SFU client details", () => {
     })
   })
 
+  it("streams publications to WebSocket endpoints as PCM, and closes the adapters", async () => {
+    const fake = fakeSfu()
+    const client = createSfu({ appId: "a", appSecret: "s", fetch: fake.fetch })
+    fake.published.set("pub/audio", "0")
+    const created = await client.streamToWebSocket([
+      { sessionId: "pub", trackName: "audio", endpoint: "wss://x.test/a" },
+      { sessionId: "pub", trackName: "nope", endpoint: "wss://x.test/b" },
+    ])
+    expect(fake.calls[0]!.body).toEqual({
+      tracks: [
+        { location: "remote", outputCodec: "pcm", sessionId: "pub", trackName: "audio", endpoint: "wss://x.test/a" },
+        { location: "remote", outputCodec: "pcm", sessionId: "pub", trackName: "nope", endpoint: "wss://x.test/b" },
+      ],
+    })
+    // A partial batch: one adapter made, one entry failed on its own.
+    expect(created[0]).toMatchObject({ trackName: "audio", adapterId: expect.any(String) })
+    expect(created[1]).toMatchObject({ trackName: "nope", errorCode: "websocket_handshake_failed" })
+    await client.closeAdapters([created[0]!.adapterId!])
+    expect(fake.adapters.get(created[0]!.adapterId!)?.closed).toBe(true)
+    expect(await client.closeAdapters([])).toEqual([])
+    // Every entry failing is an HTTP error.
+    await expect(
+      client.streamToWebSocket([{ sessionId: "pub", trackName: "nope", endpoint: "wss://x.test/b" }]),
+    ).rejects.toMatchObject({ status: 503 })
+  })
+
   it("raises SfuError for HTTP failures, unreadable bodies and per-track errors", async () => {
     await expect(sfuReplying("oops", 502).newSession()).rejects.toMatchObject({ status: 502, code: "http_502" })
     await expect(
