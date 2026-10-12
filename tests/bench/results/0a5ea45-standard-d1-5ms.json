@@ -1,0 +1,256 @@
+{
+  "meta": {
+    "date": "2026-10-12T04:38:46.881Z",
+    "machine": "Apple M3, 8 cores, 24 GB, darwin-arm64",
+    "commit": "0a5ea45",
+    "node": "v24.21.0",
+    "dataset": "standard",
+    "size": {
+      "users": 500,
+      "busyMessages": 20000,
+      "channels": 30,
+      "channelMessages": 1000,
+      "threadReplies": 200,
+      "fanout": 100
+    },
+    "messages": 50206,
+    "d1DelayMs": 5,
+    "iterations": 200,
+    "concurrency": 16,
+    "durationMs": 3000
+  },
+  "results": {
+    "api.test (no auth)": {
+      "p50": 1.42,
+      "p95": 4.46,
+      "p99": 8.27,
+      "mean": 1.81,
+      "queries": 0,
+      "rounds": 0,
+      "rowsRead": 0,
+      "bytes": 11,
+      "rps": 1479
+    },
+    "auth.test": {
+      "p50": 8.19,
+      "p95": 8.84,
+      "p99": 10.23,
+      "mean": 8.13,
+      "queries": 1,
+      "rounds": 1,
+      "rowsRead": 6,
+      "bytes": 149,
+      "rps": 878
+    },
+    "users.info": {
+      "p50": 15.96,
+      "p95": 18.35,
+      "p99": 19.73,
+      "mean": 16.09,
+      "queries": 2,
+      "rounds": 2,
+      "rowsRead": 7,
+      "bytes": 1145,
+      "rps": 543
+    },
+    "users.list (all)": {
+      "p50": 21.48,
+      "p95": 27.88,
+      "p99": 33.34,
+      "mean": 22.25,
+      "queries": 2,
+      "rounds": 2,
+      "rowsRead": 1008,
+      "bytes": 565072,
+      "rps": 128
+    },
+    "conversations.list": {
+      "p50": 15.91,
+      "p95": 19.05,
+      "p99": 30.64,
+      "mean": 16.37,
+      "queries": 2,
+      "rounds": 2,
+      "rowsRead": 105,
+      "bytes": 22291,
+      "rps": 401
+    },
+    "users.conversations": {
+      "p50": 16.51,
+      "p95": 20.82,
+      "p99": 30.41,
+      "mean": 17.36,
+      "queries": 2,
+      "rounds": 2,
+      "rowsRead": 105,
+      "bytes": 22291,
+      "rps": 378
+    },
+    "conversations.info #busy": {
+      "p50": 23.91,
+      "p95": 26.42,
+      "p99": 34.27,
+      "mean": 24.09,
+      "queries": 3,
+      "rounds": 3,
+      "rowsRead": 1257,
+      "bytes": 732,
+      "rps": 330
+    },
+    "conversations.history 100": {
+      "p50": 31.53,
+      "p95": 37.41,
+      "p99": 51.05,
+      "mean": 32.21,
+      "queries": 4,
+      "rounds": 4,
+      "rowsRead": 741,
+      "bytes": 21802,
+      "rps": 104
+    },
+    "conversations.replies (long thread)": {
+      "p50": 49.81,
+      "p95": 139.26,
+      "p99": 288.02,
+      "mean": 63.48,
+      "queries": 5,
+      "rounds": 5,
+      "rowsRead": 967,
+      "bytes": 52109,
+      "rps": 125
+    },
+    "search: one word": {
+      "p50": 39.73,
+      "p95": 63.32,
+      "p99": 157.28,
+      "mean": 44.13,
+      "queries": 4,
+      "rounds": 3,
+      "rowsRead": 42659,
+      "bytes": 11059,
+      "rps": 58
+    },
+    "search: words + in: + from:": {
+      "p50": 43.69,
+      "p95": 65.17,
+      "p99": 128.75,
+      "mean": 48.48,
+      "queries": 6,
+      "rounds": 4,
+      "rowsRead": 4452,
+      "bytes": 1926,
+      "rps": 61
+    },
+    "search: short term (LIKE)": {
+      "p50": 31.46,
+      "p95": 46.19,
+      "p99": 103.07,
+      "mean": 34.01,
+      "queries": 4,
+      "rounds": 3,
+      "rowsRead": 18917,
+      "bytes": 12304,
+      "rps": 106
+    },
+    "search: 2-char CJK (LIKE)": {
+      "p50": 30.34,
+      "p95": 38.58,
+      "p99": 47.36,
+      "mean": 31.45,
+      "queries": 4,
+      "rounds": 3,
+      "rowsRead": 18895,
+      "bytes": 12318,
+      "rps": 96
+    },
+    "search: no accents (FTS)": {
+      "p50": 45.51,
+      "p95": 60.92,
+      "p99": 81.47,
+      "mean": 47.7,
+      "queries": 4,
+      "rounds": 3,
+      "rowsRead": 72625,
+      "bytes": 10994,
+      "rps": 42
+    },
+    "conversations.mark": {
+      "p50": 23.48,
+      "p95": 27.63,
+      "p99": 30.69,
+      "mean": 23.96,
+      "queries": 3,
+      "rounds": 3,
+      "rowsRead": 9,
+      "bytes": 11,
+      "rps": 296
+    },
+    "reactions.add/remove": {
+      "p50": 31.1,
+      "p95": 41.17,
+      "p99": 52.97,
+      "mean": 32.68,
+      "queries": 4,
+      "rounds": 4,
+      "rowsRead": 213,
+      "bytes": 11,
+      "rps": 237
+    },
+    "chat.postMessage (user)": {
+      "p50": 26.06,
+      "p95": 35.75,
+      "p99": 79.93,
+      "mean": 27.98,
+      "queries": 3.9,
+      "rounds": 3,
+      "rowsRead": 213,
+      "bytes": 180,
+      "rps": 227
+    },
+    "chat.postMessage (bot)": {
+      "p50": 24.38,
+      "p95": 31.38,
+      "p99": 37.03,
+      "mean": 25.25,
+      "queries": 3,
+      "rounds": 3,
+      "rowsRead": 213,
+      "bytes": 368,
+      "rps": 240
+    },
+    "chat.postMessage (thread reply)": {
+      "p50": 31.71,
+      "p95": 46.9,
+      "p99": 119.29,
+      "mean": 34.56,
+      "queries": 4,
+      "rounds": 4,
+      "rowsRead": 214,
+      "bytes": 234,
+      "rps": 199
+    },
+    "chat.postMessage by #name": {
+      "p50": 23.79,
+      "p95": 28.55,
+      "p99": 55.95,
+      "mean": 25.04,
+      "queries": 3,
+      "rounds": 3,
+      "rowsRead": 212,
+      "bytes": 174,
+      "rps": 246
+    },
+    "fan-out to 100 RTM: first": {
+      "p50": 24.91,
+      "p95": 28.83,
+      "p99": 31.5,
+      "mean": 25.38
+    },
+    "fan-out to 100 RTM: last": {
+      "p50": 26.95,
+      "p95": 31.16,
+      "p99": 34.39,
+      "mean": 27.6
+    }
+  }
+}
