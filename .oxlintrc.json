@@ -18,7 +18,7 @@
     "react/exhaustive-deps": "error",
     "react/react-in-jsx-scope": "off",
     "jsx-a11y/prefer-tag-over-role": "off",
-    "no-underscore-dangle": ["warn", { "allow": ["__CAMPFLARE_DEV__"] }],
+    "no-underscore-dangle": ["warn", { "allow": ["__CAMPFLARE_DEV__", "__TAURI__"] }],
     "import/no-unassigned-import": "off",
     "vitest/expect-expect": [
       "error",

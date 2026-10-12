@@ -1,6 +1,6 @@
 // Who the app is signed in as: a server and a user token.
 //
-// The web app keeps it in localStorage; the desktop shell will swap in the OS
+// The web app keeps it in localStorage; the desktop shell keeps it in the OS
 // keychain behind the same SessionStore. In development, the `pnpm dev:all`
 // server's people sign in by themselves: `?as=vincent` picks one.
 
@@ -38,6 +38,58 @@ export function browserStore(
     save: async (session) => storage.setItem(KEY, JSON.stringify(session)),
     clear: async () => storage.removeItem(KEY),
   }
+}
+
+/** Tauri's `core.invoke`: runs a command of the desktop shell (apps/desktop/src-tauri). */
+export type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>
+
+/**
+ * The session in the OS keychain, through the shell's `session_*` commands.
+ *
+ * Builds before the keychain kept the session in localStorage (`legacy`): the
+ * first load moves it into the keychain, and localStorage is cleared once the
+ * keychain has it. If the keychain refuses it, the old session still signs in
+ * and the move is tried again next launch.
+ */
+export function desktopStore(invoke: Invoke, legacy: SessionStore = browserStore()): SessionStore {
+  return {
+    async load() {
+      const kept = asSession(await invoke("session_load"))
+      const old = await legacy.load()
+      if (kept || !old) {
+        if (old) await legacy.clear()
+        return kept
+      }
+      try {
+        await invoke("session_save", { session: old })
+      } catch {
+        return old
+      }
+      await legacy.clear()
+      return old
+    },
+    save: async (session) => {
+      await invoke("session_save", { session })
+    },
+    // The legacy copy too: one the keychain refused would otherwise sign back in.
+    clear: async () => {
+      await Promise.all([invoke("session_clear"), legacy.clear()])
+    },
+  }
+}
+
+interface TauriGlobal {
+  core?: { invoke?: Invoke }
+}
+
+/**
+ * The keychain in the desktop shell, localStorage in a browser. The shell is
+ * found at runtime (`withGlobalTauri` puts `__TAURI__` on window), so the web
+ * build never depends on `@tauri-apps/*`.
+ */
+export function platformStore(global: { __TAURI__?: TauriGlobal } = globalThis as never): SessionStore {
+  const invoke = global.__TAURI__?.core?.invoke
+  return invoke ? desktopStore(invoke) : browserStore()
 }
 
 export type DevAccounts = NonNullable<typeof __CAMPFLARE_DEV__>
