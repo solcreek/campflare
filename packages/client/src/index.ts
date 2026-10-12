@@ -1,5 +1,5 @@
 export { ApiError, apiBase, createClient } from "./web"
-export type { ApiArgs, ApiResult, Client, ClientOptions, Fetch, UploadFile } from "./web"
+export type { ApiArgs, ApiResult, Client, ClientOptions, Fetch, UploadFile, UploadOptions } from "./web"
 export { listen } from "./realtime"
 export type { Listener, ListenOptions, RealtimeEvent } from "./realtime"
 export { follow } from "./follow"

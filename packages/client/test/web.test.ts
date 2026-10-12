@@ -104,11 +104,15 @@ describe("upload", () => {
       json({ ok: true }),
     ])
     const client = createClient({ url: "https://x.test", token: "t", fetch })
+    let uploaded: unknown
     const files = await client.upload([{ name: "a.txt", bytes: new Uint8Array([1, 2, 3]) }], {
       channel: "C1",
       text: "hi",
+      // Before files.completeUploadExternal is sent.
+      onUploaded: (ids) => (uploaded = [ids, seen.length]),
     })
     expect(files).toEqual([{ id: "F1", title: "a.txt" }])
+    expect(uploaded).toEqual([[{ id: "F1", title: "a.txt" }], 2])
     expect(seen[1]!.url).toBe("https://x.test/upload/v1/abc")
     const complete = new URLSearchParams(String(seen[2]!.init!.body))
     expect(JSON.parse(complete.get("files")!)).toEqual([{ id: "F1", title: "a.txt" }])

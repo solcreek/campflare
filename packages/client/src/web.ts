@@ -41,16 +41,23 @@ export interface UploadFile {
   title?: string
 }
 
+export interface UploadOptions {
+  channel?: string
+  text?: string
+  threadTs?: string
+  onUploaded?: (files: { id: string; title: string }[]) => void
+}
+
 export interface Client {
   readonly url: string
   call<T extends ApiResult = ApiResult>(method: string, args?: ApiArgs): Promise<T>
   /** Every item under `key`, following response_metadata.next_cursor. */
   paginate<T>(method: string, key: string, args?: ApiArgs): Promise<T[]>
-  /** files.getUploadURLExternal → POST bytes → files.completeUploadExternal. */
-  upload(
-    files: UploadFile[],
-    opts?: { channel?: string; text?: string; threadTs?: string },
-  ): Promise<{ id: string; title: string }[]>
+  /**
+   * files.getUploadURLExternal → POST bytes → files.completeUploadExternal. `onUploaded` gets
+   * the files' ids once every file's bytes are stored, just before they are shared.
+   */
+  upload(files: UploadFile[], opts?: UploadOptions): Promise<{ id: string; title: string }[]>
   /**
    * GETs a file the server serves with this client's token: a file's url_private or
    * url_private_download. Only the server's origin or its subdomains (Slack's files.slack.com)
@@ -104,7 +111,7 @@ export function createClient(options: ClientOptions): Client {
     return items
   }
 
-  async function upload(files: UploadFile[], opts: { channel?: string; text?: string; threadTs?: string } = {}) {
+  async function upload(files: UploadFile[], opts: UploadOptions = {}) {
     const done: { id: string; title: string }[] = []
     for (const file of files) {
       const { upload_url, file_id } = await call<ApiResult & { upload_url: string; file_id: string }>(
@@ -115,6 +122,7 @@ export function createClient(options: ClientOptions): Client {
       if (!res.ok) throw new Error(`uploading ${file.name} failed: HTTP ${res.status}`)
       done.push({ id: file_id, title: file.title ?? file.name })
     }
+    opts.onUploaded?.(done)
     await call("files.completeUploadExternal", {
       files: done,
       channel_id: opts.channel,

@@ -179,7 +179,15 @@ Better Auth's `/auth/oauth2/authorize` (adding `openid`), so sign-in, consent,
 redirect matching and codes (single-use, 10 minutes, hashed) are Better
 Auth's. `oauth.v2.access` (`src/methods/oauth.ts`) redeems the code at Better
 Auth's token endpoint in process, maps the ID token's `sub` through `account`
-to the Campflare user, and mints an xoxp labelled `OAuth: <client>`. Bot
+to the Campflare user, and mints an xoxp labelled `OAuth: <client>`, with the
+client id in `tokens.client_id` (migration 0006). Slack would hand the same app
+the same token again; we keep only hashes, so every sign-in mints one, and the
+person keeps the newest `OAUTH_TOKENS_PER_CLIENT` (5) per client, older ones
+revoked in the same batch. Not just one: nothing tells two computers apart, and
+revoking every earlier token would sign the CLI out on the other machine; other
+clients and hand-made tokens are never touched. The same lookup batch deletes
+the access/refresh tokens Better Auth issued for the code (by its
+`authorizationCodeId`, the code's SHA-256 in base64url); consent stays. Bot
 `scope` is refused (400); `refresh_token` is `invalid_grant_type` (our tokens
 don't expire). Clients: our own public apps are rows from migration 0005,
 `campflare-cli` and `campflare-desktop` (redirect `http://127.0.0.1:<any
@@ -213,7 +221,11 @@ truth for its range. All changes go through one pure `reduce(state, action)`
 with no server. Messages are keyed `channel/ts`; a conversation's timeline holds
 top-level messages, a thread's list holds replies. Sends are optimistic: a
 pending message with a `~nnnnnnnn` ts (sorts last) becomes the stored one, or
-stays with `failed` for Retry or Discard. `start()` is idempotent (StrictMode).
+stays with `failed` for Retry or Discard. A stored copy that arrives first (RTM,
+a reloaded page) replaces the pending one at once (`pendingTwin`): a send by the
+`client_msg_id` the server echoes, an upload by its file ids, which
+`client.upload`'s `onUploaded` reports before completion, so uploads need no
+API beyond Slack's. `start()` is idempotent (StrictMode).
 `src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
 never HTML, and only links http(s) and mailto. `src/files.ts` decides image vs
 card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into

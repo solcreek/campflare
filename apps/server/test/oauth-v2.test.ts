@@ -2,12 +2,19 @@ import { SELF } from "cloudflare:test"
 import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { browser, next, pkce } from "./browser"
+import { setAuthOverrides } from "../src/auth/routes"
+import { OAUTH_TOKENS_PER_CLIENT } from "../src/methods/oauth"
 import { call, ok, ORIGIN, workspace } from "./helpers"
 
 // Slack's OAuth v2 for apps signing a person in: /oauth/v2/authorize in the
 // browser, then oauth.v2.access for a user token (xoxp-).
 
 const CLIENT_ID = "campflare-cli"
+const CLIENT_NAMES: Record<string, string> = {
+  "campflare-cli": "Campflare CLI",
+  "campflare-desktop": "Campflare for desktop",
+  "https://agent.example.com/oauth/client.json": "Agente Ñandú 代理",
+}
 const redirectUri = (port = 49_152) => `http://127.0.0.1:${port}/callback`
 
 /** Opens /oauth/v2/authorize and follows Better Auth to the sign-in page. */
@@ -45,7 +52,8 @@ async function authorize(userToken: string, opts: Parameters<typeof start>[0] = 
   let callback: URL
   if (new URL(afterSignIn, ORIGIN).pathname === "/consent") {
     const page = await (await b.go(afterSignIn)).text()
-    if (!page.includes("Allow Campflare CLI?") || !page.includes("chat:write")) {
+    const name = CLIENT_NAMES[opts.clientId ?? CLIENT_ID]
+    if (!page.includes(`Allow ${name}?`) || !page.includes("chat:write")) {
       throw new Error(`unexpected consent page: ${page.slice(0, 300)}`)
     }
     const decided = await b.go("/consent", {
@@ -73,6 +81,17 @@ type Access = {
 }
 
 const access = (args: Record<string, string>) => call<Access>("oauth.v2.access", { client_id: CLIENT_ID, ...args })
+
+/** A whole sign-in with a client: the person's xoxp token for it. */
+async function signIn(userToken: string, clientId = CLIENT_ID): Promise<string> {
+  const a = await authorize(userToken, { clientId })
+  const res = await access({ client_id: clientId, code: a.code, code_verifier: a.verifier, redirect_uri: a.redirect })
+  if (!res.ok) throw new Error(`oauth.v2.access failed: ${res.error}`)
+  return res.authed_user.access_token
+}
+
+const labels = async (token: string) =>
+  (await ok<{ tokens: { label: string }[] }>("campflare.tokens.list", {}, token)).tokens.map((t) => t.label)
 
 describe("OAuth v2 sign-in for a user token", () => {
   it("signs a person in through the browser and hands the app an xoxp token", async () => {
@@ -223,6 +242,82 @@ describe("OAuth v2 sign-in for a user token", () => {
     const back = new URL(step)
     expect(back.searchParams.get("error")).toBe("invalid_scope")
     expect(back.searchParams.get("state")).toBe("état-状態-123")
+  })
+
+  it("leaves no Better Auth tokens behind from the code exchange, and keeps the consent", async () => {
+    // A client allowed to refresh, asking for offline_access, gets a refresh token from Better Auth too.
+    const agent = "https://agent.example.com/oauth/client.json"
+    setAuthOverrides({
+      fetchClientMetadataResource: async () =>
+        Response.json({
+          client_id: agent,
+          client_name: "Agente Ñandú 代理",
+          redirect_uris: [redirectUri()],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        }),
+    })
+    try {
+      const w = await workspace()
+      const count = async (table: string) =>
+        (await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).first<{ n: number }>())!.n
+      const before = { access: await count("oauthAccessToken"), refresh: await count("oauthRefreshToken") }
+      for (const clientId of [CLIENT_ID, agent]) {
+        const a = await authorize(w.owner.token, { clientId, userScope: "chat:write,offline_access" })
+        const res = await access({
+          client_id: clientId,
+          code: a.code,
+          code_verifier: a.verifier,
+          redirect_uri: a.redirect,
+        })
+        expect(res.ok).toBe(true)
+      }
+      expect(await count("oauthAccessToken")).toBe(before.access)
+      expect(await count("oauthRefreshToken")).toBe(before.refresh)
+      expect(await labels(w.owner.token)).toContain("OAuth: Agente Ñandú 代理")
+      const consents = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM "oauthConsent" WHERE "clientId" IN (?, ?)
+         AND "userId" = (SELECT "userId" FROM "account" WHERE "providerId" = 'campflare' AND "accountId" = ?)`,
+      )
+        .bind(CLIENT_ID, agent, w.owner.id)
+        .first<{ n: number }>()
+      expect(consents!.n).toBe(2)
+    } finally {
+      setAuthOverrides({})
+    }
+  })
+
+  it("keeps the newest few tokens per person and client when they sign in again", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const manual = (
+      await ok<{ token: string }>("campflare.tokens.create", { label: "OAuth: Campflare CLI" }, bob.token)
+    ).token
+    const desktop = await signIn(bob.token, "campflare-desktop")
+    const owners = await signIn(w.owner.token)
+
+    const cli: string[] = []
+    for (let i = 0; i < OAUTH_TOKENS_PER_CLIENT + 2; i++) cli.push(await signIn(bob.token))
+
+    // The oldest two are revoked; the newest stay live, as on several computers at once.
+    for (const old of cli.slice(0, 2)) expect((await call("auth.test", {}, old)).error).toBe("token_revoked")
+    for (const kept of cli.slice(2)) expect((await call("auth.test", {}, kept)).ok).toBe(true)
+    const live = await labels(bob.token)
+    // The manually created token with the same label isn't one of them, nor is another client's.
+    expect(live.filter((l) => l === "OAuth: Campflare CLI")).toHaveLength(OAUTH_TOKENS_PER_CLIENT + 1)
+    expect(live.filter((l) => l === "OAuth: Campflare for desktop")).toHaveLength(1)
+    for (const other of [manual, desktop, owners]) expect((await call("auth.test", {}, other)).ok).toBe(true)
+  })
+
+  it("lets auth.revoke end a token it issued", async () => {
+    const w = await workspace()
+    const token = await signIn(w.owner.token)
+    expect(await ok("auth.revoke", {}, token)).toMatchObject({ revoked: true })
+    expect((await call("auth.test", {}, token)).error).toBe("token_revoked")
+    expect(await labels(w.owner.token)).not.toContain("OAuth: Campflare CLI")
+    // Signing in again works as the first time did.
+    expect((await call("auth.test", {}, await signIn(w.owner.token))).ok).toBe(true)
   })
 
   it("issues no token for a person deactivated after consenting", async () => {

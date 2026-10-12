@@ -30,6 +30,12 @@ const history = (messages: Message[], extra: Partial<Extract<Action, { type: "hi
   older: false,
   ...extra,
 })
+const uploaded = (ts: string, ...fileIds: string[]): Action => ({
+  type: "uploaded",
+  channel: "C1",
+  localTs: ts,
+  fileIds,
+})
 const event = (e: Record<string, unknown>): Action => ({ type: "event", event: { type: "message", ...e } })
 const r = (type: string, user: string, reaction = "eyes"): Action => ({
   type: "event",
@@ -189,6 +195,76 @@ describe("reduce", () => {
     // A stored message whose id matches nothing pending is just added.
     s = reduce(s, event({ channel: "C1", ts: "0000000700.000000", user: "U2", client_msg_id: "zzz" }))
     expect(tsList(s)).toContain("0000000700.000000")
+  })
+
+  it("lets RTM's copy of an upload replace the pending one by its file ids", () => {
+    const pending = (ts: string, name: string, extra: Partial<Message> = {}) =>
+      ({
+        type: "sending",
+        message: msg(ts, { pending: true, user: "U1", text: "", files: [{ id: `${ts}-0`, name }], ...extra }),
+      }) as Action
+    let s = run(ready, pending("~00000001", "東京.png"), pending("~00000002", "résumé.pdf"))
+    // Before its bytes are stored, a pending upload has no ids to match.
+    s = reduce(s, event({ channel: "C1", ts: "0000000400.000000", user: "U1", files: [{ id: "F9" }] }))
+    expect(tsList(s)).toEqual(["0000000400.000000", "~00000001", "~00000002"])
+    s = reduce(s, uploaded("~00000001", "F1", "F2"))
+    expect(s.messages[keyOf("C1", "~00000001")]?.uploaded).toEqual(["F1", "F2"])
+    expect(reduce(s, uploaded("~9", "F3"))).toBe(s)
+    s = reduce(s, event({ channel: "C1", ts: "0000000500.000000", user: "U1", files: [{ id: "F2" }, { id: "F1" }] }))
+    expect(tsList(s)).toEqual(["0000000400.000000", "0000000500.000000", "~00000002"])
+    // Then the workspace drops the pending copy it no longer has.
+    expect(reduce(s, { type: "discard", channel: "C1", localTs: "~00000001" })).toBe(s)
+
+    // In a thread too, counted once on the parent.
+    const head = "0000000200.000000"
+    s = run(ready, history([msg(head, { thread_ts: head, reply_count: 0 })]))
+    s = reduce(s, pending("~00000003", "서울.jpg", { thread_ts: head }))
+    s = reduce(s, uploaded("~00000003", "F4"))
+    s = reduce(s, event({ channel: "C1", ts: "0000000600.000000", user: "U1", thread_ts: head, files: [{ id: "F4" }] }))
+    const threadKey = keyOf("C1", head)
+    expect(s.threads[threadKey]?.keys).toEqual([keyOf("C1", "0000000600.000000")])
+    expect(s.messages[threadKey]?.reply_count).toBe(1)
+    expect(s.messages[keyOf("C1", "~00000003")]).toBeUndefined()
+  })
+
+  it("drops a pending message when a loaded page holds its stored copy", () => {
+    const head = "0000000200.000000"
+    let s = run(
+      ready,
+      history([msg(head, { thread_ts: head })]),
+      { type: "sending", message: msg("~00000001", { pending: true, user: "U1", files: [{ id: "~00000001-0" }] }) },
+      uploaded("~00000001", "F1"),
+      { type: "sending", message: msg("~00000002", { pending: true, user: "U1", client_msg_id: "b" }) },
+    )
+    const stored = msg("0000000500.000000", { user: "U1", files: [{ id: "F1" }] })
+    // An older page too: the pending copy goes, the other pending message stays.
+    s = reduce(s, history([stored], { older: true }))
+    expect(tsList(s)).toEqual([head, "0000000500.000000", "~00000002"])
+    expect(s.messages[keyOf("C1", "~00000001")]).toBeUndefined()
+    s = reduce(s, history([msg("0000000600.000000", { user: "U1", client_msg_id: "b" }), stored, msg(head)]))
+    expect(tsList(s)).toEqual([head, "0000000500.000000", "0000000600.000000"])
+
+    s = reduce(s, {
+      type: "sending",
+      message: msg("~00000003", { pending: true, user: "U1", thread_ts: head, client_msg_id: "c" }),
+    })
+    s = reduce(s, {
+      type: "sending",
+      message: msg("~00000004", { pending: true, user: "U1", thread_ts: head, client_msg_id: "d" }),
+    })
+    s = reduce(s, {
+      type: "replies",
+      channel: "C1",
+      threadTs: head,
+      messages: [
+        msg(head, { thread_ts: head, reply_count: 1 }),
+        msg("0000000700.000000", { user: "U1", thread_ts: head, client_msg_id: "c" }),
+      ],
+    })
+    const threadKey = keyOf("C1", head)
+    expect(s.threads[threadKey]?.keys).toEqual([keyOf("C1", "0000000700.000000"), keyOf("C1", "~00000004")])
+    expect(s.messages[keyOf("C1", "~00000003")]).toBeUndefined()
+    expect(s.messages[threadKey]?.reply_count).toBe(1)
   })
 
   it("applies edits only to messages it has", () => {
