@@ -87,7 +87,8 @@ export async function oauthLogin(io: Io, url: string, opts: { port?: number } = 
     try {
       code = callbackCode(query, state)
     } catch (err) {
-      if (err instanceof OAuthError && err.code === "access_denied") throw new Error(`${err.message} (you chose Deny)`)
+      if (err instanceof OAuthError && err.code === "access_denied")
+        throw new Error(`${err.message} (you chose Deny)`, { cause: err })
       throw err
     }
     const res = await exchangeCode(url, { clientId: CLIENT_ID, code, redirectUri, verifier, fetch: io.fetch })

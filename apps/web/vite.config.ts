@@ -44,12 +44,12 @@ export function devAccounts(file = process.env.CAMPFLARE_DEV_ENV ?? source("apps
  * coming back to the app's root.
  */
 export function oauthClientDocument(origin: string) {
-  const root = new URL(origin).origin
+  const site = new URL(origin).origin
   return {
-    client_id: `${root}/oauth-client.json`,
+    client_id: `${site}/oauth-client.json`,
     client_name: "Campflare",
-    client_uri: `${root}/`,
-    redirect_uris: [`${root}/`],
+    client_uri: `${site}/`,
+    redirect_uris: [`${site}/`],
     grant_types: ["authorization_code"],
     response_types: ["code"],
     token_endpoint_auth_method: "none",

@@ -120,6 +120,10 @@ async function mcpAs(accessToken: string) {
   return client
 }
 
+/** The CSP of the sign-in page shown for this OAuth query. */
+const csp = async (query: string) =>
+  (await browser().go(`/login?${query}`)).headers.get("content-security-policy") ?? ""
+
 describe("OAuth for MCP clients", () => {
   it("advertises its authorization server from a 401 (RFC 9728, RFC 8414)", async () => {
     const res = await SELF.fetch(`${ORIGIN}/mcp`, {
@@ -252,8 +256,6 @@ describe("OAuth for MCP clients", () => {
   })
 
   it("lets the pages' forms lead back to the app, as browsers check form-action on redirects too", async () => {
-    const csp = async (query: string) =>
-      (await browser().go(`/login?${query}`)).headers.get("content-security-policy") ?? ""
     expect(await csp("redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&client_id=x")).toContain(
       "form-action 'self' http://127.0.0.1:51234;",
     )

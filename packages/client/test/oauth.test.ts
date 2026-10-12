@@ -65,13 +65,14 @@ describe("authorizeUrl", () => {
 const q = (fields: Record<string, string>) => new URLSearchParams(fields)
 
 function failure(fn: () => unknown): OAuthError {
+  let caught: unknown
   try {
     fn()
   } catch (err) {
-    expect(err).toBeInstanceOf(OAuthError)
-    return err as OAuthError
+    caught = err
   }
-  throw new Error("did not throw")
+  expect(caught).toBeInstanceOf(OAuthError)
+  return caught as OAuthError
 }
 
 describe("callbackCode", () => {
