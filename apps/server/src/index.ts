@@ -15,6 +15,7 @@ import "./methods/users"
 import { mountAuth } from "./auth/routes"
 import { handleMcp } from "./mcp"
 import { Args } from "./api/args"
+import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
 import { methods, type Auth, type Ctx } from "./api/context"
 import { CampflareError } from "./api/errors"
@@ -44,7 +45,7 @@ app.use(
 // client.upload() POSTs the bytes with its Authorization header too; the URL itself is the capability.
 app.use("/upload/v1/*", cors({ origin: "*", allowMethods: ["POST"], allowHeaders: ["Authorization", "Content-Type"] }))
 
-app.get("/", (c) => c.json({ name: "campflare", api: `${new URL(c.req.url).origin}/api/` }))
+app.get("/", (c) => c.json({ name: "campflare", api: `${publicOrigin(c.req.raw)}/api/` }))
 
 /** The Slack Web API: https://<host>/api/<method>, by GET or POST. */
 app.on(["GET", "POST"], "/api/:method", async (c) => {
@@ -73,7 +74,7 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
       args,
       auth,
       request: c.req.raw,
-      origin: new URL(c.req.url).origin,
+      origin: publicOrigin(c.req.raw),
       waitUntil: (p) => c.executionCtx.waitUntil(p),
     }
     const result = await def.handler(ctx)
