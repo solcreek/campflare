@@ -80,6 +80,8 @@ export interface Message {
   edited?: { user: string; ts: string }
   files?: MessageFile[]
   is_ephemeral?: boolean
+  /** Set by the sender, echoed by the server: ties a stored message to the pending one it replaces. */
+  client_msg_id?: string
   /** Local only: sent, not yet confirmed by the server. Its ts is a placeholder. */
   pending?: boolean
   /** Local only: sending failed with this error code. */

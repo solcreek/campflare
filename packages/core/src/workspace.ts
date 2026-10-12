@@ -202,12 +202,13 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     dispatch({ type: "replies", channel, threadTs, messages: replies })
   }
 
-  async function post(channel: string, localTs: string, text: string, threadTs?: string) {
+  async function post(channel: string, localTs: string, text: string, threadTs?: string, clientMsgId?: string) {
     try {
       const r = await client.call<ApiResult & { ts: string; message?: Message }>("chat.postMessage", {
         channel,
         text,
         thread_ts: threadTs,
+        client_msg_id: clientMsgId,
       })
       const message = r.message ?? { ts: r.ts, channel, user: selfId(), text, thread_ts: threadTs }
       dispatch({ type: "sent", channel, localTs, message: { ...message, channel } })
@@ -219,11 +220,22 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   async function send(channel: string, text: string, opts: { threadTs?: string } = {}) {
     // "~" sorts after every digit, so a pending message stays at the bottom until it has a real ts.
     const localTs = `~${String(++localSeq).padStart(8, "0")}`
+    // The server echoes it on the stored message, so RTM's copy, which can beat the HTTP answer, replaces this one.
+    const clientMsgId = crypto.randomUUID()
     dispatch({
       type: "sending",
-      message: { ts: localTs, channel, type: "message", user: selfId(), text, thread_ts: opts.threadTs, pending: true },
+      message: {
+        ts: localTs,
+        channel,
+        type: "message",
+        user: selfId(),
+        text,
+        thread_ts: opts.threadTs,
+        client_msg_id: clientMsgId,
+        pending: true,
+      },
     })
-    await post(channel, localTs, text, opts.threadTs)
+    await post(channel, localTs, text, opts.threadTs, clientMsgId)
   }
 
   async function retry(channel: string, localTs: string) {
@@ -232,7 +244,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     dispatch({ type: "sending", message: { ...m, failed: undefined } })
     const pendingFiles = unsent.get(localTs)
     if (pendingFiles) return uploadNow(channel, localTs, pendingFiles, m.text ?? "", m.thread_ts)
-    await post(channel, localTs, m.text ?? "", m.thread_ts)
+    await post(channel, localTs, m.text ?? "", m.thread_ts, m.client_msg_id)
   }
 
   async function uploadNow(channel: string, localTs: string, list: NewFile[], text: string, threadTs?: string) {

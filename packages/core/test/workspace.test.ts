@@ -132,16 +132,22 @@ describe("createWorkspace", () => {
   })
 
   it("sends and swaps in the stored message", async () => {
+    let sentArgs: Record<string, string> | undefined
     const { ws } = await started({
-      "chat.postMessage": (args) => ({
-        ts: "0000000300.000000",
-        message: { ts: "0000000300.000000", text: args.text },
-      }),
+      "chat.postMessage": (args) => {
+        sentArgs = args
+        return { ts: "0000000300.000000", message: { ts: "0000000300.000000", text: args.text } }
+      },
     })
+    let pendingId: unknown
+    ws.subscribe(() => (pendingId ??= timeline(ws.getState(), "C1")[0]?.client_msg_id))
     await ws.send("C1", "hello")
     expect(timeline(ws.getState(), "C1").map((m) => [m.ts, m.text, m.pending])).toEqual([
       ["0000000300.000000", "hello", undefined],
     ])
+    // The pending message's client_msg_id goes to the server, which echoes it on RTM's copy.
+    expect(pendingId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(sentArgs?.client_msg_id).toBe(pendingId)
   })
 
   it("shows a message as pending before the server answers", async () => {

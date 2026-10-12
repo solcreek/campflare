@@ -168,8 +168,21 @@ function replies(state: WorkspaceState, a: Extract<Action, { type: "replies" }>)
   }
 }
 
+/** The pending message a stored one stands for: same channel and client_msg_id. */
+function pendingTwin(state: WorkspaceState, m: Message): string | undefined {
+  if (m.pending || !m.client_msg_id) return undefined
+  const list = isReply(m) ? state.threads[keyOf(m.channel, m.thread_ts!)] : state.timelines[m.channel]
+  return list?.keys.find((k) => {
+    const other = state.messages[k]
+    return other?.pending && other.client_msg_id === m.client_msg_id
+  })
+}
+
 /** Adds or replaces a message, filing it under its conversation or its thread. */
 function upsert(state: WorkspaceState, m: Message): WorkspaceState {
+  // RTM's copy of your message can arrive before chat.postMessage answers: it takes the pending one's place.
+  const twin = pendingTwin(state, m)
+  if (twin) state = remove(state, m.channel, state.messages[twin]!.ts)
   const key = keyOf(m.channel, m.ts)
   const known = state.messages[key]
   const messages = { ...state.messages, [key]: known ? { ...known, ...m } : m }

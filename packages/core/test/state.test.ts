@@ -161,6 +161,36 @@ describe("reduce", () => {
     expect(tsList(s)).toEqual(["0000000500.000000"])
   })
 
+  it("lets RTM's copy of a sent message replace the pending one before the HTTP answer", () => {
+    const pending = (ts: string, id: string, extra: Partial<Message> = {}) =>
+      ({ type: "sending", message: msg(ts, { pending: true, user: "U1", client_msg_id: id, ...extra }) }) as Action
+    let s = run(ready, pending("~00000001", "a"), pending("~00000002", "b"))
+    s = reduce(s, event({ channel: "C1", ts: "0000000500.000000", user: "U1", client_msg_id: "a" }))
+    expect(tsList(s)).toEqual(["0000000500.000000", "~00000002"])
+    // Then the HTTP answer: nothing left to swap, and no second copy.
+    s = reduce(s, {
+      type: "sent",
+      channel: "C1",
+      localTs: "~00000001",
+      message: msg("0000000500.000000", { user: "U1" }),
+    })
+    expect(tsList(s)).toEqual(["0000000500.000000", "~00000002"])
+
+    // In a thread too, counted once on the parent.
+    s = run(ready, history([msg("0000000200.000000", { thread_ts: "0000000200.000000", reply_count: 0 })]))
+    s = reduce(s, pending("~00000003", "c", { thread_ts: "0000000200.000000" }))
+    s = reduce(
+      s,
+      event({ channel: "C1", ts: "0000000600.000000", user: "U1", thread_ts: "0000000200.000000", client_msg_id: "c" }),
+    )
+    const threadKey = keyOf("C1", "0000000200.000000")
+    expect(s.threads[threadKey]?.keys).toEqual([keyOf("C1", "0000000600.000000")])
+    expect(s.messages[threadKey]?.reply_count).toBe(1)
+    // A stored message whose id matches nothing pending is just added.
+    s = reduce(s, event({ channel: "C1", ts: "0000000700.000000", user: "U2", client_msg_id: "zzz" }))
+    expect(tsList(s)).toContain("0000000700.000000")
+  })
+
   it("applies edits only to messages it has", () => {
     let s = run(ready, history([msg("0000000200.000000")]))
     s = reduce(
