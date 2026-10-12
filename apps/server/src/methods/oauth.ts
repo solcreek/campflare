@@ -41,6 +41,15 @@ function claimsOf(jwt: string): Record<string, unknown> {
   return JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>
 }
 
+/** How Better Auth keys what it issued for an authorization code: SHA-256, base64url without padding. */
+async function authorizationCodeId(code: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code)))
+  return btoa(String.fromCharCode(...digest))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "")
+}
+
 method("oauth.v2.access", "none", async (ctx) => {
   const grantType = ctx.args.str("grant_type") ?? "authorization_code"
   // Campflare tokens don't expire, so there is nothing to refresh.
@@ -75,7 +84,10 @@ method("oauth.v2.access", "none", async (ctx) => {
   const sub = String(claimsOf(answer.id_token).sub ?? "")
 
   // The person's Campflare user, their workspace, and the client's name for the token's label: one round trip.
+  // The same trip deletes the access (and refresh) token Better Auth just issued for the code: the app gets
+  // an xoxp instead, so nothing would ever use them. Consent stays, so the next sign-in skips the question.
   const linked = `SELECT "accountId" FROM "account" WHERE "providerId" = ? AND "userId" = ?`
+  const codeId = await authorizationCodeId(code)
   const [users, teams, clients] = await ctx.env.DB.batch([
     stmt(ctx.env.DB, `SELECT * FROM users WHERE id = (${linked})`, CAMPFLARE_PROVIDER, sub),
     stmt(
@@ -85,6 +97,8 @@ method("oauth.v2.access", "none", async (ctx) => {
       sub,
     ),
     stmt(ctx.env.DB, 'SELECT "name" FROM "oauthClient" WHERE "clientId" = ?', clientId),
+    stmt(ctx.env.DB, 'DELETE FROM "oauthAccessToken" WHERE "authorizationCodeId" = ?', codeId),
+    stmt(ctx.env.DB, 'DELETE FROM "oauthRefreshToken" WHERE "authorizationCodeId" = ?', codeId),
   ])
   const user = users!.results[0] as UserRow | undefined
   const team = teams!.results[0] as TeamRow | undefined

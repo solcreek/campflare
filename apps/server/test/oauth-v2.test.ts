@@ -225,6 +225,21 @@ describe("OAuth v2 sign-in for a user token", () => {
     expect(back.searchParams.get("state")).toBe("état-状態-123")
   })
 
+  it("leaves no Better Auth tokens behind from the code exchange, and keeps the consent", async () => {
+    const w = await workspace()
+    const count = async (table: string) =>
+      (await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).first<{ n: number }>())!.n
+    const before = { access: await count("oauthAccessToken"), refresh: await count("oauthRefreshToken") }
+    const a = await authorize(w.owner.token, { userScope: "chat:write,offline_access" })
+    expect((await access({ code: a.code, code_verifier: a.verifier, redirect_uri: a.redirect })).ok).toBe(true)
+    expect(await count("oauthAccessToken")).toBe(before.access)
+    expect(await count("oauthRefreshToken")).toBe(before.refresh)
+    const consents = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "oauthConsent" WHERE "clientId" = ?`)
+      .bind(CLIENT_ID)
+      .first<{ n: number }>()
+    expect(consents!.n).toBeGreaterThan(0)
+  })
+
   it("issues no token for a person deactivated after consenting", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
