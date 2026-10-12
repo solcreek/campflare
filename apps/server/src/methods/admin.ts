@@ -145,7 +145,7 @@ method("campflare.users.deactivate", "user", async (ctx) => {
   if (id === ctx.auth.user.id) throw new CampflareError("cant_deactivate_self")
   const res = await run(
     ctx.env.DB,
-    "UPDATE users SET deleted = 1, updated = ? WHERE id = ? AND team_id = ? AND is_owner = 0",
+    "UPDATE users SET deleted = 1, updated = ? WHERE id = ? AND team_id = ? AND is_owner = 0 AND deleted = 0",
     nowSeconds(),
     id,
     ctx.auth.team.id,
