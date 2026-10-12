@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useInView } from "@/lib/in-view"
 import { useWorkspace } from "@/workspace"
 import { reportError } from "./message"
 
@@ -57,13 +58,20 @@ function useDownload(file: MessageFile) {
   return { url, name, saving, download }
 }
 
+/**
+ * An image in a message, drawn in a box of its final size from the start (original_w and
+ * original_h), so nothing moves when it arrives. Its bytes are fetched only once it nears the
+ * viewport: the server has no thumbnails, so each one is the whole file.
+ */
 function ImageFile({ file, onOpen }: { file: MessageFile; onOpen: () => void }) {
-  const { src, failed } = usePrivateFile(file.url_private)
+  const [ref, inView] = useInView<HTMLButtonElement>()
+  const { src, failed } = usePrivateFile(inView ? file.url_private : undefined)
   if (failed) return <FileCard file={file} />
   const { width, height } = fitImage(file, IMAGE_BOX.width, IMAGE_BOX.height)
   const label = fileLabel(file)
   return (
     <button
+      ref={ref}
       type="button"
       aria-label={`Open ${label}`}
       aria-haspopup="dialog"
@@ -77,11 +85,11 @@ function ImageFile({ file, onOpen }: { file: MessageFile; onOpen: () => void }) 
           title={file.title || file.name}
           width={width}
           height={height}
-          className="max-w-full rounded-md border bg-muted object-contain"
+          className="block max-w-full rounded-md border bg-muted object-contain"
           style={{ maxHeight: IMAGE_BOX.height }}
         />
       ) : (
-        <Skeleton role="img" aria-label={`Loading ${label}`} className="max-w-full" style={{ width, height }} />
+        <Skeleton role="img" aria-label={`Loading ${label}`} className="block max-w-full" style={{ width, height }} />
       )}
     </button>
   )

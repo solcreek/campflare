@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
 import { ALEX, fakeServer, FakeSocket, hello, VINCENT } from "./server"
+import { ViewportObserver } from "./setup"
 
 afterEach(() => {
   FakeSocket.all = []
@@ -120,6 +121,69 @@ describe("files in messages", () => {
     expect(within(log()).getByRole("img", { name: "Loading slow.png" })).toBeTruthy()
     const external = within(log()).getByRole("group", { name: "File: external" })
     expect(within(external).queryByRole("button")).toBeNull()
+  })
+})
+
+describe("lazy images", () => {
+  const far: Message = {
+    ts: "1700000400.000000",
+    channel: "CGEN",
+    user: ALEX,
+    text: "早い写真",
+    files: [
+      {
+        id: "F6",
+        name: "plage-été.jpg",
+        mimetype: "image/jpeg",
+        original_w: 600,
+        original_h: 1200,
+        url_private: `${FILES}F6/plage.jpg`,
+      },
+    ],
+  }
+
+  it("fetches an image only once it nears the viewport, in a box of its final size", async () => {
+    ViewportObserver.manual = true
+    const { server } = await signedIn([withFiles, far], (s) => {
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+      s.api.files[`${FILES}F6/plage.jpg`] = new Uint8Array([2])
+    })
+    const fetched = () => server.api.fileRequests.map((r) => r.url.split("/").pop())
+    const plage = within(log()).getByRole("button", { name: "Open plage-été.jpg" })
+    const tokyo = within(log()).getByRole("button", { name: "Open Nachtansicht von Tokio" })
+    // Nothing is fetched yet, and the placeholders already take the images' room: 600×1200 in 360×240.
+    const placeholder = within(plage).getByRole("img", { name: "Loading plage-été.jpg" })
+    expect([placeholder.style.width, placeholder.style.height]).toEqual(["120px", "240px"])
+    expect(fetched()).toEqual([])
+
+    act(() => ViewportObserver.show(plage, false))
+    expect(fetched()).toEqual([])
+    act(() => ViewportObserver.show(plage))
+    const image = (await within(plage).findByRole("img", { name: "plage-été.jpg" })) as HTMLImageElement
+    expect([image.width, image.height]).toEqual([120, 240])
+    expect(fetched()).toEqual(["plage.jpg"])
+    expect(within(tokyo).getByRole("img", { name: "Loading Nachtansicht von Tokio" })).toBeTruthy()
+
+    // Seen once is enough: it stays loaded, and isn't observed any more.
+    act(() => ViewportObserver.show(plage, false))
+    expect(within(plage).getByRole("img", { name: "plage-été.jpg" })).toBeTruthy()
+    act(() => ViewportObserver.show(tokyo))
+    await within(tokyo).findByRole("img", { name: "Nachtansicht von Tokio" })
+    expect(fetched()).toEqual(["plage.jpg", "tokyo.png"])
+    // Only the image not yet near the viewport (seoul.webp) is still watched.
+    expect([...ViewportObserver.all].flatMap((o) => [...o.targets])).toEqual([
+      within(log()).getByRole("button", { name: "Open 서울" }),
+    ])
+  })
+
+  it("loads every image where there's no IntersectionObserver", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined)
+    try {
+      await signedIn([far], (s) => (s.api.files[`${FILES}F6/plage.jpg`] = new Uint8Array([2])))
+      expect(await within(log()).findByRole("img", { name: "plage-été.jpg" })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 
