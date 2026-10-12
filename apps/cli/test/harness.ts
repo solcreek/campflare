@@ -1,0 +1,81 @@
+import { inject } from "vitest"
+import type { Io } from "../src/io"
+import { run } from "../src/run"
+
+declare module "vitest" {
+  export interface ProvidedContext {
+    baseUrl: string
+  }
+}
+
+export const baseUrl = inject("baseUrl")
+
+/** An Io over memory: captured output, an in-memory config file, optional stdin and files. */
+export function memoryIo(opts: { stdin?: string; files?: Record<string, string>; env?: Record<string, string> } = {}) {
+  let config: string | undefined
+  const out: string[] = []
+  const err: string[] = []
+  let interrupt: (() => void) | undefined
+  const io: Io = {
+    stdout: (t) => void out.push(t),
+    stderr: (t) => void err.push(t),
+    stdin: async () => opts.stdin,
+    env: opts.env ?? {},
+    async readFile(path) {
+      const text = opts.files?.[path]
+      if (text === undefined) throw new Error(`ENOENT: ${path}`)
+      return new TextEncoder().encode(text)
+    },
+    readConfig: async () => config,
+    writeConfig: async (text) => void (config = text),
+    configPath: "/memory/config.json",
+    interrupted: () => new Promise((resolve) => (interrupt = resolve)),
+  }
+  return {
+    io,
+    get out() {
+      return out.join("")
+    },
+    get err() {
+      return err.join("")
+    },
+    get config() {
+      return config
+        ? (JSON.parse(config) as {
+            current?: string
+            profiles: Record<string, { url: string; token?: string; appToken?: string }>
+          })
+        : undefined
+    },
+    clear() {
+      out.length = 0
+      err.length = 0
+    },
+    interrupt: () => interrupt?.(),
+    /** Runs a command, returning its exit code. */
+    run: (...argv: string[]) => run(argv, io),
+  }
+}
+
+let n = 0
+
+/** A fresh workspace, with `cli` logged in as its owner. */
+export async function loggedIn() {
+  const cli = memoryIo()
+  const code = await cli.run(
+    "bootstrap",
+    "--url",
+    baseUrl,
+    "--secret",
+    "conformance",
+    "--team",
+    `CLI ${Date.now()} ${++n}`,
+    "--user",
+    "owner",
+    "--name",
+    "Olive Owner",
+  )
+  if (code !== 0) throw new Error(`bootstrap failed: ${cli.err}`)
+  cli.clear()
+  return cli
+}

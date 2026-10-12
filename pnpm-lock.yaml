@@ -27,6 +27,15 @@ importers:
         specifier: 4.1.10
         version: 4.1.10(@types/node@24.19.0)(@vitest/coverage-istanbul@4.1.10)(@vitest/coverage-v8@4.1.10)(vite@8.3.4(@types/node@24.19.0)(esbuild@0.28.1))
 
+  apps/cli:
+    devDependencies:
+      '@campflare/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@vitest/coverage-v8':
+        specifier: 4.1.10
+        version: 4.1.10(vitest@4.1.10)
+
   apps/server:
     dependencies:
       hono:

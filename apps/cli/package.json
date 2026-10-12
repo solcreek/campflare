@@ -1,0 +1,24 @@
+{
+  "name": "campflare",
+  "version": "0.1.0",
+  "description": "Command line for Campflare, and for any Slack-compatible API",
+  "bin": {
+    "campflare": "./dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@campflare/client": "workspace:*",
+    "@vitest/coverage-v8": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
