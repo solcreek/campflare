@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { expectError, ok, workspace } from "./helpers"
 
@@ -69,6 +70,29 @@ describe("conversations", () => {
     await expectError("conversations.list", { cursor: "!!!" }, w.owner.token, "invalid_cursor")
   })
 
+  it("invites more people at once than D1 binds parameters", async () => {
+    const w = await workspace()
+    const { channel } = await ok<{ channel: Channel }>("conversations.create", { name: "crowd" }, w.owner.token)
+    // Adding 101 people through the API is slow; write them straight to D1.
+    const ids = Array.from({ length: 101 }, (_, i) => `UCROWD${String(i).padStart(4, "0")}`)
+    await env.DB.batch(
+      ids.map((id) =>
+        env.DB.prepare("INSERT INTO users (id, team_id, name, updated, created) VALUES (?, ?, ?, 0, 0)").bind(
+          id,
+          w.teamId,
+          id.toLowerCase(),
+        ),
+      ),
+    )
+    await ok("conversations.invite", { channel: channel.id, users: ids.join(",") }, w.owner.token)
+    const members = await ok<{ members: string[] }>(
+      "conversations.members",
+      { channel: channel.id, limit: 200 },
+      w.owner.token,
+    )
+    expect(members.members).toHaveLength(102)
+  })
+
   it("joins, invites, kicks and leaves, posting system messages", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
@@ -76,7 +100,10 @@ describe("conversations", () => {
     const { channel } = await ok<{ channel: Channel }>("conversations.create", { name: "dev" }, w.owner.token)
 
     await expectError("chat.postMessage", { channel: channel.id, text: "hi" }, bob.token, "not_in_channel")
-    await ok("conversations.join", { channel: channel.id }, bob.token)
+    // The channel was read before joining: the answer still shows the new membership.
+    expect(await ok("conversations.join", { channel: channel.id }, bob.token)).toMatchObject({
+      channel: { id: channel.id, is_member: true },
+    })
     expect(await ok("conversations.join", { channel: channel.id }, bob.token)).toMatchObject({
       warning: "already_in_channel",
     })
@@ -221,6 +248,26 @@ describe("conversations", () => {
     expect(ims.channels).toHaveLength(3)
   })
 
+  it("counts unread messages up to a thousand", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    // Posting 1001 messages through the API is slow; write them straight to D1.
+    const rows = Array.from({ length: 1001 }, (_, i) => [w.general, `1700000000.${String(i).padStart(6, "0")}`, i])
+    await env.DB.batch(
+      rows.map(([channel, ts, i]) =>
+        env.DB.prepare("INSERT INTO messages (channel_id, ts, team_id, user_id, text) VALUES (?, ?, ?, ?, ?)").bind(
+          channel,
+          ts,
+          w.teamId,
+          bob.id,
+          `m${i}`,
+        ),
+      ),
+    )
+    const info = await ok<{ channel: Channel }>("conversations.info", { channel: w.general }, w.owner.token)
+    expect(info.channel.unread_count).toBe(1000)
+  })
+
   it("tracks read state with conversations.mark", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
@@ -246,6 +293,25 @@ describe("conversations", () => {
 })
 
 describe("history and threads", () => {
+  it("returns a full default page, past D1's 100 bound parameters", async () => {
+    const w = await workspace()
+    const posted: string[] = []
+    for (let i = 0; i < 101; i++) {
+      posted.push(
+        (await ok<{ ts: string }>("chat.postMessage", { channel: w.general, text: `n${i}` }, w.owner.token)).ts,
+      )
+    }
+    await ok("reactions.add", { channel: w.general, timestamp: posted[1], name: "tada" }, w.owner.token)
+    const page = await ok<Messages & { messages: { reactions?: { name: string }[] }[] }>(
+      "conversations.history",
+      { channel: w.general },
+      w.owner.token,
+    )
+    expect(page.messages).toHaveLength(100)
+    expect(page.has_more).toBe(true)
+    expect(page.messages.at(-1)).toMatchObject({ text: "n1", reactions: [{ name: "tada" }] })
+  })
+
   it("pages history newest first, with latest/oldest/inclusive", async () => {
     const w = await workspace()
     const ts: string[] = []

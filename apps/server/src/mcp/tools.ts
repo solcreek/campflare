@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server"
 import * as z from "zod"
 import { CampflareError } from "../api/errors"
+import { first } from "../db/query"
+import type { MemberRow } from "../db/rows"
 import { author, compactMessage, directory, result, type Directory, type RawMessage } from "./format"
 import { invoke, type Caller } from "./invoke"
 import { conversationId, userIdOf } from "./resolve"
@@ -62,12 +64,14 @@ export function buildServer(caller: Caller): McpServer {
     },
     tool(async ({ kinds }) => {
       const types = (kinds?.length ? kinds : (["channel", "private", "dm", "group"] as const)).map((k) => KINDS[k])
-      const res = await invoke<{ channels: Record<string, unknown>[] }>(caller, "users.conversations", {
-        types: types.join(","),
-        exclude_archived: true,
-        limit: 999,
-      })
-      const dir = await directory(caller)
+      const [res, dir] = await Promise.all([
+        invoke<{ channels: Record<string, unknown>[] }>(caller, "users.conversations", {
+          types: types.join(","),
+          exclude_archived: true,
+          limit: 999,
+        }),
+        directory(caller),
+      ])
       return {
         conversations: res.channels.map((c) => ({
           id: c.id,
@@ -93,24 +97,26 @@ export function buildServer(caller: Caller): McpServer {
     },
     tool(async ({ conversation: ref, limit, before }) => {
       const channel = await conversationId(caller, ref)
-      const res = await invoke<{ messages: RawMessage[]; has_more: boolean }>(caller, "conversations.history", {
-        channel,
-        limit,
-        latest: before,
-      })
-      const dir = await directory(caller)
-      const info = await invoke<{ channel: { last_read?: string; unread_count?: number } }>(
-        caller,
-        "conversations.info",
-        {
+      // history checks access; the read marker is the caller's own members row, if any.
+      const [res, dir, member] = await Promise.all([
+        invoke<{ messages: RawMessage[]; has_more: boolean }>(caller, "conversations.history", {
           channel,
-        },
-      )
+          limit,
+          latest: before,
+        }),
+        directory(caller),
+        first<Pick<MemberRow, "last_read">>(
+          caller.env.DB,
+          "SELECT last_read FROM members WHERE conversation_id = ? AND user_id = ?",
+          channel,
+          caller.auth.user.id,
+        ),
+      ])
       return {
         conversation: channel,
         messages: res.messages.toReversed().map((m) => compactMessage(m, dir)),
         has_more: res.has_more,
-        ...(info.channel.last_read ? { last_read: info.channel.last_read } : {}),
+        ...(member ? { last_read: member.last_read } : {}),
       }
     }),
   )
@@ -125,8 +131,10 @@ export function buildServer(caller: Caller): McpServer {
     },
     tool(async ({ conversation: ref, ts }) => {
       const channel = await conversationId(caller, ref)
-      const res = await invoke<{ messages: RawMessage[] }>(caller, "conversations.replies", { channel, ts })
-      const dir = await directory(caller)
+      const [res, dir] = await Promise.all([
+        invoke<{ messages: RawMessage[] }>(caller, "conversations.replies", { channel, ts }),
+        directory(caller),
+      ])
       return { conversation: channel, messages: res.messages.map((m) => compactMessage(m, dir)) }
     }),
   )
@@ -145,13 +153,15 @@ export function buildServer(caller: Caller): McpServer {
       annotations: READ,
     },
     tool(async ({ query, limit, newest_first }) => {
-      const res = await invoke<{
-        messages: {
-          total: number
-          matches: (RawMessage & { channel: { id: string; name: string; is_im: boolean }; permalink: string })[]
-        }
-      }>(caller, "search.messages", { query, count: limit, sort: newest_first ? "timestamp" : "score" })
-      const dir = await directory(caller)
+      const [res, dir] = await Promise.all([
+        invoke<{
+          messages: {
+            total: number
+            matches: (RawMessage & { channel: { id: string; name: string; is_im: boolean }; permalink: string })[]
+          }
+        }>(caller, "search.messages", { query, count: limit, sort: newest_first ? "timestamp" : "score" }),
+        directory(caller),
+      ])
       return {
         total: res.messages.total,
         matches: res.messages.matches.map((m) => ({
@@ -259,12 +269,14 @@ export function buildServer(caller: Caller): McpServer {
       annotations: READ,
     },
     tool(async ({ cursor, wait_seconds }) => {
-      const res = await invoke<{
-        events: { cursor: string; event: Record<string, unknown> }[]
-        cursor: string
-        has_more: boolean
-      }>(caller, "campflare.events.poll", { cursor, wait: wait_seconds })
-      const dir = await directory(caller)
+      const [res, dir] = await Promise.all([
+        invoke<{
+          events: { cursor: string; event: Record<string, unknown> }[]
+          cursor: string
+          has_more: boolean
+        }>(caller, "campflare.events.poll", { cursor, wait: wait_seconds }),
+        directory(caller),
+      ])
       return {
         events: res.events.map(({ event }) => summarizeEvent(event, dir)),
         cursor: res.cursor,

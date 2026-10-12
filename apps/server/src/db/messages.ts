@@ -2,8 +2,8 @@ import { audienceOf, channelType, publish } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
-import { loadExtras, messageJson } from "../api/shapes"
-import { first, isUniqueViolation, run } from "./query"
+import { loadExtras, messageJson, type MessageExtras } from "../api/shapes"
+import { first, isUniqueViolation, stmt } from "./query"
 import type { ConversationRow, MessageRow } from "./rows"
 
 export const MAX_TEXT = 40_000
@@ -45,11 +45,24 @@ export async function messageOut(ctx: Pick<Ctx, "env" | "origin">, row: MessageR
   return messageJson(row, await loadExtras(ctx.env, [row]), ctx.origin)
 }
 
+/** What a message needs to serialise when it was just posted: no reactions yet, and usually no bot but the caller's. */
+async function newMessageExtras(ctx: Ctx<Actor>, row: MessageRow): Promise<MessageExtras> {
+  const app = ctx.auth.app
+  if (row.files || (row.bot_id && app?.bot_id !== row.bot_id)) return loadExtras(ctx.env, [row])
+  return { reactions: new Map(), files: new Map(), apps: new Map(app ? [[app.bot_id, app]] : []) }
+}
+
 /**
  * Stores a message and announces it. A reply (thread_ts) updates its parent's
  * thread summary; the parent becomes a thread head (thread_ts = its own ts).
+ * The writes, the stored row and the audience are one batch: one round trip,
+ * and the message and its thread summary land together or not at all.
  */
-export async function postMessage(ctx: Ctx<Actor>, c: ConversationRow, input: NewMessage): Promise<MessageRow> {
+export async function postMessage(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  input: NewMessage,
+): Promise<{ row: MessageRow; message: ReturnType<typeof messageJson> }> {
   if (input.text.length > MAX_TEXT) throw new CampflareError("msg_too_long")
   let parent: MessageRow | undefined
   if (input.thread_ts) {
@@ -60,12 +73,18 @@ export async function postMessage(ctx: Ctx<Actor>, c: ConversationRow, input: Ne
       parent = await requireMessage(ctx, c.id, parent.thread_ts)
     }
   }
+  let replyUsers: string[] = []
+  if (parent) {
+    replyUsers = JSON.parse(parent.reply_users) as string[]
+    const author = input.user_id ?? input.bot_id
+    if (author && !replyUsers.includes(author)) replyUsers.push(author)
+  }
 
-  let ts = nextTs()
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await run(
-        ctx.env.DB,
+  const db = ctx.env.DB
+  const write = (ts: string) =>
+    db.batch([
+      stmt(
+        db,
         `INSERT INTO messages (channel_id, ts, team_id, user_id, bot_id, app_id, username, subtype, text, blocks,
            attachments, metadata, files, thread_ts, parent_user_id, client_msg_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -85,7 +104,30 @@ export async function postMessage(ctx: Ctx<Actor>, c: ConversationRow, input: Ne
         parent?.ts ?? null,
         parent?.user_id ?? null,
         input.client_msg_id ?? null,
-      )
+      ),
+      ...(parent
+        ? [
+            stmt(
+              db,
+              `UPDATE messages SET thread_ts = ts, reply_count = reply_count + 1, latest_reply = ?, reply_users = ?
+               WHERE channel_id = ? AND ts = ?`,
+              ts,
+              JSON.stringify(replyUsers.slice(0, 50)),
+              c.id,
+              parent.ts,
+            ),
+          ]
+        : []),
+      stmt(db, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id),
+      stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, ts),
+      stmt(db, "SELECT user_id FROM members WHERE conversation_id = ?", c.id),
+    ])
+
+  let ts = nextTs()
+  let results: D1Result[]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      results = await write(ts)
       break
     } catch (error) {
       if (!isUniqueViolation(error) || attempt >= 5) throw error
@@ -93,32 +135,16 @@ export async function postMessage(ctx: Ctx<Actor>, c: ConversationRow, input: Ne
     }
   }
 
-  if (parent) {
-    const replyUsers = JSON.parse(parent.reply_users) as string[]
-    const author = input.user_id ?? input.bot_id
-    if (author && !replyUsers.includes(author)) replyUsers.push(author)
-    await run(
-      ctx.env.DB,
-      `UPDATE messages SET thread_ts = ts, reply_count = reply_count + 1, latest_reply = ?, reply_users = ?
-       WHERE channel_id = ? AND ts = ?`,
-      ts,
-      JSON.stringify(replyUsers.slice(0, 50)),
-      c.id,
-      parent.ts,
-    )
-  }
-  await run(ctx.env.DB, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id)
-
-  const row = (await getMessage(ctx, c.id, ts))!
-  const json = await messageOut(ctx, row)
+  const row = results.at(-2)!.results[0] as MessageRow
+  const audience = (results.at(-1)!.results as { user_id: string }[]).map((r) => r.user_id)
+  const message = messageJson(row, await newMessageExtras(ctx, row), ctx.origin)
   publish(ctx, {
     teamId: c.team_id,
-    audience: await audienceOf(ctx, c.id),
-    event: { ...json, channel: c.id, channel_type: channelType(c), event_ts: ts },
+    audience,
+    event: { ...message, channel: c.id, channel_type: channelType(c), event_ts: ts },
   })
-  return row
+  return { row, message }
 }
-
 /** A message_changed event for an edited (or tombstoned) message. */
 export async function announceChanged(ctx: Ctx<Actor>, c: ConversationRow, before: MessageRow, after: MessageRow) {
   const now = `${(Date.now() / 1000).toFixed(6)}`

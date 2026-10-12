@@ -1,0 +1,13 @@
+{
+  "name": "@campflare/bench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node bench.ts",
+    "typecheck": "tsc -p . && tsc -p tsconfig.worker.json"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260926.1",
+    "wrangler": "4.141.0"
+  }
+}

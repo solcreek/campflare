@@ -1,0 +1,19 @@
+{
+  // The server under bench: apps/server's Worker behind worker.ts, which counts
+  // (and can delay) D1 queries. Bindings match apps/server/wrangler.jsonc.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "campflare-bench",
+  "main": "worker.ts",
+  "compatibility_date": "2026-08-15",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "campflare",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../apps/server/migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "campflare-files" }],
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "TeamHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TeamHub"] }],
+}

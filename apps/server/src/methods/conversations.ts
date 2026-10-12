@@ -1,8 +1,8 @@
 import {
+  actorMember,
   addMember,
   getConversation,
   imPeer,
-  membership,
   openConversation,
   removeMember,
   requireMember,
@@ -11,7 +11,7 @@ import {
   validChannelName,
 } from "../db/conversations"
 import { postMessage, requireMessage } from "../db/messages"
-import { all, first, isUniqueViolation, placeholders, run, stmt } from "../db/query"
+import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { ConversationRow, MessageRow, UserRow } from "../db/rows"
 import { audienceOf, publish } from "../events"
 import { decodeCursor, encodeCursor } from "../api/args"
@@ -24,20 +24,24 @@ import { typesFilter } from "./users"
 /** Top-level messages: thread replies stay in their thread unless broadcast. */
 const IN_HISTORY = "(thread_ts IS NULL OR thread_ts = ts OR subtype = 'thread_broadcast')"
 
+/** Unread counts stop here: counting reads every unread message, and a long-unread busy channel has thousands. */
+export const MAX_UNREAD = 1000
+
 async function unreadCount(ctx: Ctx<Actor>, c: ConversationRow, lastRead: string) {
   const row = await first<{ n: number }>(
     ctx.env.DB,
-    `SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND ts > ? AND deleted = 0 AND ${IN_HISTORY}
-     AND (user_id IS NULL OR user_id != ?)`,
+    `SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages WHERE channel_id = ? AND ts > ? AND deleted = 0 AND ${IN_HISTORY}
+     AND (user_id IS NULL OR user_id != ?) LIMIT ?)`,
     c.id,
     lastRead,
     ctx.auth.user.id,
+    MAX_UNREAD,
   )
   return row?.n ?? 0
 }
 
 export async function conversationOut(ctx: Ctx<Actor>, c: ConversationRow, opts: { numMembers?: boolean } = {}) {
-  const member = await membership(ctx, c.id)
+  const member = await actorMember(ctx, c)
   const numMembers = opts.numMembers
     ? ((await first<{ n: number }>(ctx.env.DB, "SELECT COUNT(*) AS n FROM members WHERE conversation_id = ?", c.id))
         ?.n ?? 0)
@@ -268,7 +272,7 @@ async function joinMessage(ctx: Ctx<Actor>, c: ConversationRow, userId: string) 
 method("conversations.join", "actor", async (ctx) => {
   const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   if (c.kind !== "channel") throw new CampflareError("method_not_supported_for_channel_type")
-  if (c.is_private && !(await membership(ctx, c.id))) throw new CampflareError("channel_not_found")
+  if (c.is_private && !(await actorMember(ctx, c))) throw new CampflareError("channel_not_found")
   requireNotArchived(c)
   const joined = await addMember(ctx, c, ctx.auth.user.id)
   if (joined) await joinMessage(ctx, c, ctx.auth.user.id)
@@ -282,7 +286,7 @@ method("conversations.leave", "actor", async (ctx) => {
   const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   if (c.kind === "im") throw new CampflareError("method_not_supported_for_channel_type")
   if (c.is_general) throw new CampflareError("cant_leave_general")
-  if (!(await membership(ctx, c.id))) return { not_in_channel: true }
+  if (!(await actorMember(ctx, c))) return { not_in_channel: true }
   await postMessage(ctx, c, {
     user_id: ctx.auth.user.id,
     subtype: "channel_leave",
@@ -302,9 +306,9 @@ method("conversations.invite", "actor", async (ctx) => {
   if (users.includes(ctx.auth.user.id)) throw new CampflareError("cant_invite_self")
   const found = await all<UserRow>(
     ctx.env.DB,
-    `SELECT * FROM users WHERE team_id = ? AND deleted = 0 AND id IN (${placeholders(users.length)})`,
+    "SELECT * FROM users WHERE team_id = ? AND deleted = 0 AND id IN (SELECT value FROM json_each(?))",
     ctx.auth.team.id,
-    ...users,
+    JSON.stringify(users),
   )
   if (found.length !== users.length) throw new CampflareError("user_not_found")
   let added = 0

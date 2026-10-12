@@ -1,7 +1,7 @@
 import { requireReadable, resolveConversation } from "../db/conversations"
 import { messageOut, requireMessage } from "../db/messages"
-import { first, isUniqueViolation, run } from "../db/query"
-import { audienceOf, publish } from "../events"
+import { isUniqueViolation, stmt } from "../db/query"
+import { publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { permalink } from "../api/shapes"
@@ -28,43 +28,41 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
   const { c, message } = await target(ctx)
   const name = reactionName(ctx.args.req("name", "invalid_name"))
   const user = ctx.auth.user.id
-  if (added) {
-    const distinct = await first<{ n: number; mine: number }>(
-      ctx.env.DB,
-      "SELECT COUNT(DISTINCT name) AS n, SUM(name = ?) AS mine FROM reactions WHERE channel_id = ? AND ts = ?",
-      name,
-      c.id,
-      message.ts,
-    )
-    if ((distinct?.n ?? 0) >= MAX_DISTINCT && !distinct?.mine) throw new CampflareError("too_many_reactions")
-    try {
-      await run(
-        ctx.env.DB,
-        "INSERT INTO reactions (channel_id, ts, name, user_id, created) VALUES (?, ?, ?, ?, ?)",
+  const db = ctx.env.DB
+  // The change and the audience in one batch. An added reaction must be one of at most
+  // MAX_DISTINCT names on the message, or a name already there.
+  const change = added
+    ? stmt(
+        db,
+        `INSERT INTO reactions (channel_id, ts, name, user_id, created) SELECT ?, ?, ?, ?, ?
+         WHERE (SELECT COUNT(DISTINCT name) FROM reactions WHERE channel_id = ?1 AND ts = ?2) < ?6
+            OR EXISTS (SELECT 1 FROM reactions WHERE channel_id = ?1 AND ts = ?2 AND name = ?3)`,
         c.id,
         message.ts,
         name,
         user,
         Date.now(),
+        MAX_DISTINCT,
       )
-    } catch (error) {
-      if (isUniqueViolation(error)) throw new CampflareError("already_reacted")
-      throw error
-    }
-  } else {
-    const res = await run(
-      ctx.env.DB,
-      "DELETE FROM reactions WHERE channel_id = ? AND ts = ? AND name = ? AND user_id = ?",
-      c.id,
-      message.ts,
-      name,
-      user,
-    )
-    if (!res.meta.changes) throw new CampflareError("no_reaction")
+    : stmt(
+        db,
+        "DELETE FROM reactions WHERE channel_id = ? AND ts = ? AND name = ? AND user_id = ?",
+        c.id,
+        message.ts,
+        name,
+        user,
+      )
+  let results: D1Result[]
+  try {
+    results = await db.batch([change, stmt(db, "SELECT user_id FROM members WHERE conversation_id = ?", c.id)])
+  } catch (error) {
+    if (added && isUniqueViolation(error)) throw new CampflareError("already_reacted")
+    throw error
   }
+  if (!results[0]!.meta.changes) throw new CampflareError(added ? "too_many_reactions" : "no_reaction")
   publish(ctx, {
     teamId: c.team_id,
-    audience: await audienceOf(ctx, c.id),
+    audience: (results[1]!.results as { user_id: string }[]).map((r) => r.user_id),
     event: {
       type: added ? "reaction_added" : "reaction_removed",
       user,
