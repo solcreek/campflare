@@ -6,15 +6,32 @@ import { conversationJson } from "../api/shapes"
 import { first, isUniqueViolation, run, stmt } from "./query"
 import type { ConversationRow, MemberRow, UserRow } from "./rows"
 
-export async function getConversation(ctx: Ctx<Actor>, id: string): Promise<ConversationRow> {
-  const row = await first<ConversationRow>(
-    ctx.env.DB,
-    "SELECT * FROM conversations WHERE id = ? AND team_id = ?",
-    id,
-    ctx.auth.team.id,
-  )
+/**
+ * The actor's membership, read with the conversation itself so the access
+ * check that follows needs no query. null: not a member. Rows from elsewhere
+ * have no entry and are looked up as before.
+ */
+const actorMembership = new WeakMap<ConversationRow, MemberRow | null>()
+
+/** Conversations, with the actor's membership row alongside (m_*). */
+const WITH_MEMBERSHIP = `SELECT c.*, m.last_read AS m_last_read, m.joined AS m_joined FROM conversations c
+  LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?`
+
+type WithMembership = ConversationRow & { m_last_read: string | null; m_joined: number | null }
+
+async function findWithMembership(ctx: Ctx<Actor>, where: string, ...params: unknown[]) {
+  const row = await first<WithMembership>(ctx.env.DB, `${WITH_MEMBERSHIP} WHERE ${where}`, ctx.auth.user.id, ...params)
   if (!row) throw new CampflareError("channel_not_found")
-  return row
+  const { m_last_read: lastRead, m_joined: joined, ...c } = row
+  actorMembership.set(
+    c,
+    joined === null ? null : { conversation_id: c.id, user_id: ctx.auth.user.id, last_read: lastRead!, joined },
+  )
+  return c
+}
+
+export async function getConversation(ctx: Ctx<Actor>, id: string): Promise<ConversationRow> {
+  return findWithMembership(ctx, "c.id = ? AND c.team_id = ?", id, ctx.auth.team.id)
 }
 
 /**
@@ -34,14 +51,7 @@ export async function resolveConversation(ctx: Ctx<Actor>, ref: string): Promise
   }
   if (/^[CDG][A-Z0-9]+$/.test(ref)) return getConversation(ctx, ref)
   const name = ref.replace(/^#/, "").toLowerCase()
-  const row = await first<ConversationRow>(
-    ctx.env.DB,
-    "SELECT * FROM conversations WHERE team_id = ? AND kind = 'channel' AND name = ?",
-    ctx.auth.team.id,
-    name,
-  )
-  if (!row) throw new CampflareError("channel_not_found")
-  return row
+  return findWithMembership(ctx, "c.team_id = ? AND c.kind = 'channel' AND c.name = ?", ctx.auth.team.id, name)
 }
 
 export async function membership(ctx: Ctx<Actor>, conversationId: string, userId = ctx.auth.user.id) {
@@ -53,9 +63,15 @@ export async function membership(ctx: Ctx<Actor>, conversationId: string, userId
   )
 }
 
+/** The actor's membership of c: known from fetching c, or looked up. */
+export async function actorMember(ctx: Ctx<Actor>, c: ConversationRow): Promise<MemberRow | undefined> {
+  const known = actorMembership.get(c)
+  return known === undefined ? membership(ctx, c.id) : (known ?? undefined)
+}
+
 /** Reading is for members, and for anyone in the team on a public channel. */
 export async function requireReadable(ctx: Ctx<Actor>, c: ConversationRow): Promise<MemberRow | undefined> {
-  const member = await membership(ctx, c.id)
+  const member = await actorMember(ctx, c)
   if (!member && (c.kind !== "channel" || c.is_private)) throw new CampflareError("channel_not_found")
   return member
 }
@@ -171,6 +187,7 @@ export async function addMember(ctx: Ctx<Actor>, c: ConversationRow, userId: str
     userId,
     nowSeconds(),
   )
+  if (userId === ctx.auth.user.id) actorMembership.delete(c)
   if (!res.meta.changes) return false
   const audience = await audienceOf(ctx, c.id)
   publish(ctx, {
@@ -191,6 +208,7 @@ export async function addMember(ctx: Ctx<Actor>, c: ConversationRow, userId: str
 export async function removeMember(ctx: Ctx<Actor>, c: ConversationRow, userId: string) {
   const audience = await audienceOf(ctx, c.id)
   const res = await run(ctx.env.DB, "DELETE FROM members WHERE conversation_id = ? AND user_id = ?", c.id, userId)
+  if (userId === ctx.auth.user.id) actorMembership.delete(c)
   if (!res.meta.changes) return false
   publish(ctx, {
     teamId: c.team_id,

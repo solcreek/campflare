@@ -76,7 +76,10 @@ describe("conversations", () => {
     const { channel } = await ok<{ channel: Channel }>("conversations.create", { name: "dev" }, w.owner.token)
 
     await expectError("chat.postMessage", { channel: channel.id, text: "hi" }, bob.token, "not_in_channel")
-    await ok("conversations.join", { channel: channel.id }, bob.token)
+    // The channel was read before joining: the answer still shows the new membership.
+    expect(await ok("conversations.join", { channel: channel.id }, bob.token)).toMatchObject({
+      channel: { id: channel.id, is_member: true },
+    })
     expect(await ok("conversations.join", { channel: channel.id }, bob.token)).toMatchObject({
       warning: "already_in_channel",
     })
