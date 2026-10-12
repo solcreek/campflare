@@ -1,0 +1,27 @@
+{
+  "name": "campflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @campflare/server dev",
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "oxlint",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "test": "pnpm -r test",
+    "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "tsdown": "0.23.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.14.0"
+}

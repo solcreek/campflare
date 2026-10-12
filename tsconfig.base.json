@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["es2024"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedDeclarations": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true
+  }
+}
