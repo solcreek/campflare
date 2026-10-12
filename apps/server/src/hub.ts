@@ -57,6 +57,9 @@ export interface PollResult {
 }
 
 export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+/** Socket Mode: how long an envelope waits for its ack before it's sent again, and how often. */
+export const ACK_TIMEOUT_MS = 3000
+export const MAX_RETRIES = 3
 
 export class TeamHub extends DurableObject<Env> {
   private roundRobin = new Map<string, number>()
@@ -74,6 +77,79 @@ export class TeamHub extends DurableObject<Env> {
       body TEXT NOT NULL
     )`)
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS events_at ON events (at)")
+    // Socket Mode envelopes sent and not yet acknowledged.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS unacked (
+      envelope_id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      envelope TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      due INTEGER NOT NULL
+    )`)
+  }
+
+  /** The next connection of an app, in turn: Slack spreads an app's events across its links. */
+  private nextLink(appId: string): WebSocket | undefined {
+    const links = this.ctx.getWebSockets(`app:${appId}`)
+    if (links.length === 0) return undefined
+    const n = this.roundRobin.get(appId) ?? 0
+    this.roundRobin.set(appId, n + 1)
+    return links[n % links.length]
+  }
+
+  /** Sends an envelope and keeps it until acked, waking the alarm to resend it if it isn't. */
+  private async deliver(ws: WebSocket, appId: string, envelope: { envelope_id: string }): Promise<number> {
+    const due = Date.now() + ACK_TIMEOUT_MS
+    this.ctx.storage.sql.exec(
+      "INSERT INTO unacked (envelope_id, app_id, envelope, due) VALUES (?, ?, ?, ?)",
+      envelope.envelope_id,
+      appId,
+      JSON.stringify(envelope),
+      due,
+    )
+    await this.scheduleAlarm(due)
+    return send(ws, envelope)
+  }
+
+  private async scheduleAlarm(at: number) {
+    const current = await this.ctx.storage.getAlarm()
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at)
+  }
+
+  /** Resends envelopes whose ack is overdue, as Slack does: retry_attempt counts up, retry_reason "timeout". */
+  override async alarm(): Promise<void> {
+    const now = Date.now()
+    const due = this.ctx.storage.sql
+      .exec<{ envelope_id: string; app_id: string; envelope: string; attempts: number }>(
+        "SELECT envelope_id, app_id, envelope, attempts FROM unacked WHERE due <= ?",
+        now,
+      )
+      .toArray()
+    for (const row of due) {
+      const attempts = row.attempts + 1
+      if (attempts > MAX_RETRIES) {
+        this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", row.envelope_id)
+        continue
+      }
+      const envelope = {
+        ...(JSON.parse(row.envelope) as Record<string, unknown>),
+        retry_attempt: attempts,
+        retry_reason: "timeout",
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE unacked SET attempts = ?, envelope = ?, due = ? WHERE envelope_id = ?",
+        attempts,
+        JSON.stringify(envelope),
+        now + ACK_TIMEOUT_MS,
+        row.envelope_id,
+      )
+      // Another link if the app has one: the first may be the one that's stuck.
+      const ws = this.nextLink(row.app_id)
+      if (ws) send(ws, envelope)
+    }
+    const next = this.ctx.storage.sql
+      .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM unacked")
+      .toArray()[0]?.due
+    if (next !== null && next !== undefined) await this.ctx.storage.setAlarm(next)
   }
 
   /** The last event number handed out (0 before the first). */
@@ -212,9 +288,8 @@ export class TeamHub extends DurableObject<Env> {
     }
 
     for (const [appId, links] of apps) {
-      const n = this.roundRobin.get(appId) ?? 0
-      this.roundRobin.set(appId, n + 1)
-      const { ws, conn } = links[n % links.length]!
+      const ws = this.nextLink(appId)!
+      const conn = links.find((l) => l.ws === ws)?.conn ?? links[0]!.conn
       // Authorized as the installer when the event is theirs to see, else as the bot.
       const asInstaller = conn.installerUserId && (audience === "team" || audience.includes(conn.installerUserId))
       const envelope = {
@@ -245,7 +320,7 @@ export class TeamHub extends DurableObject<Env> {
           is_ext_shared_channel: false,
         },
       }
-      delivered += send(ws, envelope)
+      delivered += await this.deliver(ws, appId, envelope)
     }
     return delivered
   }
@@ -263,7 +338,8 @@ export class TeamHub extends DurableObject<Env> {
     } catch {
       return
     }
-    // Socket Mode acks ({ envelope_id }) need no answer: events aren't redelivered yet.
+    // A Socket Mode ack: the envelope arrived, so it isn't sent again.
+    if (frame.envelope_id) this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", frame.envelope_id)
     if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong", reply_to: frame.id }))
   }
 
