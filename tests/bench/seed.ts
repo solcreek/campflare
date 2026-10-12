@@ -51,7 +51,9 @@ const WORDS = (
   "deploy build release review merge branch test flaky green red latency database query index cache " +
   "worker durable object socket event message thread reply channel search token upload file image " +
   "lunch coffee meeting standup retro roadmap ticket bug fix ship rollback incident alert dashboard " +
-  "部署 失敗 測試 會議 午餐 修正 上線 回滾"
+  // Other scripts, evenly: CJK and accented Latin.
+  "部署 失敗 測試 會議 デプロイ 失敗 会議 確認 배포 실패 회의 점심 " +
+  "despliegue reunión señal déploiement réunion café Bereitstellung Besprechung München"
 ).split(" ")
 
 const sqlString = (v: string) => `'${v.replace(/'/g, "''")}'`

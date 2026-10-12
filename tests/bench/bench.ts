@@ -202,7 +202,8 @@ function scenarios(d: Dataset): [string, (i: number) => Call][] {
       () => ({ method: "search.messages", token: owner, args: { query: "deploy review in:#busy from:@user1" } }),
     ],
     ["search: short term (LIKE)", () => ({ method: "search.messages", token: owner, args: { query: "ok" } })],
-    ["search: CJK", () => ({ method: "search.messages", token: owner, args: { query: "部署" } })],
+    ["search: 2-char CJK (LIKE)", () => ({ method: "search.messages", token: owner, args: { query: "部署" } })],
+    ["search: no accents (FTS)", () => ({ method: "search.messages", token: owner, args: { query: "reunion" } })],
     [
       "conversations.mark",
       () => ({ method: "conversations.mark", token: owner, args: { channel: d.busy, ts: d.reactTs } }),
