@@ -4,6 +4,9 @@ import { requireMember, resolveConversation } from "../db/conversations"
 import type { ConversationRow } from "../db/rows"
 import { audienceOf, publish } from "../events"
 import type { HuddleSeat, HuddleTrack } from "../hub"
+import { postMessage } from "../db/messages"
+import { scribeTicket } from "./scribe"
+import { scribeActor, seatScribe } from "./scribe-bot"
 import { createSfu, iceServers, SfuError, type Publication, type SessionDescription, type Sfu } from "./sfu"
 
 // campflare.huddles.* (experiment): calls in a conversation, with media through
@@ -181,6 +184,8 @@ method("campflare.huddles.join", "actor", async (ctx) => {
     )
   }
   await announce(ctx, c, { type: "huddle_joined", ...seatJson(seat) })
+  // Already being transcribed: stream this newcomer too (once their connection is up).
+  if ((await scribe(ctx, c).status()).config) ctx.waitUntil(transcribeSeats(ctx, c, sfu, [seat]).catch(() => 0))
   return {
     channel: c.id,
     session_id: sessionId,
@@ -296,5 +301,128 @@ method("campflare.huddles.leave", "actor", async (ctx) => {
       .catch(() => undefined),
   )
   await announce(ctx, c, { type: "huddle_left", user: seat.user_id, session_id: seat.session_id })
+  // Transcription follows the call: the leaver's stream ends, and the last one out ends it all.
+  const s = scribe(ctx, c)
+  if ((await s.status()).config) {
+    const adapterId = await s.removeAdapter(seat.user_id)
+    if (adapterId) ctx.waitUntil(sfu.closeAdapters([adapterId]).catch(() => undefined))
+    if ((await hub(ctx).huddleList(c.id)).length === 0) await stopTranscription(ctx, c, sfu)
+  }
   return { left: true }
+})
+
+// --- Transcription ---
+
+const scribe = (ctx: Ctx<Actor>, c: ConversationRow) =>
+  ctx.env.SCRIBE.get(ctx.env.SCRIBE.idFromName(`${c.team_id}/${c.id}`))
+
+/** Where the SFU connects to stream a speaker: public, since the SFU dials out. */
+async function scribeEndpoint(ctx: Ctx<Actor>, c: ConversationRow, user: string) {
+  const base = (ctx.env.HUDDLE_PUBLIC_URL || ctx.origin).replace(/\/+$/, "").replace(/^http/, "ws")
+  return `${base}/huddle/scribe/${await scribeTicket(ctx.env.SIGNING_KEY, { teamId: c.team_id, channelId: c.id, user })}`
+}
+
+/**
+ * Streams seats' microphones to the scribe. A seat that just joined may not be
+ * connected to the SFU yet, so failed entries are retried a few times, a little
+ * later each time, while the request's waitUntil allows.
+ */
+async function transcribeSeats(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  sfu: Sfu,
+  seats: HuddleSeat[],
+  attempt = 0,
+): Promise<number> {
+  const wanted = seats.flatMap((seat) => {
+    const mic = seat.tracks.find((t) => t.kind === "audio")
+    return mic ? [{ seat, mic }] : []
+  })
+  let made = 0
+  const failed: HuddleSeat[] = []
+  // Four entries per request, as the API allows.
+  for (let i = 0; i < wanted.length; i += 4) {
+    const batch = wanted.slice(i, i + 4)
+    const entries = await Promise.all(
+      batch.map(async ({ seat, mic }) => ({
+        sessionId: seat.session_id,
+        trackName: mic.name,
+        endpoint: await scribeEndpoint(ctx, c, seat.user_id),
+      })),
+    )
+    const results = await sfu.streamToWebSocket(entries).catch(() => entries.map(() => ({ adapterId: undefined })))
+    for (const [k, result] of results.entries()) {
+      const seat = batch[k]!.seat
+      if (result.adapterId) {
+        await scribe(ctx, c).addAdapter(seat.user_id, result.adapterId)
+        made++
+      } else {
+        failed.push(seat)
+      }
+    }
+  }
+  if (failed.length && attempt < 5) {
+    ctx.waitUntil(
+      new Promise((r) => setTimeout(r, 500 * 2 ** attempt)).then(async () => {
+        // Still being transcribed, and still in the call?
+        if (!(await scribe(ctx, c).status()).config) return
+        const present = await hub(ctx).huddleList(c.id)
+        await transcribeSeats(
+          ctx,
+          c,
+          sfu,
+          present.filter((p) => failed.some((f) => f.user_id === p.user_id)),
+          attempt + 1,
+        )
+      }),
+    )
+  }
+  return made
+}
+
+async function stopTranscription(ctx: Ctx<Actor>, c: ConversationRow, sfu: Sfu) {
+  const ids = Object.values(await scribe(ctx, c).stop())
+  for (let i = 0; i < ids.length; i += 4) ctx.waitUntil(sfu.closeAdapters(ids.slice(i, i + 4)).catch(() => []))
+  await announce(ctx, c, { type: "huddle_transcription", active: false })
+}
+
+/**
+ * Turns transcription of the conversation's call on or off. On: the Huddle
+ * Scribe opens a thread, and every microphone in the call (and any that joins
+ * later) streams to it; each line it hears is posted there. Off: the streams
+ * close. The call's last leaver turns it off too.
+ */
+method("campflare.huddles.transcribe", "actor", async (ctx) => {
+  const c = await memberConversation(ctx)
+  if (!ctx.env.CF_ACCOUNT_ID || !ctx.env.WORKERS_AI_TOKEN) throw new CampflareError("transcription_not_configured")
+  const enabled = ctx.args.bool("enabled", true)
+  const sfu = sfuFor(ctx)
+  const s = scribe(ctx, c)
+  const { config } = await s.status()
+  if (!enabled) {
+    if (config) await stopTranscription(ctx, c, sfu)
+    return { active: false }
+  }
+  if (config) return { active: true, thread_ts: config.threadTs }
+  const seats = await hub(ctx).huddleList(c.id)
+  if (seats.length === 0) throw new CampflareError("huddle_empty")
+
+  const bot = await scribeActor(ctx.env, ctx.auth.team)
+  await seatScribe(ctx.env, c.id, bot.user.id)
+  const who = ctx.auth.user.display_name || ctx.auth.user.real_name || ctx.auth.user.name
+  const parent = await postMessage({ ...ctx, auth: bot }, c, {
+    user_id: bot.user.id,
+    bot_id: bot.app!.bot_id,
+    app_id: bot.app!.id,
+    text: `:studio_microphone: Transcript of this call, turned on by ${who}. Each line below is one person speaking.`,
+  })
+  await s.start({
+    teamId: c.team_id,
+    channelId: c.id,
+    threadTs: parent.row.ts,
+    origin: ctx.env.HUDDLE_PUBLIC_URL || ctx.origin,
+  })
+  const streaming = await transcribeSeats(ctx, c, sfu, seats)
+  await announce(ctx, c, { type: "huddle_transcription", active: true, thread_ts: parent.row.ts })
+  return { active: true, thread_ts: parent.row.ts, streaming }
 })
