@@ -23,7 +23,7 @@ function formAction(url: URL): string {
   return "'self'"
 }
 
-function page(title: string, body: string, url: URL): Response {
+function page(title: string, body: string, url: URL, init: { status?: number; retryAfter?: number } = {}): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -50,7 +50,9 @@ function page(title: string, body: string, url: URL): Response {
 <body><main>${body}</main></body>
 </html>`
   return new Response(html, {
+    status: init.status ?? 200,
     headers: {
+      ...(init.retryAfter ? { "retry-after": String(init.retryAfter) } : {}),
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       // No scripts, no framing: the forms work without either.
@@ -72,6 +74,8 @@ export interface LoginState {
   askWorkspace?: boolean
   /** The last attempt was with a token: open that form. */
   token?: boolean
+  /** Throttled: answer 429 with this Retry-After (seconds). */
+  retryAfter?: number
 }
 
 /**
@@ -110,6 +114,7 @@ ${state.error ? `<p role="alert"><strong>${escape(state.error)}</strong></p>` : 
   </form>
 </details>`,
     url,
+    state.retryAfter ? { status: 429, retryAfter: state.retryAfter } : {},
   )
 }
 

@@ -183,11 +183,30 @@ normalized (`src/auth/password.ts`). People set their own with
 argv); an admin may pass `password` to `campflare.users.create`. Sign-in checks
 the password of every active user with that email: one match signs in; more
 than one answers `workspace_required`, and `/login` then asks for the workspace
-(domain or name). An unknown email still costs one hash. Five wrong passwords in
-a row lock those users for a minute (`too_many_attempts`, even with the right
-one; reset by a right one or a new password). That is per account only: there's
-no per-IP rate limit (Better Auth's limiter isn't configured). The `/login` page
+(domain or name). An unknown email still costs one hash. The `/login` page
 shows email and password first and the token form folded in a `<details>`.
+Setting a password clears the throttle counters for the person's email.
+
+**Throttling sign-in** (`src/auth/throttle.ts`, table `sign_in_throttle`,
+migration 0008). Never per account alone: a lock on the account lets anyone who
+knows an email keep its owner out. Counters, by key, keyed on the client's
+`CF-Connecting-IP` (Cloudflare sets it; missing in tests and dev, where all
+share one): `rate:<ip>` caps attempts at 30 a minute, right ones too, on both
+sign-in endpoints (so on `/login` too, which forwards to them; it bounds the
+CPU spent on PBKDF2); `ip:<ip>` gives 20 failures (wrong passwords, unknown
+emails, bad tokens) then exponential backoff (15 s doubling to 1 h);
+`pair:<email>:<ip>` gives 5 wrong passwords per email from one address, then
+the same backoff, and is cleared by a right password from that address;
+`email:<email>` counts from every address and never blocks: past 50 it cuts
+each address's free tries to one, which slows guessing spread over many
+addresses while the person, from an address that hasn't guessed, still gets
+in at the first right try (someone behind the guesser's own address waits with it). Keyed by email, not user, so an unknown email is
+throttled the same and a wait reveals nothing. A throttled attempt answers 429
+`too_many_attempts` with `Retry-After` before any hash is checked; `/login`
+renders it as a 429 page saying how long to wait. Reads join the sign-in's own
+query in one `DB.batch`, failures are one more; failures are forgotten a day
+after their wait ends, and each attempt prunes up to 50 expired rows. Better
+Auth's own limiter (in memory, per isolate) isn't relied on.
 
 Routes (`src/auth/routes.ts`): `/auth/*` and
 `/.well-known/*` go to Better Auth; `/login` and `/consent` render script-free
