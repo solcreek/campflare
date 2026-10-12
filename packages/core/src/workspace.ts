@@ -1,4 +1,5 @@
 import { ApiError, listen, type ApiResult, type Client, type Listener, type RealtimeEvent } from "@campflare/client"
+import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
 import { type Action, initialState, isReply, keyOf, reduce, type WorkspaceState } from "./state"
 import type { Conversation, Message, User } from "./types"
 
@@ -15,6 +16,15 @@ export interface WorkspaceOptions {
   /** Reconnect backoff for RTM. */
   minDelayMs?: number
   maxDelayMs?: number
+  /** Object URL hooks and grace period for `files` (tests). */
+  files?: Omit<FileCacheOptions, "fetchFile">
+}
+
+/** A file to upload: its name, bytes, and MIME type if known (for the pending message). */
+export interface NewFile {
+  name: string
+  bytes: Uint8Array<ArrayBuffer>
+  type?: string
 }
 
 export interface Workspace {
@@ -29,6 +39,13 @@ export interface Workspace {
   loadReplies(channel: string, threadTs: string): Promise<void>
   /** Shows the message at once as pending, then as the server stored it, or as failed. */
   send(channel: string, text: string, opts?: { threadTs?: string }): Promise<void>
+  /**
+   * Uploads files into a conversation (or a thread) with an optional message. Shows a
+   * pending message with the files at once; Retry uploads them again after a failure.
+   */
+  upload(channel: string, files: NewFile[], opts?: { text?: string; threadTs?: string }): Promise<void>
+  /** Files' bytes with the session's token, as shared object URLs: see FileCache. */
+  readonly files: FileCache
   /** Sends a failed message again. */
   retry(channel: string, localTs: string): Promise<void>
   discard(channel: string, localTs: string): void
@@ -60,6 +77,9 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   let localSeq = 0
   const fetchingUsers = new Set<string>()
   const fetchingConversations = new Set<string>()
+  /** Uploads that failed, by local ts, kept for retry(). */
+  const unsent = new Map<string, NewFile[]>()
+  const files = createFileCache({ ...options.files, fetchFile: (url) => client.fetchFile(url) })
 
   function dispatch(action: Action) {
     const next = reduce(state, action)
@@ -210,7 +230,53 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     const m = state.messages[keyOf(channel, localTs)]
     if (!m?.failed) return
     dispatch({ type: "sending", message: { ...m, failed: undefined } })
+    const pendingFiles = unsent.get(localTs)
+    if (pendingFiles) return uploadNow(channel, localTs, pendingFiles, m.text ?? "", m.thread_ts)
     await post(channel, localTs, m.text ?? "", m.thread_ts)
+  }
+
+  async function uploadNow(channel: string, localTs: string, list: NewFile[], text: string, threadTs?: string) {
+    try {
+      await client.upload(
+        list.map((f) => ({ name: f.name, bytes: f.bytes })),
+        { channel, text: text || undefined, threadTs },
+      )
+    } catch (error) {
+      unsent.set(localTs, list)
+      dispatch({ type: "sendFailed", channel, localTs, error: error instanceof ApiError ? error.code : String(error) })
+      return
+    }
+    unsent.delete(localTs)
+    // files.completeUploadExternal doesn't answer with the message. Load it (RTM may also bring
+    // it) before dropping the pending one, so the files never vanish in between.
+    await (threadTs ? loadReplies(channel, threadTs) : loadHistory(channel)).catch(() => {})
+    dispatch({ type: "discard", channel, localTs })
+  }
+
+  async function upload(channel: string, list: NewFile[], opts: { text?: string; threadTs?: string } = {}) {
+    if (list.length === 0) return
+    const localTs = `~${String(++localSeq).padStart(8, "0")}`
+    const text = opts.text ?? ""
+    dispatch({
+      type: "sending",
+      message: {
+        ts: localTs,
+        channel,
+        type: "message",
+        user: selfId(),
+        text,
+        thread_ts: opts.threadTs,
+        files: list.map((f, i) => ({
+          id: `${localTs}-${i}`,
+          name: f.name,
+          title: f.name,
+          mimetype: f.type,
+          size: f.bytes.byteLength,
+        })),
+        pending: true,
+      },
+    })
+    await uploadNow(channel, localTs, list, text, opts.threadTs)
   }
 
   async function edit(channel: string, ts: string, text: string) {
@@ -299,7 +365,12 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     loadReplies,
     send,
     retry,
-    discard: (channel, localTs) => dispatch({ type: "discard", channel, localTs }),
+    upload,
+    files,
+    discard(channel, localTs) {
+      unsent.delete(localTs)
+      dispatch({ type: "discard", channel, localTs })
+    },
     edit,
     remove,
     toggleReaction,
