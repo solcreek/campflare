@@ -1,12 +1,13 @@
 import { createClient, type Fetch } from "@campflare/client"
 import { createWorkspace, type Workspace } from "@campflare/core"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { LoginScreen } from "./components/login-screen"
 import { Shell } from "./components/shell"
 import type { Session, SessionStore } from "./session"
+import { type BrowserSignIn, platformSignIn } from "./sign-in"
 import { WorkspaceProvider } from "./workspace"
 
 export interface AppProps {
@@ -17,6 +18,8 @@ export interface AppProps {
   connect?: (session: Session) => Workspace
   /** The fetch the sign-in check uses; tests pass a fake server's. */
   fetch?: Fetch
+  /** Sign-in through the browser; the platform's own (a redirect on the web, loopback on the desktop) by default. */
+  signIn?: BrowserSignIn
 }
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
@@ -25,11 +28,15 @@ const connectTo = (session: Session) => createWorkspace({ client: createClient(s
 const reportStoreError = (what: string) => (error: unknown) =>
   toast.error(`Couldn't ${what} the sign-in: ${error instanceof Error ? error.message : String(error)}`)
 
-export function App({ store, autoSession, connect = connectTo, fetch }: AppProps) {
+export function App({ store, autoSession, connect = connectTo, fetch, signIn: given }: AppProps) {
+  const [own] = useState(() => given ?? platformSignIn(globalThis as never, fetch))
+  const signIn = given ?? own
+  // The browser coming back from a sign-in wins over a kept session: the person just chose whom to sign in as.
+  const [returning] = useState(() => !autoSession && signIn.returning())
   // undefined while the store loads; a store that can't be read means signed out.
-  const [session, setSession] = useState<Session | null | undefined>(autoSession ?? undefined)
+  const [session, setSession] = useState<Session | null | undefined>(autoSession ?? (returning ? null : undefined))
   useEffect(() => {
-    if (autoSession) return
+    if (autoSession || returning) return
     let live = true
     store
       .load()
@@ -40,7 +47,14 @@ export function App({ store, autoSession, connect = connectTo, fetch }: AppProps
     return () => {
       live = false
     }
-  }, [store, autoSession])
+  }, [store, autoSession, returning])
+  const onSignIn = useCallback(
+    (s: Session) => {
+      store.save(s).catch(reportStoreError("keep"))
+      setSession(s)
+    },
+    [store],
+  )
   const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
 
   return (
@@ -59,13 +73,7 @@ export function App({ store, autoSession, connect = connectTo, fetch }: AppProps
           />
         </WorkspaceProvider>
       ) : (
-        <LoginScreen
-          fetch={fetch}
-          onSignIn={(s) => {
-            store.save(s).catch(reportStoreError("keep"))
-            setSession(s)
-          }}
-        />
+        <LoginScreen fetch={fetch} signIn={signIn} onSignIn={onSignIn} />
       )}
       <Toaster />
     </TooltipProvider>

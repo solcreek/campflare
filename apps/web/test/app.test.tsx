@@ -48,14 +48,14 @@ describe("App", () => {
     // A wrong token: auth.test's error code, and nothing kept.
     server.api.handlers["auth.test"] = () => new Error("invalid_auth")
     await user.type(screen.getByLabelText("Token"), "xoxp-bad")
-    await user.click(screen.getByRole("button", { name: "Sign in" }))
+    await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     expect((await screen.findByRole("alert")).textContent).toBe("invalid_auth")
     expect(await store.load()).toBeNull()
 
     // An unreachable server.
     cleanupAndRender(<App store={store} connect={server.connect} fetch={failing} />)
     await user.type(await screen.findByLabelText("Token"), "xoxp-1")
-    await user.click(screen.getByRole("button", { name: "Sign in" }))
+    await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     expect((await screen.findByRole("alert")).textContent).toBe("Couldn't reach the server")
 
     // The right one: kept, and the workspace opens.
@@ -64,7 +64,7 @@ describe("App", () => {
     await user.clear(await screen.findByLabelText("Server"))
     await user.type(screen.getByLabelText("Server"), " https://x.test ")
     await user.type(screen.getByLabelText("Token"), "xoxp-1")
-    await user.click(screen.getByRole("button", { name: "Sign in" }))
+    await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     await screen.findByRole("heading", { name: "general", level: 1 })
     expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
   })
@@ -79,7 +79,7 @@ describe("App", () => {
     const user = userEvent.setup()
     render(<App store={broken} connect={server.connect} fetch={server.api.fetch} />)
     await user.type(await screen.findByLabelText("Token"), "xoxp-1")
-    await user.click(screen.getByRole("button", { name: "Sign in" }))
+    await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     // Signed in for now, but it won't last past a restart.
     await screen.findByRole("heading", { name: "general", level: 1 })
     expect(await screen.findByText("Couldn't keep the sign-in: access denied")).toBeTruthy()

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
+import type { Plugin } from "vite"
 import { defineConfig } from "vitest/config"
 
 const root = resolve(import.meta.dirname, "../..")
@@ -37,8 +38,42 @@ export function devAccounts(file = process.env.CAMPFLARE_DEV_ENV ?? source("apps
   return { url: env.CAMPFLARE_URL, people } satisfies DevAccounts
 }
 
+/**
+ * The app's Client ID Metadata Document: how a server it signs in to knows it
+ * (client_id is this document's own URL; see src/sign-in.ts). A public client,
+ * coming back to the app's root.
+ */
+export function oauthClientDocument(origin: string) {
+  const site = new URL(origin).origin
+  return {
+    client_id: `${site}/oauth-client.json`,
+    client_name: "Campflare",
+    client_uri: `${site}/`,
+    redirect_uris: [`${site}/`],
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  }
+}
+
+/** Emits oauth-client.json for a build that will be served at CAMPFLARE_WEB_ORIGIN (none without it). */
+export function oauthClientPlugin(origin = process.env.CAMPFLARE_WEB_ORIGIN): Plugin {
+  return {
+    name: "campflare-oauth-client",
+    apply: "build",
+    generateBundle() {
+      if (!origin) return
+      this.emitFile({
+        type: "asset",
+        fileName: "oauth-client.json",
+        source: `${JSON.stringify(oauthClientDocument(origin), null, 2)}\n`,
+      })
+    },
+  }
+}
+
 export default defineConfig(({ command }) => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), oauthClientPlugin()],
   // Tauri serves the build from its own origin; relative paths work there and on any web host.
   base: "./",
   resolve: {

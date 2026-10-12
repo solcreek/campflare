@@ -6,7 +6,24 @@
 const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 
-function page(title: string, body: string): Response {
+/**
+ * Where this page's forms may lead: here, and the app's redirect URI. Browsers
+ * apply form-action to the redirects a form's POST answers with too, and the
+ * last one goes back to the app (to a loopback port, or another origin), so
+ * `'self'` alone stops the flow at the final step. Better Auth redirects only
+ * to a URI registered for the client, whatever this query claims.
+ */
+function formAction(url: URL): string {
+  try {
+    const target = new URL(url.searchParams.get("redirect_uri") ?? "")
+    if (target.protocol === "https:" || target.protocol === "http:") return `'self' ${target.origin}`
+  } catch {
+    // No redirect URI, or not a URL: nothing to add.
+  }
+  return "'self'"
+}
+
+function page(title: string, body: string, url: URL): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -35,8 +52,7 @@ function page(title: string, body: string): Response {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       // No scripts, no framing: the forms work without either.
-      "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction(url)}; frame-ancestors 'none'`,
       "x-frame-options": "DENY",
     },
   })
@@ -57,6 +73,7 @@ ${error ? `<p role="alert"><strong>${escape(error)}</strong></p>` : ""}
   <input type="hidden" name="oauth_query" value="${escape(oauthQuery(url))}">
   <div class="row"><button class="primary" type="submit">Continue</button></div>
 </form>`,
+    url,
   )
 }
 
@@ -74,5 +91,6 @@ ${scopes.length ? `<ul>${scopes.map((s) => `<li><code>${escape(s)}</code></li>`)
     <button type="submit" name="accept" value="false">Deny</button>
   </div>
 </form>`,
+    url,
   )
 }

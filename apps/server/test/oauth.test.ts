@@ -120,6 +120,10 @@ async function mcpAs(accessToken: string) {
   return client
 }
 
+/** The CSP of the sign-in page shown for this OAuth query. */
+const csp = async (query: string) =>
+  (await browser().go(`/login?${query}`)).headers.get("content-security-policy") ?? ""
+
 describe("OAuth for MCP clients", () => {
   it("advertises its authorization server from a 401 (RFC 9728, RFC 8414)", async () => {
     const res = await SELF.fetch(`${ORIGIN}/mcp`, {
@@ -248,6 +252,19 @@ describe("OAuth for MCP clients", () => {
     expect(html).toContain("That token didn&#39;t work")
     expect(html).toContain('value="client_id=x"') // the flow can carry on from the same page
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+    expect(res.headers.get("content-security-policy")).toContain("form-action 'self';")
+  })
+
+  it("lets the pages' forms lead back to the app, as browsers check form-action on redirects too", async () => {
+    expect(await csp("redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&client_id=x")).toContain(
+      "form-action 'self' http://127.0.0.1:51234;",
+    )
+    expect(await csp("redirect_uri=https%3A%2F%2Fapp.example.com%2F")).toContain(
+      "form-action 'self' https://app.example.com;",
+    )
+    // Only http(s) origins, never a scheme or text that would widen the policy.
+    expect(await csp("redirect_uri=javascript%3Aalert(1)")).toContain("form-action 'self';")
+    expect(await csp("redirect_uri=not%20a%20url%3B%20script-src%20*")).toContain("form-action 'self';")
   })
 
   it("refreshes access tokens", async () => {

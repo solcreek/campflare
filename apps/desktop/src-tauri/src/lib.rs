@@ -1,8 +1,10 @@
 //! The desktop shell: one window showing apps/web. The web app talks to the
 //! Campflare server itself (fetch and WebSocket from the webview), so the
 //! shell only adds what a browser tab would do differently: links open in the
-//! system browser, and the session lives in the OS keychain (`session.rs`).
+//! system browser, the session lives in the OS keychain (`session.rs`), and
+//! signing in through the browser comes back to a loopback listener (`oauth.rs`).
 
+mod oauth;
 mod session;
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -23,10 +25,14 @@ document.addEventListener("click", (event) => {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(oauth::OAuthState::default())
         .invoke_handler(tauri::generate_handler![
             session::session_load,
             session::session_save,
-            session::session_clear
+            session::session_clear,
+            oauth::oauth_listen,
+            oauth::oauth_wait,
+            oauth::oauth_cancel
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())

@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may ask of the shell: opening web and mail links outside the app, and keeping the session in the OS keychain",
+  "description": "What the main window may ask of the shell: opening web and mail links outside the app, keeping the session in the OS keychain, and listening on loopback for the browser to come back from sign-in",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "allow-session-load",
     "allow-session-save",
     "allow-session-clear",
+    "allow-oauth-listen",
+    "allow-oauth-wait",
+    "allow-oauth-cancel",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]

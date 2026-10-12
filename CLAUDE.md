@@ -186,7 +186,11 @@ don't expire). Clients: our own public apps are rows from migration 0005,
 port>/callback`, RFC 8252) and `campflare-web` (`http://localhost:<port>/`, a
 web app in development); a web app at its own https origin, or anyone else's
 app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
-`campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it.
+`campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it;
+the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
+is `@campflare/client`'s (`src/oauth.ts`), shared with the app. The `/login` and
+`/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
+check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
@@ -222,14 +226,25 @@ select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
 `session.ts` keeps `{url, token}` behind an async `SessionStore`: localStorage in
 a browser, the OS keychain in the desktop shell. `platformStore()` tells them apart
 at runtime by `window.__TAURI__` (`withGlobalTauri`), so the web build never
-imports `@tauri-apps/*`. The composer ignores Enter while an IME
+imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
+`platformSignIn()` chosen the same way): on the web the page leaves for
+`/oauth/v2/authorize` and comes back to `<origin>/?code&state` (verifier in
+sessionStorage under the state; `campflare-web` on loopback, else the CIMD URL
+`<origin>/oauth-client.json`, which a build with `CAMPFLARE_WEB_ORIGIN` emits);
+on the desktop, see below. A pasted token is the second way in. In dev,
+`?as=none` shows the login screen, and a return from the browser is never
+auto-signed-in. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
 Rust side opens other origins' links in the system browser and keeps the session
 in the OS credential store (`src/session.rs`, the `keyring` crate: Keychain,
 Credential Manager, Secret Service), service `com.campflare.desktop`, through
-`session_load`/`session_save`/`session_clear`. `build.rs` declares those commands,
+`session_load`/`session_save`/`session_clear`. Browser sign-in can't redirect to
+the webview, so `src/oauth.rs` (std only) listens like the CLI: `oauth_listen`
+binds `127.0.0.1:0`, `oauth_wait` takes the one `/callback` request (5 minute
+timeout), `oauth_cancel` stops it; client `campflare-desktop`, the authorize URL
+opens through the opener plugin. `build.rs` declares those commands,
 so each needs an `allow-*` grant in `capabilities/default.json`. A session left
 in localStorage by an older build moves into the keychain on first load. macOS may
 ask for Keychain access the first time (and again after a rebuild changes the
