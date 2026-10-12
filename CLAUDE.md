@@ -48,7 +48,8 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
 `.claude/settings.json` wires hooks from `scripts/agent/`: SessionStart puts the
 Nix flake's toolchain (`.dev/dev-tools/bin`) on PATH via `CLAUDE_ENV_FILE` and
 prints what `pnpm ready --quick` finds wrong (nothing when all is well);
-PostToolUse formats and lints each edited file, returning lint errors (exit 2);
+PostToolUse formats and lints each edited file, returning lint errors and warnings (exit 2;
+warnings fail `pnpm lint` too, so they never pile up);
 Stop runs format, lint and typecheck when tracked or untracked code changed.
 So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
 not in the hooks: run the affected suite yourself. In a fresh worktree, run
@@ -188,11 +189,32 @@ normalized (`src/auth/password.ts`). People set their own with
 argv); an admin may pass `password` to `campflare.users.create`. Sign-in checks
 the password of every active user with that email: one match signs in; more
 than one answers `workspace_required`, and `/login` then asks for the workspace
-(domain or name). An unknown email still costs one hash. Five wrong passwords in
-a row lock those users for a minute (`too_many_attempts`, even with the right
-one; reset by a right one or a new password). That is per account only: there's
-no per-IP rate limit (Better Auth's limiter isn't configured). The `/login` page
+(domain or name). An unknown email still costs one hash. The `/login` page
 shows email and password first and the token form folded in a `<details>`.
+Setting a password deletes the person's Better Auth `session` rows (their
+browser sign-ins, found through `account`) and their throttle counters, but
+not their xoxp tokens or OAuth grants: those are app installs, revoked one by one.
+
+**Throttling sign-in** (`src/auth/throttle.ts`, table `sign_in_throttle`,
+migration 0008). Never per account alone: a lock on the account lets anyone who
+knows an email keep its owner out. Counters, by key, keyed on the client's
+`CF-Connecting-IP` (Cloudflare sets it; missing in tests and dev, where all
+share one): `rate:<ip>` caps attempts at 30 a minute, right ones too, on both
+sign-in endpoints (so on `/login` too, which forwards to them; it bounds the
+CPU spent on PBKDF2); `ip:<ip>` gives 20 failures (wrong passwords, unknown
+emails, bad tokens) then exponential backoff (15 s doubling to 1 h);
+`pair:<email>:<ip>` gives 5 wrong passwords per email from one address, then
+the same backoff, and is cleared by a right password from that address;
+`email:<email>` counts from every address and never blocks: past 50 it cuts
+each address's free tries to one, which slows guessing spread over many
+addresses while the person, from an address that hasn't guessed, still gets
+in at the first right try (someone behind the guesser's own address waits with it). Keyed by email, not user, so an unknown email is
+throttled the same and a wait reveals nothing. A throttled attempt answers 429
+`too_many_attempts` with `Retry-After` before any hash is checked; `/login`
+renders it as a 429 page saying how long to wait. Reads join the sign-in's own
+query in one `DB.batch`, failures are one more; failures are forgotten a day
+after their wait ends, and each attempt prunes up to 50 expired rows. Better
+Auth's own limiter (in memory, per isolate) isn't relied on.
 
 Routes (`src/auth/routes.ts`): `/auth/*` and
 `/.well-known/*` go to Better Auth; `/login` and `/consent` render script-free
@@ -230,7 +252,10 @@ web app in development); a web app at its own https origin, or anyone else's
 app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
 `campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it;
 the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
-is `@campflare/client`'s (`src/oauth.ts`), shared with the app. The `/login` and
+is `@campflare/client`'s (`src/oauth.ts`), shared with the app. Clients revoke
+only the tokens they got this way (`via: "oauth"` in the CLI's profile and the
+app's session), never a pasted one: `campflare logout`, and a login over such a
+profile, call `auth.revoke` (best effort, 5 s) before forgetting it. The `/login` and
 `/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
 check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 
@@ -288,7 +313,7 @@ only), revoked after a grace period; `workspace.upload` is optimistic like `send
 **Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
 select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
 `useMemo`. Core's selectors take only the slices they read for that reason.
-`session.ts` keeps `{url, token}` behind an async `SessionStore`: localStorage in
+`session.ts` keeps `{url, token, via}` behind an async `SessionStore`: localStorage in
 a browser, the OS keychain in the desktop shell. `platformStore()` tells them apart
 at runtime by `window.__TAURI__` (`withGlobalTauri`), so the web build never
 imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
@@ -296,7 +321,11 @@ imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
 `/oauth/v2/authorize` and comes back to `<origin>/?code&state` (verifier in
 sessionStorage under the state; `campflare-web` on loopback, else the CIMD URL
 `<origin>/oauth-client.json`, which a build with `CAMPFLARE_WEB_ORIGIN` emits);
-on the desktop, see below. A pasted token is the second way in. In dev,
+on the desktop, see below. A pasted token is the second way in. `via` says
+which (`"oauth"` or `"token"`; absent in older sessions, which count as
+`"token"`): Sign out calls `auth.revoke` first (`revokeSession`, best effort,
+5 s at most, then signs out regardless) only for `"oauth"`, since a pasted
+token may be shared with scripts, and never for the dev accounts. In dev,
 `?as=none` shows the login screen, and a return from the browser is never
 auto-signed-in. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
@@ -318,8 +347,21 @@ opens through the opener plugin. `build.rs` declares those commands,
 so each needs an `allow-*` grant in `capabilities/default.json`. A session left
 in localStorage by an older build moves into the keychain on first load. macOS may
 ask for Keychain access the first time (and again after a rebuild changes the
-binary's signature); Linux needs a running Secret Service (gnome-keyring, KWallet).
-The CSP in `tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
+binary's signature). Without a credential store (no Secret Service on a minimal
+or headless Linux, CI), the session falls back to `session.json` in the app's
+config dir, created 0600 and replaced atomically: keyring errors that mean no
+store or a platform failure (`classify()`) pick the file, other errors stay
+errors. The keychain is preferred whenever it works: load reads it first, and
+once it works again the file's session moves into it and the file goes;
+`session_clear` clears both. `session_save` answers `"keychain"` or `"file"`,
+and the app shows a one-time notice the first time it's the file. The stores
+sit behind a `SecretStore` trait, so `cargo test` fakes the keychain. The CSP in
+`tauri.conf.json` allows https/wss anywhere and http/ws on localhost. The
+end-to-end tests (`apps/desktop/e2e/`, `run.ts` + W3C WebDriver helpers in
+`driver.ts`) start a fresh seeded server (`scripts/dev.ts --port 0`), give the
+app its own XDG dirs on Linux, sign in with a pasted token, send a message,
+restart the app expecting it signed in, then sign out; CI sets
+`CAMPFLARE_E2E_SESSION=file` so they also check the fallback file.
 
 ## Conventions
 

@@ -44,11 +44,14 @@ export function mountAuth(app: Hono<{ Bindings: Env }>) {
     if (res.status >= 400) {
       const reason = ((await res.json().catch(() => ({}))) as { message?: string }).message
       const again = new URL(`/login?${oauthQuery}`, c.req.url)
-      if (byToken) return loginPage(again, { error: tokenError(reason), token: true })
+      const retryAfter = res.status === 429 ? Number(res.headers.get("retry-after")) || 60 : undefined
+      const error = retryAfter ? waitMessage(retryAfter) : byToken ? tokenError(reason) : passwordError(reason)
+      if (byToken) return loginPage(again, { error, token: true, retryAfter })
       return loginPage(again, {
-        error: passwordError(reason),
+        error,
         email: field("email"),
         askWorkspace: reason === "workspace_required" || field("workspace") !== "",
+        retryAfter,
       })
     }
     return res
@@ -85,7 +88,8 @@ export function mountAuth(app: Hono<{ Bindings: Env }>) {
 async function forward(env: Env, original: Request, path: string, body: Record<string, unknown>): Promise<Response> {
   const url = new URL(`${AUTH_BASE_PATH}${path}`, original.url)
   const headers = new Headers({ "content-type": "application/json", accept: "application/json" })
-  for (const name of ["cookie", "origin", "user-agent"]) {
+  // cf-connecting-ip: sign-in attempts are throttled by the client's address.
+  for (const name of ["cookie", "origin", "user-agent", "cf-connecting-ip"]) {
     const value = original.headers.get(name)
     if (value) headers.set(name, value)
   }
@@ -114,6 +118,13 @@ function tokenError(code: string | undefined): string {
 
 function passwordError(code: string | undefined): string {
   if (code === "workspace_required") return "That email has a password in more than one workspace. Which one?"
-  if (code === "too_many_attempts") return "Too many wrong passwords. Wait a minute and try again."
   return "That email and password don't match."
+}
+
+/** What a throttled person reads: how long to wait, in words (the page has no script to count down). */
+export function waitMessage(seconds: number): string {
+  const minutes = Math.ceil(seconds / 60)
+  const when =
+    seconds < 60 ? `${seconds} second${seconds === 1 ? "" : "s"}` : `${minutes} minute${minutes === 1 ? "" : "s"}`
+  return `Too many sign-in attempts from your network. Wait ${when}, then try again.`
 }

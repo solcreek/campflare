@@ -12,7 +12,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util"
 import { activeProfile, loadConfig, saveConfig, type Profile } from "./config"
 import { messageLine, plain, time } from "./format"
 import { UsageError, type Io } from "./io"
-import { oauthLogin } from "./oauth"
+import { oauthLogin, revokeToken } from "./oauth"
 import { resolveConversation, resolveUser, type Conversation, type User } from "./resolve"
 
 const HELP = `campflare — the command line for Campflare (and any Slack-compatible API)
@@ -22,6 +22,7 @@ Usage: campflare <command> [options]
 Account
   login --url <server> --token <xoxp-…> [--app-token <xapp-…>] [--profile <name>]
   login --url <server> --oauth [--port N]   sign in through the browser instead
+  logout [--profile <name>]      forget the profile; revokes a token from login --oauth
   bootstrap --url <server> --secret <s> --team <name> --user <handle> [--email <e>]
   whoami                         who the token belongs to
   profiles                       list saved profiles; --use <name> switches
@@ -109,6 +110,18 @@ async function readStdin(io: Io): Promise<string | undefined> {
   return text?.replace(/\n$/, "")
 }
 
+/**
+ * A login wrote over `old`: its token, if it came from `login --oauth` and isn't the new one,
+ * is revoked rather than left working with nothing that knows it. Best effort.
+ */
+async function revokeReplaced(io: Io, old: Profile | undefined, token: string) {
+  if (old?.via !== "oauth" || !old.token || old.token === token) return
+  const res = await revokeToken(io, old.url, old.token)
+  if (!res.revoked) {
+    io.stderr(`Couldn't revoke the previous token at ${old.url} (${res.reason}); it works until revoked there\n`)
+  }
+}
+
 type Command = (argv: string[], io: Io) => Promise<number | void>
 
 const commands: Record<string, Command> = {
@@ -133,10 +146,38 @@ const commands: Record<string, Command> = {
     const who = await client.call<{ ok: boolean; user: string; team: string }>("auth.test")
     const name = str(values.profile) ?? "default"
     const config = await loadConfig(io)
-    config.profiles[name] = { url, token, ...(str(values["app-token"]) ? { appToken: str(values["app-token"]) } : {}) }
+    const old = config.profiles[name]
+    config.profiles[name] = {
+      url,
+      token,
+      ...(str(values["app-token"]) ? { appToken: str(values["app-token"]) } : {}),
+      via: values.oauth ? "oauth" : "token",
+    }
     config.current = name
     await saveConfig(io, config)
     io.stdout(`Logged in to ${who.team} as @${who.user} (profile ${name})\n`)
+    await revokeReplaced(io, old, token)
+  },
+
+  async logout(argv, io) {
+    const { values } = parse(argv)
+    const config = await loadConfig(io)
+    const name = str(values.profile) ?? io.env.CAMPFLARE_PROFILE ?? config.current
+    const profile = name ? config.profiles[name] : undefined
+    if (!name || !profile) throw new UsageError(name ? `no profile named ${name}` : "not logged in")
+    if (profile.via === "oauth" && profile.token) {
+      const res = await revokeToken(io, profile.url, profile.token)
+      if (res.revoked) io.stdout(`Revoked the token from signing in to ${profile.url}\n`)
+      else io.stderr(`Couldn't revoke the token at ${profile.url} (${res.reason}); it works until revoked there\n`)
+    } else if (profile.token) {
+      io.stdout(
+        "Not revoking the token: it was given by hand and may be in use elsewhere (`campflare token revoke` ends it)\n",
+      )
+    }
+    delete config.profiles[name]
+    if (config.current === name) delete config.current
+    await saveConfig(io, config)
+    io.stdout(`Logged out (profile ${name} forgotten)\n`)
   },
 
   async bootstrap(argv, io) {
@@ -166,10 +207,12 @@ const commands: Record<string, Command> = {
     })
     const name = str(values.profile) ?? "default"
     const config = await loadConfig(io)
+    const old = config.profiles[name]
     config.profiles[name] = { url, token: res.token }
     config.current = name
     await saveConfig(io, config)
     io.stdout(`Created ${res.team.name}; logged in as @${res.user.name} (profile ${name})\n`)
+    await revokeReplaced(io, old, res.token)
   },
 
   async profiles(argv, io) {

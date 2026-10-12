@@ -2,6 +2,7 @@ import { ApiError, createClient, type Fetch } from "@campflare/client"
 import { type FormEvent, useEffect, useId, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { servesApi } from "@/server-address"
 import type { Session } from "@/session"
 import { type BrowserSignIn, signInError } from "@/sign-in"
 
@@ -14,18 +15,38 @@ export function LoginScreen({
   onSignIn,
   signIn,
   fetch,
+  server = "",
+  probeOrigin,
 }: {
   onSignIn: (session: Session) => void
   signIn: BrowserSignIn
   fetch?: Fetch
+  /** The Server field's first value: the dev server, or the last one signed in to. */
+  server?: string
+  /** Offered in the Server field, if it's still empty, once it answers api.test: the page's own origin. */
+  probeOrigin?: string
 }) {
-  const [url, setUrl] = useState(() => (typeof location === "undefined" ? "" : location.origin))
+  const [initial] = useState(server)
+  const [url, setUrl] = useState(initial)
+  // Never pre-filled: a token is only ever typed or pasted.
   const [token, setToken] = useState("")
   const [error, setError] = useState<string>()
   // Read once: finishing cleans the query out of the address bar, and StrictMode runs the effect twice.
   const [returning] = useState(() => signIn.returning())
   const [busy, setBusy] = useState<"browser" | "token" | "returning" | undefined>(returning ? "returning" : undefined)
   const id = useId()
+
+  // A web app served next to its server: suggest that server, unless the person has started typing.
+  useEffect(() => {
+    if (initial || !probeOrigin || returning) return
+    let live = true
+    void servesApi(probeOrigin, fetch).then((ok) => {
+      if (live && ok) setUrl((typed) => typed || probeOrigin)
+    })
+    return () => {
+      live = false
+    }
+  }, [initial, probeOrigin, returning, fetch])
 
   // The browser came back to this page: finish what an earlier page started.
   useEffect(() => {
@@ -70,7 +91,7 @@ export function LoginScreen({
 
   const withToken = async (e: FormEvent) => {
     e.preventDefault()
-    const session = { url: url.trim(), token: token.trim() }
+    const session: Session = { url: url.trim(), token: token.trim(), via: "token" }
     if (!session.url) {
       setError("Enter the server's address")
       return

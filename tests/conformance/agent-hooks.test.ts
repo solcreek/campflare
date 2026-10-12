@@ -52,6 +52,13 @@ describe("after-edit", () => {
     expect(res.stderr).toContain("no-unused-vars")
   })
 
+  it("hands warnings back too: pnpm check denies them", () => {
+    writeFileSync(probe, "export const a = 1\nexport function f() {\n  const a = 2\n  return a\n}\n")
+    const res = hook("after-edit.ts", { tool_input: { file_path: probe } })
+    expect(res.status).toBe(2)
+    expect(res.stderr).toContain("no-shadow")
+  })
+
   it("leaves files outside the repo, in node_modules, or of other kinds alone", () => {
     const dir = mkdtempSync(join(tmpdir(), "hook-"))
     const outside = join(dir, "x.ts")

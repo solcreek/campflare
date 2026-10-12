@@ -1,87 +1,116 @@
-// The desktop app's first screen, through tauri-driver. Run by e2e/run.ts,
-// which starts the driver and passes WEBDRIVER_URL and CAMPFLARE_DESKTOP_APP.
-// Plain W3C WebDriver over fetch: the protocol is a handful of JSON calls.
+// The desktop app signing in, through tauri-driver: run by e2e/run.ts, which
+// also starts a fresh, seeded server (CAMPFLARE_E2E_STACK) and gives the app a
+// config directory of its own (CAMPFLARE_DESKTOP_CONFIG). The tests run in
+// order and share the app's state: signed out, signed in, restarted, signed out.
 
 import assert from "node:assert/strict"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { after, before, test as nodeTest } from "node:test"
+import { after, before } from "node:test"
+import { attribute, click, fill, find, launch, quit, test, text } from "./driver.ts"
 
-const base = process.env.WEBDRIVER_URL ?? "http://127.0.0.1:4444"
-const application = process.env.CAMPFLARE_DESKTOP_APP
-// W3C WebDriver's key for an element reference.
-const ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
-
-/** A WebDriver command: POST with a JSON body, GET and DELETE without. */
-async function call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
-  const res = await fetch(
-    `${base}${path}`,
-    method === "POST"
-      ? { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }
-      : { method },
-  )
-  const json = (await res.json()) as { value: T & { error?: string; message?: string } }
-  if (!res.ok) throw new Error(`${method} ${path}: ${json.value?.error} ${json.value?.message ?? ""}`)
-  return json.value
+interface Stack {
+  apiUrl: string
+  /** A seeded person's user token. */
+  token: string
+  /** #general's id. */
+  general: string
 }
 
-let session = ""
+const stack = JSON.parse(process.env.CAMPFLARE_E2E_STACK ?? "null") as Stack | null
+/** Where the session file goes when there is no keychain. */
+const sessionFile = process.env.CAMPFLARE_DESKTOP_CONFIG
+  ? join(process.env.CAMPFLARE_DESKTOP_CONFIG, "session.json")
+  : undefined
+/** CI has no Secret Service, so the session must land in the file there; elsewhere either will do. */
+const expectFile = process.env.CAMPFLARE_E2E_SESSION === "file"
+
+// Unique per run, in every script: a server kept between runs must not find an earlier copy.
+const run = Date.now().toString(36)
+const message = `早安 · こんにちは · 안녕하세요 · ¿Qué tal? Ça va. Grüße ${run}`
+
+const CONNECTED = "//*[@role='status' and @aria-label='Connected']"
+const SIGN_IN = "//h1[normalize-space()='Sign in to Campflare']"
+const ourMessage = `//*[@role='log' and @aria-label='Messages']//article[contains(., '${run}')]`
+
+async function until(what: string, check: () => boolean | Promise<boolean>, ms = 15_000): Promise<void> {
+  for (const end = Date.now() + ms; !(await check());) {
+    if (Date.now() > end) throw new Error(`timed out waiting until ${what}`)
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
 
 before(async () => {
-  assert.ok(application, "CAMPFLARE_DESKTOP_APP is not set: run the tests through e2e/run.ts")
-  // tauri-driver turns tauri:options into the platform driver's own (webkitgtk:browserOptions, ms:edgeOptions).
-  const created = await call<{ sessionId: string }>("POST", "/session", {
-    capabilities: { alwaysMatch: { "tauri:options": { application } } },
-  })
-  session = created.sessionId
-  // The window loads the web app and React renders it: let element lookups wait for that.
-  await call("POST", `/session/${session}/timeouts`, { implicit: 15_000 })
+  assert.ok(stack, "CAMPFLARE_E2E_STACK is not set: run the tests through e2e/run.ts")
+  await launch()
 })
 
-after(async () => {
-  if (session) await call("DELETE", `/session/${session}`)
-})
-
-async function find(xpath: string): Promise<string> {
-  const found = await call<Record<string, string>>("POST", `/session/${session}/element`, {
-    using: "xpath",
-    value: xpath,
-  })
-  const id = found?.[ELEMENT]
-  if (!id) throw new Error(`no element for ${xpath}: ${JSON.stringify(found)}`)
-  return id
-}
-
-/** A test that, when it fails, leaves what the window showed in e2e/out/<name>.png and .html (CI uploads them). */
-function test(name: string, fn: () => Promise<void>) {
-  nodeTest(name, async () => {
-    try {
-      await fn()
-    } catch (error) {
-      const out = join(import.meta.dirname, "out")
-      mkdirSync(out, { recursive: true })
-      const file = join(out, name.replace(/[^\w-]+/g, "-"))
-      const [png, html] = await Promise.allSettled([
-        call<string>("GET", `/session/${session}/screenshot`),
-        call<string>("GET", `/session/${session}/source`),
-      ])
-      if (png.status === "fulfilled") writeFileSync(`${file}.png`, Buffer.from(png.value, "base64"))
-      writeFileSync(`${file}.html`, html.status === "fulfilled" ? html.value : String(html.reason))
-      throw error
-    }
-  })
-}
-
-const text = (element: string) => call<string>("GET", `/session/${session}/element/${element}/text`)
+after(quit)
 
 test("with no session, the app opens on the sign-in screen", async () => {
   assert.equal(await text(await find("//h1")), "Sign in to Campflare")
   // The Server and Token fields, by their labels.
   const server = await find("//label[span[normalize-space()='Server']]//input")
   const token = await find("//label[span[normalize-space()='Token']]//input")
-  assert.equal(await call("GET", `/session/${session}/element/${token}/attribute/type`), "password")
+  assert.equal(await attribute(token, "type"), "password")
   assert.ok(server)
   // Both ways in: the browser (OAuth through the loopback listener) and a pasted token.
   assert.ok(await find("//button[normalize-space()='Sign in with your browser']"))
   assert.ok(await find("//button[normalize-space()='Sign in with a token']"))
+})
+
+test("signs in with a pasted token, lists the channels and sends a message", async () => {
+  const { apiUrl, token, general } = stack!
+  await fill(await find("//label[span[normalize-space()='Server']]//input"), apiUrl)
+  await fill(await find("//label[span[normalize-space()='Token']]//input"), token)
+  await click(await find("//button[normalize-space()='Sign in with a token']"))
+
+  // Signed in and live: the workspace's channels, #general open, the realtime link up.
+  await find(CONNECTED)
+  for (const name of ["general", "dev", "random"])
+    await find(`//nav[@aria-label='Channels']//button[span[normalize-space()='${name}']]`)
+  await find("//h1[normalize-space()='general']")
+
+  if (expectFile) {
+    // The fallback, said once and not in the way: a toast.
+    await find("//li[@data-sonner-toast][contains(., 'no keyring')]")
+    assert.ok(sessionFile, "CAMPFLARE_DESKTOP_CONFIG is not set: the session file is checked on Linux only")
+    await until("the session file is written", () => existsSync(sessionFile))
+    assert.equal(statSync(sessionFile).mode & 0o777, 0o600)
+    const kept = JSON.parse(readFileSync(sessionFile, "utf8")) as { url: string; token: string }
+    assert.deepEqual([kept.url, kept.token], [apiUrl, token])
+  }
+
+  await fill(await find("//textarea[@aria-label='Message #general']"), message)
+  await click(await find("//button[@aria-label='Send' and not(@disabled)]"))
+  const shown = await text(await find(ourMessage))
+  assert.ok(shown.includes(message), shown)
+
+  // It reached the server, not just the screen.
+  await until("the server has the message", async () => {
+    const res = await fetch(`${apiUrl}/api/conversations.history?channel=${general}&limit=20`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    const body = (await res.json()) as { messages?: { text: string }[] }
+    return body.messages?.some((m) => m.text === message) ?? false
+  })
+})
+
+test("after a restart, the app opens signed in", async () => {
+  await quit()
+  await launch()
+  await find(CONNECTED)
+  await find(ourMessage)
+})
+
+test("signing out forgets the session, across a restart", async () => {
+  // The workspace menu is the button around the connection status.
+  await click(await find("//button[.//*[@role='status']]"))
+  await click(await find("//*[@role='menuitem'][contains(normalize-space(), 'Sign out')]"))
+  await find(SIGN_IN)
+  if (expectFile) await until("the session file is gone", () => !existsSync(sessionFile!))
+
+  await quit()
+  await launch()
+  assert.equal(await text(await find("//h1")), "Sign in to Campflare")
 })

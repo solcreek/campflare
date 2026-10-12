@@ -54,7 +54,7 @@ export function memoryIo(
       return config
         ? (JSON.parse(config) as {
             current?: string
-            profiles: Record<string, { url: string; token?: string; appToken?: string }>
+            profiles: Record<string, { url: string; token?: string; appToken?: string; via?: string }>
           })
         : undefined
     },
@@ -68,9 +68,7 @@ export function memoryIo(
   }
 }
 
-let n = 0
-
-/** A fresh workspace, with `cli` logged in as its owner. */
+/** A fresh workspace, with `cli` logged in as its owner. Test files run at once, so its name is random. */
 export async function loggedIn() {
   const cli = memoryIo()
   const code = await cli.run(
@@ -80,7 +78,7 @@ export async function loggedIn() {
     "--secret",
     "conformance",
     "--team",
-    `CLI ${Date.now()} ${++n}`,
+    `CLI ${Date.now()} ${crypto.randomUUID().slice(0, 8)}`,
     "--user",
     "owner",
     "--name",
