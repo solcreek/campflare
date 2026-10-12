@@ -7,6 +7,20 @@ export interface SessionDescription {
   sdp: string
 }
 
+/** Which simulcast encoding a subscriber gets, and what the SFU may fall back to. */
+export interface SimulcastPreference {
+  preferredRid: string
+  priorityOrdering?: "none" | "asciibetical"
+  ridNotAvailable?: "none" | "asciibetical"
+}
+
+/** A publication to receive, optionally at a simulcast layer. */
+export interface Publication {
+  sessionId: string
+  trackName: string
+  simulcast?: SimulcastPreference
+}
+
 export interface TrackResult {
   location?: "local" | "remote"
   mid?: string
@@ -79,11 +93,19 @@ export function createSfu(options: SfuOptions) {
     },
 
     /** Subscribes this session to others' publications; the SFU answers with an offer for the browser. */
-    async subscribe(sessionId: string, publications: { sessionId: string; trackName: string }[]) {
+    async subscribe(sessionId: string, publications: Publication[]) {
       const res = await call<TracksResponse>("tracks/new", "POST", `/sessions/${sessionId}/tracks/new`, {
         tracks: publications.map((p) => ({ location: "remote", ...p })),
       })
       return checkTracks("tracks/new", res)
+    },
+
+    /** Changes existing subscriptions in place (by receiving mid): another simulcast layer, say. No negotiation. */
+    async update(sessionId: string, subscriptions: (Publication & { mid: string })[]) {
+      const res = await call<TracksResponse>("tracks/update", "PUT", `/sessions/${sessionId}/tracks/update`, {
+        tracks: subscriptions.map((t) => ({ location: "remote", ...t })),
+      })
+      return checkTracks("tracks/update", res)
     },
 
     async renegotiate(sessionId: string, answer: SessionDescription): Promise<void> {

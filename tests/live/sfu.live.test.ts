@@ -4,6 +4,7 @@ import { MediaStreamTrack, RTCPeerConnection, RtpHeader, RtpPacket } from "werif
 import { describe, expect, it } from "vitest"
 import { createSfu, iceServers } from "../../apps/server/src/huddle/sfu.ts"
 import { devVars } from "./env.ts"
+import { recordingFetch, scrub } from "./record.ts"
 
 // Real Cloudflare Realtime SFU, real WebRTC (werift in Node): Alice publishes
 // audio, Bob subscribes, and RTP must arrive at Bob. With RECORD_FIXTURES=1
@@ -12,37 +13,6 @@ import { devVars } from "./env.ts"
 const env = devVars()
 const configured = Boolean(env.REALTIME_APP_ID && env.REALTIME_APP_SECRET)
 const FIXTURES = resolve(import.meta.dirname, "../../apps/server/test/fixtures/sfu")
-
-/**
- * Addresses in SDP (this machine's, and the SFU's) give way to documentation
- * addresses in the fixtures. Only candidate and connection lines: the
- * fingerprint line also looks like hex separated by colons.
- */
-const scrub = (text: string) =>
-  text.replace(/(a=candidate:[^\\]*|c=IN IP[46] [^\\]*)/g, (line) =>
-    line
-      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, (ip) => (ip.startsWith("192.0.2.") ? ip : "192.0.2.1"))
-      .replace(/\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\b/gi, "2001:db8::1"),
-  )
-
-function recordingFetch(record: { operation: string; request?: unknown; status: number; response: unknown }[]) {
-  return async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    const res = await fetch(input, init)
-    const body = await res
-      .clone()
-      .json()
-      .catch(() => undefined)
-    const operation = `${init?.method ?? "GET"} ${url.replace(/^.*\/apps\/[^/]+/, "").replace(/\/sessions\/[^/]+\//, "/sessions/{id}/")}`
-    record.push({
-      operation,
-      request: init?.body ? JSON.parse(String(init.body)) : undefined,
-      status: res.status,
-      response: body,
-    })
-    return res
-  }
-}
 
 async function gathered(pc: RTCPeerConnection) {
   if (pc.iceGatheringState === "complete") return

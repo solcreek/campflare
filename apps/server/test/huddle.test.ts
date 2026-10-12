@@ -6,6 +6,7 @@ import { setSfuFetch } from "../src/huddle/methods"
 import { createSfu, iceServers, SfuError } from "../src/huddle/sfu"
 import { fakeSfu, type FakeSfu } from "./fake-sfu"
 import exchanges from "./fixtures/sfu/exchanges.json"
+import videoExchanges from "./fixtures/sfu/exchanges-video.json"
 import { call, connect, expectError, ok, workspace, type Workspace } from "./helpers"
 
 // The huddle API offline, against a fake SFU built from recorded responses.
@@ -300,6 +301,35 @@ describe("SFU client details", () => {
     expect(await iceServers({ REALTIME_TURN_KEY_ID: "k", REALTIME_TURN_KEY_TOKEN: "t" }, single)).toEqual([
       { urls: ["stun:stun.cloudflare.com:3478"] },
     ])
+  })
+
+  it("switches a subscription's simulcast layer in place, raising the real per-track error", async () => {
+    const seen: unknown[] = []
+    const recordingSfu = createSfu({
+      appId: "a",
+      appSecret: "s",
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(JSON.parse(String(init?.body)))
+        return Response.json({ requiresImmediateRenegotiation: false, tracks: [{ mid: "1" }] })
+      }) as typeof fetch,
+    })
+    await recordingSfu.update("recv", [
+      { mid: "1", sessionId: "pub", trackName: "camera", simulcast: { preferredRid: "q" } },
+    ])
+    expect(seen[0]).toEqual({
+      tracks: [
+        { location: "remote", mid: "1", sessionId: "pub", trackName: "camera", simulcast: { preferredRid: "q" } },
+      ],
+    })
+    // Recorded from the real SFU: updating a subscription that doesn't exist.
+    const missing = (videoExchanges as { operation: string; response: { tracks?: { errorCode?: string }[] } }[]).find(
+      (e) => e.operation === "PUT /sessions/{id}/tracks/update" && e.response.tracks?.some((t) => t.errorCode),
+    )!
+    await expect(
+      sfuReplying(missing.response).update("recv", [{ mid: "99", sessionId: "pub", trackName: "camera" }]),
+    ).rejects.toMatchObject({
+      code: "internal_error",
+    })
   })
 
   it("raises SfuError for HTTP failures, unreadable bodies and per-track errors", async () => {
