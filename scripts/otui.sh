@@ -14,4 +14,6 @@ otui_home="$(dirname "$env_file")/otui"
 mkdir -p -m 700 "$otui_home"
 export XDG_CONFIG_HOME="$otui_home" OPENTUI_SLACK_SOCKET="$otui_home/control.sock" OPENTUI_SLACK_WEB_PORT=off
 cd "${OPENTUI_SLACK_REPO:-$HOME/Projects/solcreek/opentui-slack}"
-exec bun src/index.tsx "$@"
+# Its entry as its package.json declares it, so a rename there doesn't break this.
+entry="$(bun -e 'console.log(require("./package.json").module)')"
+exec bun "$entry" "$@"
