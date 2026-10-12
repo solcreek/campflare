@@ -1,4 +1,5 @@
 import { type Browser, expect, type Page, test } from "@playwright/test"
+import { sunsetPng } from "../../../scripts/seed.ts"
 import type { Stack } from "./global-setup"
 
 const stack = JSON.parse(process.env.CAMPFLARE_E2E!) as Stack
@@ -81,6 +82,38 @@ test("threads, reactions and edits stay in step between people", async ({ browse
   await alex.keyboard.press("Enter")
   await expect(messages(minjun).getByText("Ship it on Thursday?")).toBeVisible()
   await expect(messages(minjun).getByText("(edited)")).toBeVisible()
+})
+
+/** The image's bytes arrived and decoded: a blob: URL with real pixels. */
+async function expectLoaded(image: ReturnType<Page["getByRole"]>) {
+  await expect(image).toBeVisible()
+  await expect(image).toHaveAttribute("src", /^blob:/)
+  await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+}
+
+test("images show inline, and an upload reaches the other person", async ({ browser }) => {
+  const alex = await open(browser)
+  // The seeded sunset, fetched cross-origin from url_private with alex's token.
+  await expectLoaded(messages(alex).getByRole("img", { name: "An orange sunset fading into purple" }))
+
+  const vincent = await open(browser, "vincent")
+  await sidebarItem(alex, "random").click()
+  await sidebarItem(vincent, "random").click()
+  const png = await sunsetPng(120, 80)
+  await alex.getByLabel("Files to attach").setInputFiles([
+    { name: "atardecer-夕焼け.png", mimeType: "image/png", buffer: Buffer.from(png) },
+    { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Grüße, 안녕") },
+  ])
+  await expect(alex.getByRole("list", { name: "Attachments" }).getByText("notes.txt")).toBeVisible()
+  await alex.getByRole("textbox", { name: "Message #random" }).fill("Ce soir 🌅")
+  await alex.keyboard.press("Enter")
+
+  for (const page of [alex, vincent]) {
+    await expect(messages(page).getByText("Ce soir 🌅")).toBeVisible()
+    await expectLoaded(messages(page).getByRole("img", { name: "atardecer-夕焼け.png" }))
+    await expect(messages(page).getByRole("group", { name: "File: notes.txt" })).toBeVisible()
+  }
+  await expect(messages(alex).getByText("Uploading…")).toHaveCount(0)
 })
 
 test("every screen has a URL", async ({ browser }) => {
