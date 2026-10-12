@@ -19,8 +19,9 @@ tests/conformance   the official Slack SDKs against `wrangler dev`
 ## Quick start (local)
 
 ```sh
-pnpm install && pnpm build
-pnpm dev:all                             # migrations, wrangler dev on :8787, a seeded workspace
+nix develop                              # optional: the pinned toolchain (Node 24, pnpm, bun, sqlite3, jq)
+pnpm ready --fix                         # install, secrets, builds, local migrations: whatever's missing
+pnpm dev:all                             # wrangler dev on :8787 and a seeded workspace
 ```
 
 `pnpm dev:all` seeds a workspace on its first run (you are `@alex`; also
@@ -211,9 +212,22 @@ list.
 ## Development
 
 ```sh
+pnpm ready        # is this checkout ready? --fix repairs it; --json for scripts and agents
 pnpm check        # oxfmt --check, oxlint, tsc, and every test suite with coverage
 pnpm test         # just the tests
+nix develop -c pnpm check                # the same, on the pinned toolchain, on any machine with Nix
 ```
+
+The toolchain comes from `flake.nix`: Node at the major in `.node-version`,
+pnpm, bun (for `pnpm otui`), sqlite3 (to look inside local D1 state) and jq.
+wrangler and workerd are not in it: they come from the pnpm lockfile, whose
+versions must match `@cloudflare/vitest-pool-workers`.
+
+Claude Code sessions get the same setup without asking (`.claude/settings.json`):
+the flake's toolchain on every command's PATH, a note at session start if
+`pnpm ready` finds something wrong, each edited file formatted and linted on
+the spot (lint errors go back to the agent), and format, lint and typecheck
+(about 2 s) required to pass before the agent stops whenever code changed.
 
 - `apps/server`: vitest inside workerd (`@cloudflare/vitest-pool-workers`), against
   real local D1, R2 and Durable Objects. Coverage thresholds: 95% lines,

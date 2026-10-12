@@ -9,6 +9,7 @@ Existing Slack clients and SDKs must work against it after a base-URL change.
 ## Commands
 
 ```sh
+pnpm ready                 # is the checkout ready (deps, secrets, bundles, migrations)? --fix repairs it, --json
 pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every test suite with coverage
 pnpm fmt                   # format in place (oxfmt)
 pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
@@ -29,6 +30,17 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
   and need nothing running.
 - Don't pipe `oxlint` into `tail`/`grep` before `&&`: the pipe hides its exit
   code and lint errors slip through.
+
+## Agent loop
+
+`.claude/settings.json` wires hooks from `scripts/agent/`: SessionStart puts the
+Nix flake's toolchain (`.dev/dev-tools/bin`) on PATH via `CLAUDE_ENV_FILE` and
+prints what `pnpm ready --quick` finds wrong (nothing when all is well);
+PostToolUse formats and lints each edited file, returning lint errors (exit 2);
+Stop runs format, lint and typecheck when tracked or untracked code changed.
+So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
+not in the hooks: run the affected suite yourself. In a fresh worktree, run
+`pnpm ready --fix` first.
 
 ## Layout
 
