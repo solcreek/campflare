@@ -357,7 +357,17 @@ describe("the /huddle page", () => {
     expect(page.headers.get("content-security-policy")).toContain("script-src 'self'")
     const script = await SELF.fetch("https://campflare.test/huddle.js")
     expect(script.headers.get("content-type")).toContain("text/javascript")
-    expect(await script.text()).toContain("campflare.huddles.join")
+    const js = await script.text()
+    for (const used of [
+      "campflare.huddles.join",
+      "campflare.huddles.publish",
+      "campflare.huddles.unpublish",
+      "campflare.huddles.layer",
+    ]) {
+      expect(js).toContain(used)
+    }
+    expect(js).toContain("not_found_track_error") // retried: a newcomer may not be connected yet
+    expect(await (await SELF.fetch("https://campflare.test/huddle")).text()).toMatch(/id="camera"[\s\S]*id="mute"/)
   })
 })
 
