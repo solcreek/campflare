@@ -70,8 +70,11 @@ builds the Tauri installers (macOS universal, Windows, Linux; unsigned so far)
 as run artifacts and runs the desktop end-to-end tests on Linux
 (`apps/desktop/e2e/`, tauri-driver under xvfb). It runs only by hand (Actions →
 Desktop → Run workflow, or `gh workflow run desktop.yml`) and on `v*` tags,
-because macOS and Windows minutes are expensive. `pnpm --filter
-@campflare/desktop e2e` can't run on macOS (no WebDriver for WKWebView).
+because macOS and Windows minutes are expensive; `gh workflow run desktop.yml
+--ref <branch> -f e2e-only=true` runs just the Linux tests. A failed desktop test
+uploads the window's page source (and a screenshot, blank under xvfb so far) as
+the `desktop-e2e` artifact. `pnpm --filter @campflare/desktop e2e` can't run on
+macOS (no WebDriver for WKWebView).
 
 ## Layout
 
