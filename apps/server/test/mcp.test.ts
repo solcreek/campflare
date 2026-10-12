@@ -96,9 +96,10 @@ describe("MCP over Streamable HTTP", () => {
     // Reacting twice is fine: the tool is idempotent.
     await callTool(client, "add_reaction", { conversation: "#general", ts: sent.ts, emoji: "eyes" })
 
-    const read = await callTool<{ messages: Record<string, unknown>[] }>(client, "read_messages", {
+    const read = await callTool<{ messages: Record<string, unknown>[]; last_read?: string }>(client, "read_messages", {
       conversation: "#general",
     })
+    expect(read.last_read).toBe("0000000000.000000") // a member who hasn't marked anything read
     expect(read.messages.at(-1)).toMatchObject({
       ts: sent.ts,
       from: "@owner",
