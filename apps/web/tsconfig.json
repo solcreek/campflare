@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "types": ["vite/client", "node"],
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@campflare/client": ["../../packages/client/src/index.ts"],
+      "@campflare/core": ["../../packages/core/src/index.ts"],
+      "@campflare/core/testing": ["../../packages/core/src/testing.ts"]
+    }
+  },
+  "include": ["src", "test", "scripts", "*.config.ts"]
+}
