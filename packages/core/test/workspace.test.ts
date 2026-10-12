@@ -59,6 +59,42 @@ describe("createWorkspace", () => {
     expect(offline.getState().error).toBe("TypeError: network down")
   })
 
+  it("starts once however often it's asked, and again after a stop or a failure", async () => {
+    const api = fakeApi({ ...base })
+    const ws = createWorkspace({ client: api.client, WebSocket: FakeSocket as unknown as typeof WebSocket })
+    // Twice at once, as React's StrictMode does: one load, one link.
+    await Promise.all([ws.start(), ws.start()])
+    await settle()
+    expect(api.calls.filter((c) => c.method === "auth.test")).toHaveLength(1)
+    expect(FakeSocket.all).toHaveLength(1)
+    await ws.start()
+    expect(FakeSocket.all).toHaveLength(1)
+    // Stopped, then started again: still loaded, and live again.
+    ws.stop()
+    await ws.start()
+    await settle()
+    expect(FakeSocket.all).toHaveLength(2)
+    expect(api.calls.filter((c) => c.method === "auth.test")).toHaveLength(1)
+    ws.stop()
+
+    // Stopped while loading: it never goes live.
+    const quiet = createWorkspace({ client: api.client, WebSocket: FakeSocket as unknown as typeof WebSocket })
+    const starting = quiet.start()
+    quiet.stop()
+    await starting
+    await settle()
+    expect(FakeSocket.all).toHaveLength(2)
+
+    // A failed start can be tried again.
+    api.handlers["auth.test"] = () => new Error("fatal_error")
+    const flaky = createWorkspace({ client: api.client, realtime: "none" })
+    await flaky.start()
+    expect(flaky.getState().status).toBe("error")
+    api.handlers["auth.test"] = base["auth.test"]!
+    await flaky.start()
+    expect(flaky.getState().status).toBe("ready")
+  })
+
   it("notifies subscribers until they unsubscribe", async () => {
     const { ws } = await started()
     let calls = 0

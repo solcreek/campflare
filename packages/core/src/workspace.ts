@@ -21,7 +21,7 @@ export interface Workspace {
   getState(): WorkspaceState
   /** Called after every change; returns an unsubscribe function. Fits React's useSyncExternalStore. */
   subscribe(listener: () => void): () => void
-  /** Loads who you are, people and conversations, then goes live. */
+  /** Loads who you are, people and conversations, then goes live. Idempotent; retries after a failure. */
   start(): Promise<void>
   stop(): void
   /** The newest page of a conversation, or with `older`, the page before what's loaded. */
@@ -126,7 +126,23 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     })
   }
 
+  /** Resolves true once loaded; shared by overlapping start() calls. */
+  let loading: Promise<boolean> | undefined
+  let stopped = false
+
+  // Safe to call again (React's StrictMode does, after a stop()): it loads once and
+  // keeps one RTM link. After a failed load, the next call tries again.
   async function start() {
+    stopped = false
+    loading ??= load()
+    if (!(await loading)) {
+      loading = undefined
+      return
+    }
+    if (!stopped && !live) goLive()
+  }
+
+  async function load(): Promise<boolean> {
     dispatch({ type: "loading" })
     try {
       const [me, users, team] = await Promise.all([
@@ -143,9 +159,9 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       })
     } catch (error) {
       dispatch({ type: "failed", error: error instanceof ApiError ? error.code : String(error) })
-      return
+      return false
     }
-    goLive()
+    return true
   }
 
   async function loadHistory(channel: string, opts: { older?: boolean } = {}) {
@@ -274,6 +290,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     },
     start,
     stop() {
+      stopped = true
       live?.close()
       live = undefined
       dispatch({ type: "connection", status: "offline" })
