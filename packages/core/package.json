@@ -1,0 +1,20 @@
+{
+  "name": "@campflare/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Client-side state for Campflare apps: a normalized store kept live by RTM",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@campflare/client": "workspace:*"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.10"
+  }
+}

@@ -1,0 +1,294 @@
+import { afterEach, describe, expect, it } from "vitest"
+import { keyOf, thread, timeline } from "../src/index"
+import { createWorkspace } from "../src/workspace"
+import { fakeApi, FakeSocket, settle, type Handler } from "./fakes"
+
+afterEach(() => {
+  FakeSocket.all = []
+})
+
+const base: Record<string, Handler> = {
+  "auth.test": () => ({ user_id: "U1", team_id: "T1", team: "Team" }),
+  "team.info": () => ({ team: { name: "Campflare Dev" } }),
+  "users.list": () => ({ members: [{ id: "U1", name: "alex" }] }),
+  "conversations.list": () => ({
+    channels: [{ id: "C1", name: "general", is_channel: true, is_member: true, last_read: "0000000000.000000" }],
+  }),
+  "rtm.connect": () => ({ url: "wss://rtm" }),
+  "conversations.history": () => ({
+    messages: [
+      { ts: "0000000200.000000", user: "U1", text: "two" },
+      { ts: "0000000100.000000", user: "U1", text: "one" },
+    ],
+    has_more: true,
+  }),
+}
+
+async function started(handlers: Record<string, Handler> = {}, realtime: "rtm" | "none" = "none") {
+  const api = fakeApi({ ...base, ...handlers })
+  const ws = createWorkspace({
+    client: api.client,
+    realtime,
+    WebSocket: FakeSocket as unknown as typeof WebSocket,
+    minDelayMs: 1,
+  })
+  await ws.start()
+  return { api, ws }
+}
+
+describe("createWorkspace", () => {
+  it("loads who you are, people and conversations", async () => {
+    const { ws } = await started()
+    const s = ws.getState()
+    expect(s.status).toBe("ready")
+    expect(s.self).toEqual({ url: "https://x.test", userId: "U1", teamId: "T1", teamName: "Campflare Dev" })
+    expect(Object.keys(s.users)).toEqual(["U1"])
+    expect(Object.keys(s.conversations)).toEqual(["C1"])
+  })
+
+  it("falls back to auth.test's team name, and reports a failed start", async () => {
+    const { ws } = await started({ "team.info": () => new Error("missing_scope") })
+    expect(ws.getState().self?.teamName).toBe("Team")
+    const bad = await started({ "auth.test": () => new Error("invalid_auth") })
+    expect(bad.ws.getState()).toMatchObject({ status: "error", error: "invalid_auth" })
+    expect(FakeSocket.all).toHaveLength(0)
+    const broken = fakeApi({ ...base, "auth.test": () => ({}) })
+    broken.client.call = () => Promise.reject(new TypeError("network down"))
+    const offline = createWorkspace({ client: broken.client, realtime: "none" })
+    await offline.start()
+    expect(offline.getState().error).toBe("TypeError: network down")
+  })
+
+  it("notifies subscribers until they unsubscribe", async () => {
+    const { ws } = await started()
+    let calls = 0
+    const off = ws.subscribe(() => calls++)
+    await ws.loadHistory("C1")
+    expect(calls).toBe(1)
+    off()
+    await ws.loadHistory("C1", { older: true })
+    expect(calls).toBe(1)
+  })
+
+  it("pages history from the oldest loaded message", async () => {
+    const { api, ws } = await started()
+    // Asking for older with nothing loaded loads the newest page.
+    await ws.loadHistory("C1", { older: true })
+    expect(api.calls.at(-1)?.args).toEqual({ channel: "C1", limit: "50" })
+    await ws.loadHistory("C1", { older: true })
+    expect(api.calls.at(-1)?.args).toEqual({ channel: "C1", limit: "50", latest: "0000000100.000000" })
+  })
+
+  it("loads a thread", async () => {
+    const { ws } = await started({
+      "conversations.replies": () => ({
+        messages: [
+          { ts: "0000000100.000000", thread_ts: "0000000100.000000", reply_count: 1 },
+          { ts: "0000000150.000000", thread_ts: "0000000100.000000" },
+        ],
+      }),
+    })
+    await ws.loadReplies("C1", "0000000100.000000")
+    expect(thread(ws.getState(), "C1", "0000000100.000000").map((m) => m.ts)).toEqual([
+      "0000000100.000000",
+      "0000000150.000000",
+    ])
+  })
+
+  it("sends and swaps in the stored message", async () => {
+    const { ws } = await started({
+      "chat.postMessage": (args) => ({
+        ts: "0000000300.000000",
+        message: { ts: "0000000300.000000", text: args.text },
+      }),
+    })
+    await ws.send("C1", "hello")
+    expect(timeline(ws.getState(), "C1").map((m) => [m.ts, m.text, m.pending])).toEqual([
+      ["0000000300.000000", "hello", undefined],
+    ])
+  })
+
+  it("shows a message as pending before the server answers", async () => {
+    const { api, ws } = await started()
+    let seen: unknown
+    ws.subscribe(() => (seen ??= timeline(ws.getState(), "C1")[0]))
+    // An answer without the message: the store builds it from what was sent.
+    api.handlers["chat.postMessage"] = () => ({ ts: "0000000300.000000" })
+    await ws.send("C1", "hi")
+    expect(seen).toMatchObject({ pending: true, text: "hi", user: "U1" })
+    expect(timeline(ws.getState(), "C1")[0]).toMatchObject({ ts: "0000000300.000000", text: "hi", user: "U1" })
+  })
+
+  it("keeps a failed message for retry or discard", async () => {
+    const { api, ws } = await started({ "chat.postMessage": () => new Error("is_archived") })
+    await ws.send("C1", "hello")
+    const failed = timeline(ws.getState(), "C1")[0]!
+    expect(failed).toMatchObject({ failed: "is_archived", pending: true })
+    api.handlers["chat.postMessage"] = () => ({ ts: "0000000300.000000" })
+    await ws.retry("C1", failed.ts)
+    expect(timeline(ws.getState(), "C1").map((m) => m.ts)).toEqual(["0000000300.000000"])
+    // Retrying what isn't failed does nothing.
+    await ws.retry("C1", "0000000300.000000")
+    expect(api.calls.filter((c) => c.method === "chat.postMessage")).toHaveLength(2)
+
+    api.handlers["chat.postMessage"] = () => {
+      throw new TypeError("offline")
+    }
+    api.client.call = (() => Promise.reject(new TypeError("offline"))) as typeof api.client.call
+    await ws.send("C1", "again")
+    const again = timeline(ws.getState(), "C1").at(-1)!
+    expect(again.failed).toBe("TypeError: offline")
+    ws.discard("C1", again.ts)
+    expect(timeline(ws.getState(), "C1")).toHaveLength(1)
+  })
+
+  it("edits and deletes", async () => {
+    const { ws } = await started({
+      "chat.update": (args) => ({ message: { ts: args.ts, text: args.text, edited: { user: "U1", ts: "1" } } }),
+      "chat.delete": () => ({}),
+    })
+    await ws.loadHistory("C1")
+    await ws.edit("C1", "0000000200.000000", "TWO")
+    expect(ws.getState().messages[keyOf("C1", "0000000200.000000")]?.text).toBe("TWO")
+    await ws.remove("C1", "0000000200.000000")
+    expect(timeline(ws.getState(), "C1").map((m) => m.ts)).toEqual(["0000000100.000000"])
+  })
+
+  it("reloads history when deleting a thread head, which leaves a tombstone", async () => {
+    const { api, ws } = await started({
+      "conversations.history": () => ({
+        messages: [{ ts: "0000000100.000000", thread_ts: "0000000100.000000", reply_count: 2 }],
+      }),
+      "chat.delete": () => ({}),
+    })
+    await ws.loadHistory("C1")
+    api.handlers["conversations.history"] = () => ({
+      messages: [{ ts: "0000000100.000000", subtype: "tombstone", text: "This message was deleted." }],
+    })
+    await ws.remove("C1", "0000000100.000000")
+    expect(timeline(ws.getState(), "C1")[0]?.subtype).toBe("tombstone")
+  })
+
+  it("toggles reactions, and undoes one the server refused", async () => {
+    const { api, ws } = await started({ "reactions.add": () => ({}), "reactions.remove": () => ({}) })
+    await ws.loadHistory("C1")
+    const key = keyOf("C1", "0000000200.000000")
+    await ws.toggleReaction("C1", "0000000200.000000", "eyes")
+    expect(ws.getState().messages[key]?.reactions).toEqual([{ name: "eyes", users: ["U1"], count: 1 }])
+    await ws.toggleReaction("C1", "0000000200.000000", "eyes")
+    expect(ws.getState().messages[key]?.reactions).toEqual([])
+    expect(api.calls.slice(-2).map((c) => c.method)).toEqual(["reactions.add", "reactions.remove"])
+
+    api.handlers["reactions.add"] = () => new Error("too_many_reactions")
+    await expect(ws.toggleReaction("C1", "0000000200.000000", "fire")).rejects.toThrow("too_many_reactions")
+    expect(ws.getState().messages[key]?.reactions).toEqual([])
+    // already_reacted means the server agrees it's there: keep it.
+    api.handlers["reactions.add"] = () => new Error("already_reacted")
+    await ws.toggleReaction("C1", "0000000200.000000", "fire")
+    expect(ws.getState().messages[key]?.reactions?.map((r) => r.name)).toEqual(["fire"])
+    // A reaction on a message the store doesn't hold still goes to the server.
+    api.handlers["reactions.add"] = () => ({})
+    await ws.toggleReaction("C1", "0000000999.000000", "eyes")
+    expect(api.calls.at(-1)?.method).toBe("reactions.add")
+  })
+
+  it("marks read up to the newest message, once", async () => {
+    const { api, ws } = await started({ "conversations.mark": () => ({}) })
+    await ws.markRead("C1")
+    expect(api.calls.some((c) => c.method === "conversations.mark")).toBe(false)
+    await ws.loadHistory("C1")
+    await ws.markRead("C1")
+    expect(api.calls.at(-1)).toEqual({ method: "conversations.mark", args: { channel: "C1", ts: "0000000200.000000" } })
+    expect(ws.getState().conversations.C1?.last_read).toBe("0000000200.000000")
+    const count = api.calls.length
+    await ws.markRead("C1")
+    expect(api.calls.length).toBe(count)
+  })
+
+  it("joins, creates channels and opens DMs", async () => {
+    const { api, ws } = await started({
+      "conversations.join": (args) => ({ channel: { id: args.channel, name: "random", is_channel: true } }),
+      "conversations.create": (args) => ({ channel: { id: "C9", name: args.name, is_channel: true } }),
+      "conversations.open": () => ({ channel: { id: "D1" } }),
+      "conversations.info": () => ({ channel: { id: "D1", is_im: true, user: "U2" } }),
+    })
+    await ws.join("C2")
+    expect(ws.getState().conversations.C2?.is_member).toBe(true)
+    expect(await ws.createChannel("ops", { isPrivate: true })).toBe("C9")
+    expect(api.calls.at(-1)?.args).toEqual({ name: "ops", is_private: "true" })
+    expect(ws.getState().conversations.C9).toMatchObject({ name: "ops", is_member: true })
+    expect(await ws.openDm(["U2"])).toBe("D1")
+    expect(ws.getState().conversations.D1?.user).toBe("U2")
+    // Already known: no second lookup.
+    await ws.openDm(["U2"])
+    expect(api.calls.filter((c) => c.method === "conversations.info")).toHaveLength(1)
+  })
+
+  it("goes live over RTM and fills in what events mention", async () => {
+    const { api, ws } = await started(
+      {
+        "users.info": (args) => ({ user: { id: args.user, name: "vincent" } }),
+        "conversations.info": (args) => ({ channel: { id: args.channel, is_im: true, user: "U2" } }),
+      },
+      "rtm",
+    )
+    await settle()
+    const socket = FakeSocket.all[0]!
+    socket.receive({ type: "hello" })
+    expect(ws.getState().connection).toBe("connected")
+    socket.receive({ type: "message", channel: "D1", ts: "0000000300.000000", user: "U2", text: "hi" })
+    // The same unknowns again while the lookups run: asked once.
+    socket.receive({ type: "message", channel: "D1", ts: "0000000301.000000", user: "U2", text: "hi" })
+    await settle()
+    const s = ws.getState()
+    expect(s.users.U2?.name).toBe("vincent")
+    expect(s.conversations.D1?.user).toBe("U2")
+    expect(s.unread.D1).toBe(2)
+    expect(api.calls.filter((c) => c.method === "users.info")).toHaveLength(1)
+    expect(api.calls.filter((c) => c.method === "conversations.info")).toHaveLength(1)
+    ws.stop()
+    expect(ws.getState().connection).toBe("offline")
+  })
+
+  it("ignores lookups that fail", async () => {
+    const { ws } = await started(
+      { "users.info": () => new Error("user_not_found"), "conversations.info": () => new Error("channel_not_found") },
+      "rtm",
+    )
+    await settle()
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    FakeSocket.all[0]!.receive({ type: "message", channel: "C7", ts: "0000000300.000000", user: "U7" })
+    await settle()
+    expect(ws.getState().users.U7).toBeUndefined()
+    ws.stop()
+  })
+
+  it("catches up after a reconnect", async () => {
+    const { api, ws } = await started({}, "rtm")
+    await settle()
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    await ws.loadHistory("C1")
+    api.handlers["conversations.list"] = () => ({
+      channels: [{ id: "C1", name: "general-renamed", is_channel: true, is_member: true }],
+    })
+    api.handlers["conversations.history"] = () => ({
+      messages: [
+        { ts: "0000000250.000000", user: "U2", text: "while you were away" },
+        { ts: "0000000200.000000", user: "U1", text: "two" },
+      ],
+    })
+    FakeSocket.all[0]!.close()
+    expect(ws.getState().connection).toBe("disconnected")
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    await settle()
+    expect(ws.getState().conversations.C1?.name).toBe("general-renamed")
+    expect(timeline(ws.getState(), "C1").map((m) => m.ts)).toEqual([
+      "0000000100.000000",
+      "0000000200.000000",
+      "0000000250.000000",
+    ])
+    ws.stop()
+  })
+})

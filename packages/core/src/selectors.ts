@@ -1,0 +1,62 @@
+import { keyOf, type WorkspaceState } from "./state"
+import type { Conversation, Message, User } from "./types"
+
+// Derived views of the state that every UI needs. Pure functions of state,
+// so a UI can memoise them on the state object.
+
+export function displayName(user: User | undefined): string {
+  if (!user) return "unknown"
+  return user.profile?.display_name || user.real_name || user.profile?.real_name || user.name
+}
+
+/** "general" for a channel, the other person for an IM, everyone else for a group DM. */
+export function conversationTitle(state: WorkspaceState, c: Conversation): string {
+  if (c.is_im) return displayName(c.user ? state.users[c.user] : undefined)
+  if (c.is_mpim) {
+    const members = (c.members as string[] | undefined)?.filter((id) => id !== state.self?.userId)
+    if (members?.length) return members.map((id) => displayName(state.users[id])).join(", ")
+    // mpdm-alex--vincent--ada-1: the handles, without yours
+    const self = state.self && state.users[state.self.userId]?.name
+    const handles = (c.name ?? "")
+      .replace(/^mpdm-/, "")
+      .replace(/-\d+$/, "")
+      .split("--")
+    return handles.filter((h) => h !== self).join(", ")
+  }
+  return c.name ?? c.id
+}
+
+export interface Sidebar {
+  channels: Conversation[]
+  directMessages: Conversation[]
+}
+
+/** Your conversations, channels and DMs apart, each sorted by title; archived ones left out. */
+export function sidebar(state: WorkspaceState): Sidebar {
+  const mine = Object.values(state.conversations).filter((c) => c.is_member !== false && !c.is_archived)
+  const byTitle = (a: Conversation, b: Conversation) =>
+    conversationTitle(state, a).localeCompare(conversationTitle(state, b))
+  return {
+    channels: mine.filter((c) => !c.is_im && !c.is_mpim && c.is_member).toSorted(byTitle),
+    directMessages: mine.filter((c) => c.is_im || c.is_mpim).toSorted(byTitle),
+  }
+}
+
+/** Public channels you could join. */
+export function browsableChannels(state: WorkspaceState): Conversation[] {
+  return Object.values(state.conversations)
+    .filter((c) => c.is_channel && !c.is_private && !c.is_member && !c.is_archived)
+    .toSorted((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+}
+
+export function timeline(state: WorkspaceState, channel: string): Message[] {
+  return (state.timelines[channel]?.keys ?? []).flatMap((k) => state.messages[k] ?? [])
+}
+
+/** The parent, then its replies. */
+export function thread(state: WorkspaceState, channel: string, threadTs: string): Message[] {
+  const key = keyOf(channel, threadTs)
+  const parent = state.messages[key]
+  const replies = (state.threads[key]?.keys ?? []).flatMap((k) => state.messages[k] ?? [])
+  return parent ? [parent, ...replies] : replies
+}
