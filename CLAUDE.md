@@ -25,6 +25,12 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
 
 - `pnpm test` in a package adds `--coverage` with thresholds, so a partial run
   fails the thresholds. Use `npx vitest run <file>` for a subset.
+- `pnpm test:live` (`tests/live/`, opt-in, not in `pnpm check`) hits real
+  Cloudflare services with the credentials in `apps/server/.dev.vars`:
+  werift WebRTC peers and real Chrome (playwright-core, the installed Chrome)
+  against the Realtime SFU. `RECORD_FIXTURES=1` refreshes the recorded SFU
+  responses that the offline fake SFU (`apps/server/test/fake-sfu.ts`) serves.
+  Server tests override the Realtime bindings, so they never reach the real API.
 - `apps/cli` and `tests/conformance` tests start a real `wrangler dev` on a free
   port with fresh state (`tests/conformance/global-setup.ts`), so they're slower
   and need nothing running.
