@@ -11,6 +11,7 @@ import { handleDownload, handleUpload } from "./methods/files"
 import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
+import { mountAuth } from "./auth/routes"
 import { handleMcp } from "./mcp"
 import { Args } from "./api/args"
 import { authenticate, tokenOf, touch } from "./api/auth"
@@ -64,6 +65,8 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
     return reply({ ok: false, error: "internal_error" })
   }
 })
+
+mountAuth(app)
 
 /** The remote MCP server (Streamable HTTP). */
 app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUntil(p)))

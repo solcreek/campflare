@@ -1,12 +1,17 @@
 import {
   createMcpHandler,
+  getOAuthProtectedResourceMetadataUrl,
   OAuthError,
   OAuthErrorCode,
   originValidationResponse,
   requireBearerAuth,
   type AuthInfo,
 } from "@modelcontextprotocol/server"
-import { authenticate } from "../api/auth"
+import { createLocalJWKSet, jwtVerify, type JWTPayload } from "jose"
+import { actorFor, authenticate } from "../api/auth"
+import { CAMPFLARE_PROVIDER } from "../auth/campflare-token"
+import { authFor } from "../auth/routes"
+import { first } from "../db/query"
 import type { Actor } from "../api/context"
 import { CampflareError } from "../api/errors"
 import type { Env } from "../env"
@@ -15,13 +20,51 @@ import { buildServer } from "./tools"
 
 // The remote MCP server: Streamable HTTP at /mcp, per the 2026-07-28
 // specification (with the SDK's stateless fallback for 2025-era clients).
-// It is an OAuth resource server; for now the bearer token is a Campflare
-// user or bot token (xoxp-/xoxb-), checked by the same code as the Web API.
+// It is an OAuth resource server. A bearer token is either an access token
+// from our authorization server (Better Auth, at /auth: a JWT bound to this
+// /mcp resource), or a Campflare user or bot token (xoxp-/xoxb-) for agents
+// configured by hand.
 
 /** How long a verified token is vouched for: our tokens don't expire, but the SDK requires an expiry. */
 const VOUCH_SECONDS = 300
 
-async function verify(env: Env, token: string): Promise<AuthInfo> {
+/** An OAuth access token: a JWT from our issuer, for this resource, naming a person linked to a Campflare user. */
+async function verifyJwt(env: Env, request: Request, token: string): Promise<AuthInfo> {
+  const origin = new URL(request.url).origin
+  const auth = authFor(env, request)
+  const jwks = createLocalJWKSet((await auth.api.getJwks()) as Parameters<typeof createLocalJWKSet>[0])
+  let claims: JWTPayload
+  try {
+    ;({ payload: claims } = await jwtVerify(token, jwks, { issuer: `${origin}/auth`, audience: `${origin}/mcp` }))
+  } catch {
+    throw new OAuthError(OAuthErrorCode.InvalidToken, "invalid or expired access token")
+  }
+  const link = await first<{ accountId: string }>(
+    env.DB,
+    'SELECT "accountId" FROM "account" WHERE "userId" = ? AND "providerId" = ?',
+    claims.sub,
+    CAMPFLARE_PROVIDER,
+  )
+  if (!link) throw new OAuthError(OAuthErrorCode.InvalidToken, "no Campflare user behind this token")
+  let actor
+  try {
+    actor = await actorFor(env, link.accountId)
+  } catch (error) {
+    if (error instanceof CampflareError) throw new OAuthError(OAuthErrorCode.InvalidToken, error.code)
+    throw error
+  }
+  return {
+    token,
+    clientId: String(claims.azp ?? claims.client_id ?? "oauth"),
+    scopes: typeof claims.scope === "string" ? claims.scope.split(" ") : [],
+    expiresAt: claims.exp,
+    resource: new URL(`${origin}/mcp`),
+    extra: { auth: actor },
+  }
+}
+
+async function verify(env: Env, request: Request, token: string): Promise<AuthInfo> {
+  if (!/^xox[a-z]-|^xapp-/.test(token)) return verifyJwt(env, request, token)
   let auth
   try {
     auth = await authenticate(env, token)
@@ -49,7 +92,11 @@ export async function handleMcp(
   const rejected = originValidationResponse(request, [origin.hostname])
   if (rejected) return rejected
 
-  const gate = requireBearerAuth({ verifier: { verifyAccessToken: (token) => verify(env, token) } })
+  const gate = requireBearerAuth({
+    verifier: { verifyAccessToken: (token) => verify(env, request, token) },
+    // 401s point MCP clients at the metadata that names our authorization server.
+    resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL(`${origin.origin}/mcp`)),
+  })
   const authInfo = await gate(request)
   if (authInfo instanceof Response) return authInfo
 

@@ -81,6 +81,15 @@ export async function authenticate(env: Env, token: string): Promise<Auth> {
   return { kind, team, user, app, scopes: row.scopes ? row.scopes.split(",") : [] }
 }
 
+/** The identity of a Campflare user signed in some other way (an OAuth access token): as their user token would be. */
+export async function actorFor(env: Env, userId: string): Promise<Auth> {
+  const user = await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ?", userId)
+  if (!user || user.deleted) throw new CampflareError("account_inactive")
+  const team = await first<TeamRow>(env.DB, "SELECT * FROM teams WHERE id = ?", user.team_id)
+  if (!team) throw new CampflareError("invalid_auth")
+  return { kind: user.is_bot ? "bot" : "user", team, user, scopes: DEFAULT_USER_SCOPES }
+}
+
 /** Mints a token and stores its hash. The token is returned once. */
 export async function issueToken(
   env: Env,
