@@ -1,0 +1,2 @@
+SIGNING_KEY=dev-signing-key-change-me
+BOOTSTRAP_SECRET=dev-bootstrap
