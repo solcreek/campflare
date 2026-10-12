@@ -23,6 +23,8 @@ export interface AppProps {
   signIn?: BrowserSignIn
   /** The dev server's address: the login screen starts with it. */
   devServer?: string
+  /** The page's own origin on the web: the login screen offers it when it answers api.test. */
+  origin?: string
 }
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
@@ -31,7 +33,7 @@ const connectTo = (session: Session) => createWorkspace({ client: createClient(s
 const reportStoreError = (what: string) => (error: unknown) =>
   toast.error(`Couldn't ${what} the sign-in: ${error instanceof Error ? error.message : String(error)}`)
 
-export function App({ store, autoSession, connect = connectTo, fetch, signIn: given, devServer }: AppProps) {
+export function App({ store, autoSession, connect = connectTo, fetch, signIn: given, devServer, origin }: AppProps) {
   const [own] = useState(() => given ?? platformSignIn(globalThis as never, fetch))
   const signIn = given ?? own
   // The browser coming back from a sign-in wins over a kept session: the person just chose whom to sign in as.
@@ -78,7 +80,13 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
           />
         </WorkspaceProvider>
       ) : (
-        <LoginScreen fetch={fetch} signIn={signIn} onSignIn={onSignIn} server={devServer || lastServer()} />
+        <LoginScreen
+          fetch={fetch}
+          signIn={signIn}
+          onSignIn={onSignIn}
+          server={devServer || lastServer()}
+          probeOrigin={origin}
+        />
       )}
       <Toaster />
     </TooltipProvider>
