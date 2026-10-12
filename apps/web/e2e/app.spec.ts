@@ -131,6 +131,8 @@ test("an image opens full size, and Escape closes it", async ({ browser }) => {
   const viewer = alex.getByRole("dialog")
   await expectLoaded(viewer.getByRole("img", { name }))
   await expect(viewer.getByRole("button", { name: /^Download / })).toBeVisible()
+  // Focus is on the dialog, not Download.
+  await expect(viewer).toBeFocused()
   await alex.keyboard.press("Escape")
   await expect(viewer).toHaveCount(0)
 })

@@ -206,6 +206,8 @@ describe("the image viewer", () => {
     await user.click(await within(log()).findByRole("button", { name: "Open Nachtansicht von Tokio" }))
 
     let viewer = screen.getByRole("dialog", { name: "東京の夜" })
+    // The dialog takes focus, not Download: Enter right after opening saves nothing.
+    await waitFor(() => expect(document.activeElement).toBe(viewer))
     expect(within(viewer).getByText("1 of 2 · tokyo.png · 2 KB")).toBeTruthy()
     const big = within(viewer).getByRole("img", { name: "Nachtansicht von Tokio" }) as HTMLImageElement
     expect(big.src).toMatch(/^blob:/)

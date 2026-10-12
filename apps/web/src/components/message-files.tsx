@@ -1,6 +1,6 @@
 import { fileKind, fileLabel, fitImage, formatBytes, type MessageFile } from "@campflare/core"
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, FileIcon, LoaderCircleIcon } from "lucide-react"
-import { type KeyboardEvent, useEffect, useState } from "react"
+import { type KeyboardEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -152,8 +152,16 @@ function ViewerContent({
     file.size !== undefined ? formatBytes(file.size) : undefined,
   ].filter(Boolean)
 
+  // The dialog itself takes focus when it opens, not Download: Enter mustn't save a file by accident.
+  const popup = useRef<HTMLDivElement>(null)
+
   return (
-    <DialogContent className="w-max max-w-[calc(100vw-2rem)] gap-3 sm:max-w-[calc(100vw-4rem)]" onKeyDown={onKeyDown}>
+    <DialogContent
+      ref={popup}
+      initialFocus={popup}
+      className="w-max max-w-[calc(100vw-2rem)] gap-3 sm:max-w-[calc(100vw-4rem)]"
+      onKeyDown={onKeyDown}
+    >
       <DialogHeader className="min-w-0 pr-16">
         <DialogTitle className="truncate leading-normal">{file.title || name}</DialogTitle>
         <DialogDescription className={details.length > 0 ? "truncate" : "sr-only"}>
