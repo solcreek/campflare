@@ -12,6 +12,13 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             SIGNING_KEY: "test-signing-key",
             BOOTSTRAP_SECRET: "test-bootstrap",
+            // Huddles call the Realtime SFU and transcription calls Workers AI, both faked in the
+            // tests (setSfuFetch, setSpeechFetch, setSummaryFetch): any credentials will do, and
+            // the suite mustn't depend on a .dev.vars that CI doesn't have.
+            REALTIME_APP_ID: "test-realtime-app",
+            REALTIME_APP_SECRET: "test-realtime-secret",
+            CF_ACCOUNT_ID: "test-account",
+            WORKERS_AI_TOKEN: "test-workers-ai-token",
           },
         },
       }),
