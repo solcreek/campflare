@@ -1,0 +1,23 @@
+{
+  "name": "@campflare/client",
+  "version": "0.1.0",
+  "description": "A small client for the Campflare (and Slack) Web API, Socket Mode and RTM",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p .",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.10"
+  }
+}
