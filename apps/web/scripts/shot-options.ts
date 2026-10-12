@@ -133,6 +133,10 @@ export const outFor = (out: string, i: number) => (i === 0 ? out : out.replace(/
 export const stepProblem = (step: Step, error: unknown) =>
   `--${step.kind} ${step.value}: ${error instanceof Error ? error.message.split("\n")[0] : error}`
 
+/** What shot says on stderr, before exiting 1, when steps failed (each with its route). */
+export const failedSteps = (failed: string[]) =>
+  `shot: ${failed.length === 1 ? "a step" : `${failed.length} steps`} failed\n  ${failed.join("\n  ")}`
+
 /** What shot prints for one route (a blank line before every route after the first). */
 export function report(
   i: number,

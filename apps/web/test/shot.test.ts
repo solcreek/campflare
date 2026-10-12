@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { DevStack } from "../../../scripts/dev-stack.ts"
 import {
   clickTarget,
+  failedSteps,
   findApp,
   outFor,
   pageOptions,
@@ -177,5 +178,14 @@ describe("what shot prints", () => {
       "\nscreenshot  s-2.png  (http://a/)\nproblems\n  HTTP 404: http://a/x\n  --click button:Nope: Timeout\noutline\n-",
     )
     expect(stepProblem({ kind: "press", value: "Nope" }, "odd")).toBe("--press Nope: odd")
+  })
+
+  it("sums up failed steps for stderr", () => {
+    expect(failedSteps(["--click button:Nope: Timeout (#/C1)"])).toBe(
+      "shot: a step failed\n  --click button:Nope: Timeout (#/C1)",
+    )
+    expect(failedSteps(["--click a:b: x (start)", "--press Nope: y (#/C2)"])).toBe(
+      "shot: 2 steps failed\n  --click a:b: x (start)\n  --press Nope: y (#/C2)",
+    )
   })
 })

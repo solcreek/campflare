@@ -16,12 +16,14 @@
 //   shot '#/C123' --click 'textbox:Message' --type 'hi' --press Enter
 //                                     steps, in order, on each route before the screenshot
 //
-// Exits 1 when there is no app to look at or the command line is wrong.
+// Exits 1 when there is no app to look at, the command line is wrong, or a
+// step failed (the screenshot is still taken, and the problem listed).
 
 import { chromium, type Page } from "@playwright/test"
 import { resolve } from "node:path"
 import {
   clickTarget,
+  failedSteps,
   findApp,
   outFor,
   pageOptions,
@@ -49,7 +51,9 @@ async function run(page: Page, step: Step) {
   await target.first().click({ timeout: 5000 })
 }
 
-async function shoot(base: string, options: ShotOptions) {
+/** Shoots every route; returns the steps that failed. */
+async function shoot(base: string, options: ShotOptions): Promise<string[]> {
+  const failed: string[] = []
   const browser = await chromium.launch()
   try {
     for (const [i, route] of options.routes.entries()) {
@@ -73,6 +77,7 @@ async function shoot(base: string, options: ShotOptions) {
           await run(page, step)
         } catch (error) {
           problems.push(stepProblem(step, error))
+          failed.push(`${stepProblem(step, error)} (${route || "start"})`)
         }
       }
       if (options.steps.length) await page.waitForTimeout(500)
@@ -86,6 +91,7 @@ async function shoot(base: string, options: ShotOptions) {
   } finally {
     await browser.close()
   }
+  return failed
 }
 
 // Errors set exitCode rather than process.exit, which cuts piped output short.
@@ -96,7 +102,11 @@ try {
     console.error(app.error)
     process.exitCode = 1
   } else {
-    await shoot(app.url, options)
+    const failed = await shoot(app.url, options)
+    if (failed.length) {
+      console.error(failedSteps(failed))
+      process.exitCode = 1
+    }
   }
 } catch (error) {
   if (!(error instanceof UsageError)) throw error

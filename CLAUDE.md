@@ -52,7 +52,7 @@ Seeing the app: with `pnpm dev:all --port 0 --web` running in the background,
 `pnpm shot '#/<channel id>'` finds it through the run file, saves
 `apps/web/.shots/shot.png` (Read it to look) and prints console errors, failed requests
 and the accessible outline. Several routes give one shot each; `--click 'button:Send'`,
-`--type hi`, `--press Enter` act first, in order. Every screen is a hash route
+`--type hi`, `--press Enter` act first, in order; a step that fails exits 1. Every screen is a hash route
 (`#/C123`, `#/C123/<thread ts>`), so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
 UI tests select by role and accessible name, as a person would; keep controls
 labelled and the jsx-a11y lint passing so they stay selectable.
