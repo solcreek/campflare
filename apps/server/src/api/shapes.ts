@@ -227,6 +227,19 @@ export interface MessageExtras {
 const key = (channelId: string, ts: string) => `${channelId}/${ts}`
 
 /**
+ * The reactions of the messages a query selects, as a statement to batch with
+ * the query itself. `messages` selects (at least) channel_id and ts from
+ * messages, with `params`.
+ */
+export function reactionsOfQuery(db: D1Database, messages: string, ...params: unknown[]) {
+  return db
+    .prepare(
+      `SELECT * FROM reactions WHERE (channel_id, ts) IN (SELECT channel_id, ts FROM (${messages})) ORDER BY created`,
+    )
+    .bind(...params)
+}
+
+/**
  * Loads what a batch of messages needs to serialise: their reactions, files and bot apps.
  * `reactions`, when the caller already has them (read in its own batch), saves that query.
  */
