@@ -1,4 +1,4 @@
-import { first, run, stmt } from "../db/query"
+import { run, stmt } from "../db/query"
 import type { AppRow, TeamRow, TokenRow, UserRow } from "../db/rows"
 import type { Env } from "../env"
 import { sha256Hex } from "./crypto"
@@ -91,9 +91,13 @@ export async function authenticate(env: Env, token: string): Promise<Auth> {
 
 /** The identity of a Campflare user signed in some other way (an OAuth access token): as their user token would be. */
 export async function actorFor(env: Env, userId: string): Promise<Auth> {
-  const user = await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ?", userId)
+  const [users, teams] = await env.DB.batch([
+    stmt(env.DB, "SELECT * FROM users WHERE id = ?", userId),
+    stmt(env.DB, "SELECT * FROM teams WHERE id = (SELECT team_id FROM users WHERE id = ?)", userId),
+  ])
+  const user = users!.results[0] as UserRow | undefined
   if (!user || user.deleted) throw new CampflareError("account_inactive")
-  const team = await first<TeamRow>(env.DB, "SELECT * FROM teams WHERE id = ?", user.team_id)
+  const team = teams!.results[0] as TeamRow | undefined
   if (!team) throw new CampflareError("invalid_auth")
   return { kind: user.is_bot ? "bot" : "user", team, user, scopes: DEFAULT_USER_SCOPES }
 }
