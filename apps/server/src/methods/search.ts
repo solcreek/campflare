@@ -1,4 +1,4 @@
-import { all, first } from "../db/query"
+import { all, first, stmt } from "../db/query"
 import type { ConversationRow, MessageRow, UserRow } from "../db/rows"
 import { method, type Actor, type Ctx } from "../api/context"
 import { microsToTs } from "../api/ids"
@@ -59,12 +59,14 @@ async function resolveChannels(ctx: Ctx<Actor>, refs: string[]): Promise<string[
   return out
 }
 
+const MAX_PAGE = 100
+
 const tsOf = (seconds: number) => microsToTs(Math.round(seconds * 1_000_000))
 
 method("search.messages", "user", async (ctx) => {
   const query = ctx.args.req("query", "no_query")
   const count = ctx.args.int("count", 20, { min: 1, max: 100 })
-  const page = ctx.args.int("page", 1, { min: 1, max: 100 })
+  const page = ctx.args.int("page", 1, { min: 1, max: MAX_PAGE })
   const byScore = (ctx.args.str("sort") ?? "score") === "score"
   const asc = ctx.args.str("sort_dir") === "asc"
   const q = parseSearch(query)
@@ -85,15 +87,14 @@ method("search.messages", "user", async (ctx) => {
     where.push("m.text NOT LIKE ? ESCAPE '\\'")
     params.push(likePattern(term))
   }
-  if (q.from.length) {
-    const users = await resolveUsers(ctx, q.from)
-    where.push(`m.user_id IN (${users.map(() => "?").join(", ")})`)
-    params.push(...users)
+  const [fromUsers, inChannels] = await Promise.all([resolveUsers(ctx, q.from), resolveChannels(ctx, q.in)])
+  if (fromUsers.length) {
+    where.push("m.user_id IN (SELECT value FROM json_each(?))")
+    params.push(JSON.stringify(fromUsers))
   }
-  if (q.in.length) {
-    const channels = await resolveChannels(ctx, q.in)
-    where.push(`m.channel_id IN (${channels.map(() => "?").join(", ")})`)
-    params.push(...channels)
+  if (inChannels.length) {
+    where.push("m.channel_id IN (SELECT value FROM json_each(?))")
+    params.push(JSON.stringify(inChannels))
   }
   if (q.since !== undefined) {
     where.push("m.ts >= ?")
@@ -127,29 +128,38 @@ method("search.messages", "user", async (ctx) => {
   const sql = `FROM ${from} ${joins} WHERE ${where.join(" AND ")}`
   const order = byScore && fts.length ? "bm25(messages_fts), m.ts DESC" : `m.ts ${asc ? "ASC" : "DESC"}`
 
-  const total = (await first<{ n: number }>(ctx.env.DB, `SELECT COUNT(*) AS n ${sql}`, ...ordered))?.n ?? 0
-  const rows = await all<
-    MessageRow & { c_name: string; c_kind: ConversationRow["kind"]; c_private: number; c_key: string | null }
-  >(
-    ctx.env.DB,
-    `SELECT m.*, c.name AS c_name, c.kind AS c_kind, c.is_private AS c_private, c.member_key AS c_key
-     ${sql} ORDER BY ${order} LIMIT ? OFFSET ?`,
-    ...ordered,
-    count,
-    (page - 1) * count,
-  )
-  const users = new Map<string, UserRow>()
-  const authorIds = [...new Set(rows.flatMap((r) => (r.user_id ? [r.user_id] : [])))]
-  if (authorIds.length) {
-    for (const u of await all<UserRow>(
+  // The total counts no further than the last page a client can ask for (page ≤ 100): an exact count
+  // reads every match, which on a common word is most of the workspace.
+  const [counted, found] = await ctx.env.DB.batch([
+    stmt(ctx.env.DB, `SELECT COUNT(*) AS n FROM (SELECT 1 ${sql} LIMIT ?)`, ...ordered, MAX_PAGE * count),
+    stmt(
       ctx.env.DB,
-      `SELECT * FROM users WHERE id IN (${authorIds.map(() => "?").join(", ")})`,
-      ...authorIds,
-    )) {
-      users.set(u.id, u)
-    }
-  }
-  const extras = await loadExtras(ctx.env, rows)
+      `SELECT m.*, c.name AS c_name, c.kind AS c_kind, c.is_private AS c_private, c.member_key AS c_key
+       ${sql} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      ...ordered,
+      count,
+      (page - 1) * count,
+    ),
+  ])
+  const total = (counted!.results[0] as { n: number } | undefined)?.n ?? 0
+  const rows = found!.results as (MessageRow & {
+    c_name: string
+    c_kind: ConversationRow["kind"]
+    c_private: number
+    c_key: string | null
+  })[]
+  const authorIds = [...new Set(rows.flatMap((r) => (r.user_id ? [r.user_id] : [])))]
+  const [authors, extras] = await Promise.all([
+    authorIds.length
+      ? all<UserRow>(
+          ctx.env.DB,
+          "SELECT * FROM users WHERE id IN (SELECT value FROM json_each(?))",
+          JSON.stringify(authorIds),
+        )
+      : [],
+    loadExtras(ctx.env, rows),
+  ])
+  const users = new Map(authors.map((u) => [u.id, u]))
   const pages = Math.max(1, Math.ceil(total / count))
   const matches = rows.map((m, i) => {
     const json = messageJson(m, extras, ctx.origin)

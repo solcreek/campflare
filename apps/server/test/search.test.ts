@@ -19,6 +19,18 @@ async function search(token: string, query: string, extra: Record<string, unknow
 }
 
 describe("search.messages", () => {
+  it("counts matches up to the last page a client can reach", async () => {
+    const w = await workspace()
+    for (let i = 0; i < 101; i++)
+      await ok("chat.postMessage", { channel: w.general, text: `ticket ${i}` }, w.owner.token)
+    // Pages stop at 100: with one match a page, the 101st match can't be reached, so it isn't counted.
+    const capped = await search(w.owner.token, "ticket", { count: 1, page: 100 })
+    expect(capped.total).toBe(100)
+    expect(capped.paging.pages).toBe(100)
+    expect(capped.matches).toHaveLength(1)
+    expect((await search(w.owner.token, "ticket", { count: 2 })).total).toBe(101)
+  })
+
   it("finds words, phrases and exclusions", async () => {
     const w = await workspace()
     const post = (text: string) => ok("chat.postMessage", { channel: w.general, text }, w.owner.token)
