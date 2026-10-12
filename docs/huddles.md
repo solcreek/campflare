@@ -1,15 +1,17 @@
-# Huddles: calls on Cloudflare Realtime (experiment)
+# Huddles: calls on Cloudflare Realtime
 
-Branch `experiments/huddle-1v1`. Can a conversation have a call, with media
-through Cloudflare's Realtime SFU and signalling through Campflare's own API
-and events?
+A conversation can have a call, with media through Cloudflare's Realtime SFU
+and signalling through Campflare's own API (`campflare.huddles.*`) and RTM
+events. Huddles are off until `apps/server/.dev.vars` (or the Worker's
+secrets) has a Realtime SFU app; transcription also needs a Workers AI token.
+There is no UI yet: `/huddle` is a test page.
 
-- Step 1, audio between people: yes (2026-10-12).
-- Step 2, video and several people: yes, four people with cameras tested
-  live (2026-10-12).
-- Step 3, transcription and a summary: yes, two people speaking Spanish and
-  Japanese transcribed live, attributed, labelled with their language, and
-  summarised (2026-10-12).
+Built and verified live in three steps (2026-10-12):
+
+- Audio between people.
+- Video and several people: four people with cameras.
+- Transcription and a summary: two people speaking Spanish and Japanese,
+  transcribed live, attributed, labelled with their language, and summarised.
 
 ## Run it
 
@@ -43,7 +45,7 @@ window), type `#general`, join. Each side should hear the other.
 - **Code:** `apps/server/src/huddle/` (`sfu.ts` the Connection API client,
   `methods.ts` the API, `page.ts` the test page).
 
-## Transcription (step 3)
+## Transcription
 
 ```
 browser mic ─WebRTC→ SFU ─WebSocket adapter (48 kHz stereo PCM, protobuf)→ /huddle/scribe/<ticket>
@@ -54,7 +56,7 @@ stop (by request, or the last leaver) → last words → summary (Llama 3.3 70B)
 
 - `campflare.huddles.transcribe` turns it on and off. One adapter per
   microphone, so every line knows its speaker without diarisation; newcomers
-  are added, retried while their connection comes up (the same race as step 2).
+  are added, retried while their connection comes up (the same race as subscribing).
 - Each line and the summary carry message `metadata` (`huddle_transcript`:
   user, text, language; `huddle_summary`: text, line count, language), so an
   agent reads the call without parsing text.
@@ -93,27 +95,25 @@ its interceptors don't apply, and the SFU client already takes a `fetch`.
 
 ## Cloudflare resources
 
-Created with the `cf` CLI in the Kaik, Inc. account (2026-10-12), for local
-development:
+Create them with the `cf` CLI in your Cloudflare account, and put the
+secrets in `apps/server/.dev.vars` (gitignored):
 
 ```sh
 cf realtime sfu apps create --name campflare-dev     # → REALTIME_APP_ID, REALTIME_APP_SECRET
 cf realtime turn keys create --name campflare-dev    # → REALTIME_TURN_KEY_ID, REALTIME_TURN_KEY_TOKEN
 ```
 
-A Workers AI token for transcription, scoped to Workers AI Read and expiring
-2026-11-11, was created the same way (`cf accounts tokens create`) as
-`CF_ACCOUNT_ID` / `WORKERS_AI_TOKEN`.
-
-Their secrets are only in `apps/server/.dev.vars` (gitignored). Delete with
-`cf realtime sfu apps delete` / `cf realtime turn keys delete`.
+For transcription, an account token scoped to Workers AI Read
+(`cf accounts tokens create`, with an expiry) as `WORKERS_AI_TOKEN`, and the
+account's id as `CF_ACCOUNT_ID`. Delete them with `cf realtime sfu apps delete`
+/ `cf realtime turn keys delete`.
 
 ## Found along the way
 
 - **Behind a tunnel, every URL we built said http.** The tunnel terminates TLS
   and forwards plain HTTP, so `rtm.connect` answered `ws://` to an `https`
-  page. `publicOrigin()` now honours `X-Forwarded-Proto` / `CF-Visitor`. This
-  applies beyond the experiment (any reverse proxy).
+  page. `publicOrigin()` now honours `X-Forwarded-Proto` / `CF-Visitor`, for
+  any reverse proxy.
 - **A quick tunnel's name can be cached as nonexistent.** Asking the system
   resolver before the name exists makes macOS cache the miss, and Chrome
   shares it: the tests wait over DNS-over-HTTPS first.
