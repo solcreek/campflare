@@ -1,6 +1,6 @@
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
-import { getConversation, requireMember } from "../db/conversations"
+import { requireMember, resolveConversation } from "../db/conversations"
 import { audienceOf, publish } from "../events"
 import type { HuddleParticipant } from "../hub"
 import { createSfu, iceServers, SfuError, type SessionDescription, type Sfu } from "./sfu"
@@ -48,8 +48,9 @@ const participantJson = (p: HuddleParticipant) => ({
   joined: p.joined,
 })
 
+/** The conversation a `channel` argument names, as chat.postMessage takes it: "#name", an id, or a user id (your DM with them). */
 async function memberConversation(ctx: Ctx<Actor>) {
-  const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
+  const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   await requireMember(ctx, c)
   return c
 }
@@ -154,7 +155,7 @@ method("campflare.huddles.answer", "actor", async (ctx) => {
 })
 
 method("campflare.huddles.leave", "actor", async (ctx) => {
-  const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
+  const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   const seat = await hub(ctx).huddleLeave(c.id, ctx.auth.user.id)
   if (!seat) return { left: false }
   const sfu = sfuFor(ctx)

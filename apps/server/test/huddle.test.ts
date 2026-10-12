@@ -330,3 +330,33 @@ describe("the /huddle page", () => {
     expect(await script.text()).toContain("campflare.huddles.join")
   })
 })
+
+describe("naming the conversation", () => {
+  it("takes #name, an id, or a user id (their DM), as chat.postMessage does", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const joined = await join(w, "#general")
+    expect(await ok("campflare.huddles.info", { channel: "#general" }, w.owner.token)).toMatchObject({
+      channel: w.general,
+      participants: [{ user: w.owner.id, session_id: joined.session_id }],
+    })
+    // A 1:1 call: name the other person, and it's your DM with them, from either side.
+    const dm = await ok<{ channel: string }>("campflare.huddles.info", { channel: bob.id }, w.owner.token)
+    expect(dm.channel).toMatch(/^D/)
+    await join(w, bob.id)
+    expect(await ok("campflare.huddles.info", { channel: w.owner.id }, bob.token)).toMatchObject({
+      channel: dm.channel,
+      participants: [{ user: w.owner.id }],
+    })
+    expect(await ok("campflare.huddles.leave", { channel: "#general" }, w.owner.token)).toEqual({
+      ok: true,
+      left: true,
+    })
+    await expectError(
+      "campflare.huddles.join",
+      { channel: "#nowhere", sdp: OFFER, mid: "0" },
+      w.owner.token,
+      "channel_not_found",
+    )
+  })
+})
