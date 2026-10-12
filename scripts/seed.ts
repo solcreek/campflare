@@ -65,10 +65,12 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
     (await call<{ channel: { id: string } }>("conversations.create", { name }, me)).channel.id
   const dev = await create("dev")
   const random = await create("random")
+  const world = await create("world")
   await call("conversations.setTopic", { channel: dev, topic: "Campflare: the Slack API on Cloudflare" }, me)
   for (const p of [vincent, minjun, ada]) {
     await call("conversations.join", { channel: dev }, p.token)
     await call("conversations.join", { channel: random }, p.token)
+    await call("conversations.join", { channel: world }, p.token)
   }
 
   const post = async (token: string, channel: string, text: string, extra: Record<string, unknown> = {}) =>
@@ -86,10 +88,21 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
   await call("reactions.add", { channel: dev, timestamp: question, name: "eyes" }, me)
   await call("reactions.add", { channel: dev, timestamp: question, name: "eyes" }, vincent.token)
   await post(ci.bot_token, dev, "✅ build #128 passed on main (2m 14s)")
-  await post(minjun.token, dev, "部署失敗的原因找到了，是 migration 重複執行")
   await post(vincent.token, random, "Anyone up for lunch? 🍜")
   const lunch = await post(ada.token, random, "Count me in")
   await call("reactions.add", { channel: random, timestamp: lunch, name: "raised_hands" }, minjun.token)
+  // One greeting per language, so clients and search get exercised across scripts.
+  await call("conversations.setPurpose", { channel: world, purpose: "Messages in many languages" }, me)
+  const greetings: [string, string][] = [
+    [me, "Good morning, everyone"],
+    [minjun.token, "좋은 아침입니다, 여러분"],
+    [ada.token, "皆さん、おはようございます"],
+    [vincent.token, "大家早安"],
+    [minjun.token, "Buenos días a todos"],
+    [ada.token, "Bonjour à tous"],
+    [vincent.token, "Guten Morgen zusammen"],
+  ]
+  for (const [token, text] of greetings) await post(token, world, text)
   const owner = await call<{ user_id: string }>("auth.test", {}, me)
   await post(vincent.token, owner.user_id, "Hey, can you review my PR when you get a chance?")
   const group = await call<{ channel: { id: string } }>("conversations.open", { users: `${vincent.id},${ada.id}` }, me)
@@ -101,6 +114,6 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
     appToken: app.app_token,
     botToken: app.bot_token,
     people: Object.fromEntries(Object.entries(people).map(([k, v]) => [k, v.token])),
-    channels: { general, dev, random },
+    channels: { general, dev, random, world },
   }
 }
