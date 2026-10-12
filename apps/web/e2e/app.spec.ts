@@ -220,4 +220,23 @@ test("signs in through the browser: the server's sign-in and consent, then back 
       .getByRole("article", { name: new RegExp(`^Zoé Hayashi ${run} `) })
       .filter({ hasText: text }),
   ).toBeVisible()
+
+  // Signing out revokes the token the sign-in gave the app, not just forgets it.
+  const kept = JSON.parse((await page.evaluate(() => localStorage.getItem("campflare.session")))!) as {
+    token: string
+    via: string
+  }
+  expect(kept.via).toBe("oauth")
+  const authTest = async (token: string) =>
+    (await (
+      await fetch(`${stack.apiUrl}/api/auth.test`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
+    ).json()) as { ok: boolean; error?: string }
+  expect((await authTest(kept.token)).ok).toBe(true)
+  await page.getByRole("button", { name: / menu$/ }).click()
+  await page.getByRole("menuitem", { name: "Sign out" }).click()
+  await expect(page.getByRole("heading", { name: "Sign in to Campflare" })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("campflare.session"))).toBeNull()
+  expect(await authTest(kept.token)).toMatchObject({ ok: false, error: "token_revoked" })
+  // The person's own token, from before the browser sign-in, still works.
+  expect((await authTest(created.token)).ok).toBe(true)
 })
