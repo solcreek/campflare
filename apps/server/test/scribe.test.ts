@@ -5,9 +5,10 @@ import { Args } from "../src/api/args"
 import { methods, type Actor, type Ctx } from "../src/api/context"
 import { encodePacket } from "../src/huddle/audio"
 import { setSfuFetch } from "../src/huddle/methods"
-import { setSpeechFetch } from "../src/huddle/scribe"
+import { setSpeechFetch, setSummaryFetch } from "../src/huddle/scribe"
 import { fakeSfu, type FakeSfu } from "./fake-sfu"
 import exchanges from "./fixtures/sfu/exchanges.json"
+import summaries from "./fixtures/speech/summaries.json"
 import whisper from "./fixtures/speech/whisper.json"
 import { call, connect, expectError, ok, workspace, type Workspace } from "./helpers"
 
@@ -23,7 +24,14 @@ const heard = (lang: string) => WHISPER.find((w) => w.lang === lang)!.response
 let sfu: FakeSfu
 let speechCalls: number
 let answer: unknown
+let summaryCalls: { messages: { role: string; content: string }[] }[]
+const SUMMARY = (summaries as { name: string; response: unknown }[]).find((r) => r.name === "Japanese")!.response
 beforeEach(() => {
+  summaryCalls = []
+  setSummaryFetch((async (_url: RequestInfo | URL, init?: RequestInit) => {
+    summaryCalls.push(JSON.parse(String(init?.body)))
+    return Response.json(SUMMARY)
+  }) as typeof fetch)
   sfu = fakeSfu()
   setSfuFetch(sfu.fetch)
   speechCalls = 0
@@ -36,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   setSfuFetch(undefined)
   setSpeechFetch(undefined)
+  setSummaryFetch(undefined)
 })
 
 const join = (who: { token: string }, channel: string) =>
@@ -250,5 +259,56 @@ describe("campflare.huddles.transcribe", () => {
       (await SELF.fetch(endpoint.replace(/\.[0-9a-f]+$/, ".00"), { headers: { upgrade: "websocket" } })).status,
     ).toBe(401)
     expect((await call("api.test")).ok).toBe(true)
+  })
+
+  it("summarises the call in its thread when transcription stops, after its last words", async () => {
+    const w = await workspace()
+    await join(owner(w), w.general)
+    const on = await ok<{ thread_ts: string }>("campflare.huddles.transcribe", { channel: w.general }, w.owner.token)
+    const ws = await stream([...sfu.adapters.values()][0]!.endpoint)
+    for (const p of [...packets(1000, 8000), ...packets(1000, 0, 50)]) ws.send(p)
+    await eventually(() => speechCalls === 1)
+    // Still speaking when it's turned off: those words are transcribed too, before the summary.
+    for (const p of packets(800, 8000, 100)) ws.send(p)
+    await new Promise((r) => setTimeout(r, 100))
+    await ok("campflare.huddles.transcribe", { channel: w.general, enabled: false }, w.owner.token)
+
+    const thread = await eventually(async () => {
+      const t = await ok<Replies>("conversations.replies", { channel: w.general, ts: on.thread_ts }, w.owner.token)
+      return t.messages.length === 4 ? t : undefined
+    })
+    const [, first, last, summary] = thread.messages
+    expect(first!.metadata?.event_type).toBe("huddle_transcript")
+    expect(last!.metadata?.event_type).toBe("huddle_transcript")
+    expect(summary!.text).toMatch(/^:memo: \*Summary\*\n/)
+    expect(summary!.text).toContain("木曜日")
+    expect(summary!.metadata).toEqual({
+      event_type: "huddle_summary",
+      event_payload: { text: expect.stringContaining("木曜日"), lines: 2, language: "ja" },
+    })
+    // The model was told the call's language, and given who said what.
+    expect(summaryCalls).toHaveLength(1)
+    expect(summaryCalls[0]!.messages[0]!.content).toContain("Write in Japanese")
+    expect(summaryCalls[0]!.messages[1]!.content).toMatch(/^Olive Owner: /)
+  })
+
+  it("summarises when the last person leaves, and not at all if nobody spoke", async () => {
+    const w = await workspace()
+    await join(owner(w), w.general)
+    await ok("campflare.huddles.transcribe", { channel: w.general }, w.owner.token)
+    await ok("campflare.huddles.transcribe", { channel: w.general, enabled: false }, w.owner.token)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(summaryCalls).toHaveLength(0)
+
+    const on = await ok<{ thread_ts: string }>("campflare.huddles.transcribe", { channel: w.general }, w.owner.token)
+    const ws = await stream([...sfu.adapters.values()].at(-1)!.endpoint)
+    for (const p of [...packets(1000, 8000), ...packets(1000, 0, 50)]) ws.send(p)
+    await eventually(() => speechCalls === 1)
+    await ok("campflare.huddles.leave", { channel: w.general }, w.owner.token)
+    const summary = await eventually(async () => {
+      const t = await ok<Replies>("conversations.replies", { channel: w.general, ts: on.thread_ts }, w.owner.token)
+      return t.messages.find((m) => m.metadata?.event_type === "huddle_summary")
+    })
+    expect(summary.metadata?.event_payload).toMatchObject({ lines: 1 })
   })
 })
