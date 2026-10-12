@@ -6,6 +6,8 @@ export interface Io {
   stderr(text: string): void
   /** Piped input, or undefined when stdin is a terminal. */
   stdin(): Promise<string | undefined>
+  /** Asks at the terminal without echoing what's typed (for passwords); absent without one. */
+  secret?(prompt: string): Promise<string>
   env: Record<string, string | undefined>
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>
   readConfig(): Promise<string | undefined>

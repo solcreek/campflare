@@ -8,6 +8,39 @@ import { run } from "./run"
 
 const configPath = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "campflare", "config.json")
 
+/** A line typed at the terminal, not echoed: raw mode, so we see each key and print nothing. */
+function readHidden(prompt: string): Promise<string> {
+  const stdin = process.stdin
+  process.stderr.write(prompt)
+  stdin.setRawMode(true)
+  stdin.setEncoding("utf8")
+  stdin.resume()
+  return new Promise((resolve) => {
+    let line = ""
+    const done = () => {
+      stdin.off("data", onData)
+      stdin.setRawMode(false)
+      stdin.pause()
+      process.stderr.write("\n")
+    }
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === "\r" || char === "\n" || char === "\u0004") {
+          done()
+          return resolve(line)
+        }
+        if (char === "\u0003") {
+          done()
+          process.exit(130)
+        }
+        if (char === "\u007f" || char === "\b") line = [...line].slice(0, -1).join("")
+        else line += char
+      }
+    }
+    stdin.on("data", onData)
+  })
+}
+
 const io: Io = {
   stdout: (text) => void process.stdout.write(text),
   stderr: (text) => void process.stderr.write(text),
@@ -17,6 +50,7 @@ const io: Io = {
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
     return Buffer.concat(chunks).toString("utf8")
   },
+  secret: process.stdin.isTTY ? readHidden : undefined,
   env: process.env,
   readFile: async (path) => new Uint8Array(await readFile(path)),
   readConfig: () => readFile(configPath, "utf8").catch(() => undefined),
