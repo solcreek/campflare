@@ -25,7 +25,7 @@ const ANSWER = recorded.find(
 type Joined = {
   session_id: string
   sdp: string
-  participants: { user: string; session_id: string; track_name: string }[]
+  participants: { user: string; session_id: string; tracks: { name: string; kind: string; rids?: string[] }[] }[]
 }
 type Subscribed = { session_id: string; sdp: string; tracks: { mid: string; session_id: string; track_name: string }[] }
 
@@ -59,7 +59,7 @@ describe("campflare.huddles", () => {
       tracks: [{ location: "local", mid: "0", trackName: "audio" }],
     })
     expect(await ok("campflare.huddles.info", { channel: w.general }, w.owner.token)).toMatchObject({
-      participants: [{ user: w.owner.id, session_id: res.session_id, track_name: "audio" }],
+      participants: [{ user: w.owner.id, session_id: res.session_id, tracks: [{ name: "audio", kind: "audio" }] }],
     })
   })
 
@@ -73,7 +73,7 @@ describe("campflare.huddles", () => {
       channel: w.general,
       user: w.owner.id,
       session_id: joined.session_id,
-      track_name: "audio",
+      tracks: [{ name: "audio", kind: "audio" }],
     })
     expect(await ok("campflare.huddles.leave", { channel: w.general }, w.owner.token)).toEqual({ ok: true, left: true })
     expect(await link.next((f) => f.type === "huddle_left")).toMatchObject({
@@ -358,6 +358,198 @@ describe("the /huddle page", () => {
     const script = await SELF.fetch("https://campflare.test/huddle.js")
     expect(script.headers.get("content-type")).toContain("text/javascript")
     expect(await script.text()).toContain("campflare.huddles.join")
+  })
+})
+
+const CAMERA = { mid: "1", track_name: "camera", kind: "video", rids: ["f", "h", "q"] }
+const MIC = { mid: "0", track_name: "audio", kind: "audio" }
+
+describe("video and many people", () => {
+  it("joins with a microphone and a simulcast camera at once", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const alex = await join(w, w.general, { mid: undefined, tracks: [MIC, CAMERA] })
+    expect(sfu.calls[1]!.body).toMatchObject({
+      tracks: [
+        { location: "local", mid: "0", trackName: "audio" },
+        { location: "local", mid: "1", trackName: "camera" },
+      ],
+    })
+    const bobs = await join(bob, w.general)
+    expect(bobs.participants[0]!.tracks).toEqual([
+      { name: "audio", kind: "audio" },
+      { name: "camera", kind: "video", rids: ["f", "h", "q"] },
+    ])
+    // A layer per subscription: the speaker's camera in full, say.
+    const sub = await ok<Subscribed>(
+      "campflare.huddles.subscribe",
+      {
+        channel: w.general,
+        publications: [
+          { session_id: alex.session_id, track_name: "audio" },
+          { session_id: alex.session_id, track_name: "camera", rid: "f" },
+        ],
+      },
+      bob.token,
+    )
+    expect(sub.tracks.map((t) => [t.track_name, t.mid])).toEqual([
+      ["audio", "0"],
+      ["camera", "1"],
+    ])
+    expect(sfu.subscriptions.get(`${sub.session_id}/1`)?.simulcast).toEqual({
+      preferredRid: "f",
+      priorityOrdering: "none",
+      ridNotAvailable: "asciibetical",
+    })
+
+    // Then down to the quarter layer, in place.
+    await ok(
+      "campflare.huddles.layer",
+      {
+        channel: w.general,
+        session_id: sub.session_id,
+        mid: "1",
+        publisher_session_id: alex.session_id,
+        track_name: "camera",
+        rid: "q",
+      },
+      bob.token,
+    )
+    expect(sfu.subscriptions.get(`${sub.session_id}/1`)?.simulcast).toMatchObject({ preferredRid: "q" })
+    expect(sfu.calls.at(-1)).toMatchObject({ method: "PUT", path: expect.stringContaining("/tracks/update") })
+  })
+
+  it("refuses layers a track doesn't offer, and subscriptions that don't exist", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const alex = await join(w, w.general, { mid: undefined, tracks: [MIC, CAMERA] })
+    const camera = { session_id: alex.session_id, track_name: "camera" }
+    await expectError(
+      "campflare.huddles.subscribe",
+      { channel: w.general, publications: [{ ...camera, rid: "x" }] },
+      bob.token,
+      "huddle_layer_not_found",
+    )
+    await expectError(
+      "campflare.huddles.subscribe",
+      { channel: w.general, publications: [{ session_id: alex.session_id, track_name: "audio", rid: "f" }] },
+      bob.token,
+      "huddle_layer_not_found",
+    )
+    const sub = await ok<Subscribed>(
+      "campflare.huddles.subscribe",
+      { channel: w.general, publications: [{ ...camera, rid: "h" }] },
+      bob.token,
+    )
+    const layer = {
+      channel: w.general,
+      session_id: sub.session_id,
+      publisher_session_id: alex.session_id,
+      track_name: "camera",
+    }
+    // The SFU's own answer for a mid with no subscription: its recorded per-track error.
+    expect(await call("campflare.huddles.layer", { ...layer, mid: "7", rid: "q" }, bob.token)).toMatchObject({
+      error: "huddle_media_error",
+      detail: "internal_error",
+    })
+    await expectError("campflare.huddles.layer", { ...layer, mid: "0", rid: "z" }, bob.token, "huddle_layer_not_found")
+    await expectError(
+      "campflare.huddles.layer",
+      { ...layer, mid: "0", rid: "q" },
+      w.owner.token,
+      "huddle_session_not_found",
+    )
+  })
+
+  it("turns a camera on and off mid-call, telling everyone", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const link = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await link.next((f) => f.type === "hello")
+    const alex = await join(w, w.general)
+    await link.next((f) => f.type === "huddle_joined")
+
+    const on = await ok<{ sdp: string; tracks: string[] }>(
+      "campflare.huddles.publish",
+      { channel: w.general, sdp: OFFER, tracks: [CAMERA] },
+      w.owner.token,
+    )
+    expect(on.sdp).toMatch(/^v=0/)
+    expect(on.tracks).toEqual(["audio", "camera"])
+    // Same publishing session: the browser renegotiated its existing connection.
+    expect(sfu.calls.at(-1)).toMatchObject({ path: expect.stringContaining(`/sessions/${alex.session_id}/tracks/new`) })
+    expect(await link.next((f) => f.type === "huddle_tracks")).toMatchObject({
+      user: w.owner.id,
+      tracks: [{ name: "audio" }, { name: "camera", kind: "video", rids: ["f", "h", "q"] }],
+    })
+    await expectError(
+      "campflare.huddles.publish",
+      { channel: w.general, sdp: OFFER, tracks: [CAMERA] },
+      w.owner.token,
+      "invalid_arguments",
+    )
+
+    const off = await ok<{ tracks: string[] }>(
+      "campflare.huddles.unpublish",
+      { channel: w.general, track_names: "camera" },
+      w.owner.token,
+    )
+    expect(off.tracks).toEqual(["audio"])
+    expect(sfu.calls.at(-1)).toMatchObject({ body: { tracks: [{ mid: "1" }], force: true } })
+    expect(await link.next((f) => f.type === "huddle_tracks")).toMatchObject({ tracks: [{ name: "audio" }] })
+    await expectError(
+      "campflare.huddles.unpublish",
+      { channel: w.general, track_names: "camera" },
+      w.owner.token,
+      "huddle_track_not_found",
+    )
+    await expectError("campflare.huddles.unpublish", { channel: w.general }, w.owner.token, "huddle_track_not_found")
+    // Not in the call: nothing to add to or take from.
+    await expectError(
+      "campflare.huddles.publish",
+      { channel: w.general, sdp: OFFER, tracks: [CAMERA] },
+      bob.token,
+      "huddle_not_joined",
+    )
+    await expectError(
+      "campflare.huddles.unpublish",
+      { channel: w.general, track_names: "audio" },
+      bob.token,
+      "huddle_not_joined",
+    )
+    link.close()
+  })
+
+  it("lets several people into one call, each seeing everyone before them", async () => {
+    const w = await workspace()
+    const people = [{ id: w.owner.id, token: w.owner.token }]
+    for (const name of ["bob", "carol", "dave", "erin"]) people.push(await w.addUser(name))
+    const seen: number[] = []
+    for (const p of people)
+      seen.push((await join(p, w.general, { mid: undefined, tracks: [MIC, CAMERA] })).participants.length)
+    expect(seen).toEqual([0, 1, 2, 3, 4])
+    const info = await ok<{ participants: { user: string }[] }>(
+      "campflare.huddles.info",
+      { channel: w.general },
+      w.owner.token,
+    )
+    expect(info.participants.map((p) => p.user)).toEqual(people.map((p) => p.id))
+  })
+
+  it("validates the tracks offered", async () => {
+    const w = await workspace()
+    const bad = (tracks: unknown) =>
+      expectError(
+        "campflare.huddles.join",
+        { channel: w.general, sdp: OFFER, tracks },
+        w.owner.token,
+        "invalid_arguments",
+      )
+    await bad([])
+    await bad([{ mid: "0", track_name: "a b", kind: "audio" }])
+    await bad([{ mid: "0", track_name: "screen", kind: "screen" }])
+    await bad([{ mid: "0", track_name: "cam", kind: "video", rids: ["f", 1] }])
+    await bad([MIC, { ...MIC, mid: "1" }])
   })
 })
 

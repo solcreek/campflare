@@ -56,15 +56,27 @@ export interface PollResult {
   error?: "invalid_cursor" | "cursor_expired"
 }
 
-export interface HuddleParticipant {
+/** One thing a seat publishes: a microphone, a camera. */
+export interface HuddleTrack {
+  name: string
+  kind: "audio" | "video"
+  /** Its transceiver in the publisher's connection. */
+  mid: string
+  /** Simulcast encodings it offers, best first by name (f, h, q). */
+  rids?: string[]
+}
+
+export interface HuddleSeat {
   channel_id: string
   user_id: string
-  /** The SFU session that publishes their audio. */
+  /** The SFU session that publishes their tracks. */
   session_id: string
-  track_name: string
-  mid: string
+  tracks: HuddleTrack[]
   joined: number
 }
+
+type SeatRow = Omit<HuddleSeat, "tracks"> & { tracks: string }
+const seatOf = (row: SeatRow): HuddleSeat => ({ ...row, tracks: JSON.parse(row.tracks) as HuddleTrack[] })
 
 export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 /** Socket Mode: how long an envelope waits for its ack before it's sent again, and how often. */
@@ -89,12 +101,13 @@ export class TeamHub extends DurableObject<Env> {
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS events_at ON events (at)")
     // Huddles (experiment): who is in each conversation's call, publishing what,
     // and which SFU sessions belong to whom.
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS huddle_participants (
+    // Step 1 kept one audio track per seat; a seat now holds several (audio, camera…).
+    ctx.storage.sql.exec("DROP TABLE IF EXISTS huddle_participants")
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS huddle_seats (
       channel_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
-      track_name TEXT NOT NULL,
-      mid TEXT NOT NULL,
+      tracks TEXT NOT NULL,
       joined INTEGER NOT NULL,
       PRIMARY KEY (channel_id, user_id)
     )`)
@@ -356,37 +369,58 @@ export class TeamHub extends DurableObject<Env> {
   }
 
   /** Huddles: someone starts publishing in a conversation's call (replacing their earlier seat, if any). */
-  async huddleJoin(p: HuddleParticipant): Promise<{ previous?: HuddleParticipant; others: HuddleParticipant[] }> {
-    const previous = this.huddleSeat(p.channel_id, p.user_id)
+  async huddleJoin(seat: HuddleSeat): Promise<{ previous?: HuddleSeat; others: HuddleSeat[] }> {
+    const previous = await this.huddleSeat(seat.channel_id, seat.user_id)
     this.ctx.storage.sql.exec(
-      `INSERT OR REPLACE INTO huddle_participants (channel_id, user_id, session_id, track_name, mid, joined)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      p.channel_id,
-      p.user_id,
-      p.session_id,
-      p.track_name,
-      p.mid,
-      p.joined,
+      "INSERT OR REPLACE INTO huddle_seats (channel_id, user_id, session_id, tracks, joined) VALUES (?, ?, ?, ?, ?)",
+      seat.channel_id,
+      seat.user_id,
+      seat.session_id,
+      JSON.stringify(seat.tracks),
+      seat.joined,
     )
-    this.huddleOwn(p.session_id, p.user_id, p.channel_id, "publish")
-    const others = (await this.huddleList(p.channel_id)).filter((o) => o.user_id !== p.user_id)
+    await this.huddleOwn(seat.session_id, seat.user_id, seat.channel_id, "publish")
+    const others = (await this.huddleList(seat.channel_id)).filter((o) => o.user_id !== seat.user_id)
     return { ...(previous ? { previous } : {}), others }
   }
 
-  async huddleLeave(channelId: string, userId: string): Promise<HuddleParticipant | undefined> {
-    const seat = this.huddleSeat(channelId, userId)
-    this.ctx.storage.sql.exec("DELETE FROM huddle_participants WHERE channel_id = ? AND user_id = ?", channelId, userId)
+  /** Replaces what a seat publishes (a camera turned on or off). */
+  async huddleSetTracks(channelId: string, userId: string, tracks: HuddleTrack[]): Promise<HuddleSeat | undefined> {
+    this.ctx.storage.sql.exec(
+      "UPDATE huddle_seats SET tracks = ? WHERE channel_id = ? AND user_id = ?",
+      JSON.stringify(tracks),
+      channelId,
+      userId,
+    )
+    return this.huddleSeat(channelId, userId)
+  }
+
+  async huddleLeave(channelId: string, userId: string): Promise<HuddleSeat | undefined> {
+    const seat = await this.huddleSeat(channelId, userId)
+    this.ctx.storage.sql.exec("DELETE FROM huddle_seats WHERE channel_id = ? AND user_id = ?", channelId, userId)
     this.ctx.storage.sql.exec("DELETE FROM huddle_sessions WHERE channel_id = ? AND user_id = ?", channelId, userId)
     return seat
   }
 
-  async huddleList(channelId: string): Promise<HuddleParticipant[]> {
+  async huddleList(channelId: string): Promise<HuddleSeat[]> {
     return this.ctx.storage.sql
-      .exec<HuddleParticipant & Record<string, SqlStorageValue>>(
-        "SELECT * FROM huddle_participants WHERE channel_id = ? ORDER BY joined",
+      .exec<SeatRow & Record<string, SqlStorageValue>>(
+        "SELECT * FROM huddle_seats WHERE channel_id = ? ORDER BY joined",
         channelId,
       )
       .toArray()
+      .map(seatOf)
+  }
+
+  async huddleSeat(channelId: string, userId: string): Promise<HuddleSeat | undefined> {
+    const row = this.ctx.storage.sql
+      .exec<SeatRow & Record<string, SqlStorageValue>>(
+        "SELECT * FROM huddle_seats WHERE channel_id = ? AND user_id = ?",
+        channelId,
+        userId,
+      )
+      .toArray()[0]
+    return row ? seatOf(row) : undefined
   }
 
   /** Records which user may act on an SFU session. */
@@ -405,16 +439,6 @@ export class TeamHub extends DurableObject<Env> {
       .exec<{ user_id: string; channel_id: string; kind: string }>(
         "SELECT user_id, channel_id, kind FROM huddle_sessions WHERE session_id = ?",
         sessionId,
-      )
-      .toArray()[0]
-  }
-
-  private huddleSeat(channelId: string, userId: string): HuddleParticipant | undefined {
-    return this.ctx.storage.sql
-      .exec<HuddleParticipant & Record<string, SqlStorageValue>>(
-        "SELECT * FROM huddle_participants WHERE channel_id = ? AND user_id = ?",
-        channelId,
-        userId,
       )
       .toArray()[0]
   }

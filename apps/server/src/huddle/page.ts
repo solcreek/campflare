@@ -87,7 +87,9 @@ async function receive(publications) {
   const fresh = publications.filter((p) => p.user !== state.me)
   if (!fresh.length) return
   await serially(async () => {
-    const sub = await api("campflare.huddles.subscribe", { channel: state.channel, session_id: state.recvSession ?? undefined, publications: fresh.map((p) => ({ session_id: p.session_id, track_name: p.track_name })) })
+    const wanted = fresh.flatMap((p) => p.tracks.filter((t) => t.kind === "audio").map((t) => ({ session_id: p.session_id, track_name: t.name })))
+    if (!wanted.length) return
+    const sub = await api("campflare.huddles.subscribe", { channel: state.channel, session_id: state.recvSession ?? undefined, publications: wanted })
     state.recvSession = sub.session_id
     for (const t of sub.tracks) state.midToUser.set(t.mid, fresh.find((p) => p.session_id === t.session_id)?.user)
     await state.recv.setRemoteDescription({ type: "offer", sdp: sub.sdp })
