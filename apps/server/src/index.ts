@@ -27,6 +27,21 @@ export { TeamHub } from "./hub"
 const app = new Hono<{ Bindings: Env }>()
 
 app.use("/api/*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type"], maxAge: 86_400 }))
+// Browser apps fetch url_private with their Bearer token (as Slack clients do) and
+// show the bytes as a blob: URL, since <img src> can't send a header. Credentials
+// are never cookies, so any origin may ask; it still needs the token.
+app.use(
+  "/files-pri/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "HEAD"],
+    allowHeaders: ["Authorization", "Range", "If-None-Match", "If-Modified-Since"],
+    exposeHeaders: ["Content-Disposition", "Content-Length", "Content-Range", "ETag"],
+    maxAge: 86_400,
+  }),
+)
+// client.upload() POSTs the bytes with its Authorization header too; the URL itself is the capability.
+app.use("/upload/v1/*", cors({ origin: "*", allowMethods: ["POST"], allowHeaders: ["Authorization", "Content-Type"] }))
 
 app.get("/", (c) => c.json({ name: "campflare", api: `${new URL(c.req.url).origin}/api/` }))
 
