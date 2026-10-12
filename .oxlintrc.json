@@ -14,7 +14,13 @@
       }
     ],
     "typescript/no-explicit-any": "error",
-    "import/no-unassigned-import": "off"
+    "import/no-unassigned-import": "off",
+    "vitest/expect-expect": [
+      "error",
+      {
+        "assertFunctionNames": ["expect", "expectError", "ok"]
+      }
+    ]
   },
   "ignorePatterns": ["dist/**", ".wrangler/**", "**/worker-configuration.d.ts"]
 }

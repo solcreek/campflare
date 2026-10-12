@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "campflare",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-20",
+  "compatibility_date": "2026-08-15",
   "observability": { "enabled": true },
   "d1_databases": [
     {
