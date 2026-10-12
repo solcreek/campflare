@@ -1,0 +1,13 @@
+{
+  "name": "@campflare/live",
+  "private": true,
+  "description": "Tests against real Cloudflare services. Opt-in: pnpm test:live, with credentials in apps/server/.dev.vars.",
+  "type": "module",
+  "scripts": {
+    "test:live": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "werift": "0.24.4"
+  }
+}

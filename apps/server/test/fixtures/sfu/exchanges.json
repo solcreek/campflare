@@ -1,0 +1,143 @@
+[
+  {
+    "operation": "POST /sessions/new",
+    "status": 201,
+    "response": {
+      "sessionId": "a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5"
+    }
+  },
+  {
+    "operation": "POST /sessions/{id}/tracks/new",
+    "request": {
+      "sessionDescription": {
+        "type": "offer",
+        "sdp": "v=0\r\no=- 99233370 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic:WMS *\r\nm=audio 9 UDP/TLS/RTP/SAVPF 96 0\r\nc=IN IP4 192.0.2.1\r\na=candidate:0723bf7dbd3da8145ab8b9f83 1 udp 2116026367 192.0.2.1 54832 typ host generation 0 ufrag cdab\r\na=candidate:4d8cad13dbab837f05aad488d 1 udp 2116026367 2001:db8::1 63424 typ host generation 0 ufrag cdab\r\na=candidate:9ae871aacb19657960692eadb 1 udp 1679818751 192.0.2.1 54832 typ srflx raddr 192.0.2.1 rport 54832\r\na=candidate:cc243f8403fb0eb62d1dada8d 1 udp 16777215 192.0.2.1 19937 typ relay raddr 192.0.2.1 rport 61736 generation 0 ufrag cdab\r\na=end-of-candidates\r\na=ice-ufrag:cdab\r\na=ice-pwd:164dd570559471e510fd53\r\na=ice-options:trickle\r\na=fingerprint:sha-256 A3:4D:01:95:48:E1:57:65:75:34:87:D2:DE:69:1C:01:A8:93:30:6A:A0:66:EC:E8:33:A2:B0:FE:20:EF:D9:91\r\na=setup:actpass\r\na=sendonly\r\na=mid:0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=rtcp-mux\r\na=ssrc:1475306484 cname:d5803787-3a0c-4daf-a282-a017e3653290\r\na=rtpmap:96 OPUS/48000/2\r\na=rtpmap:0 PCMU/8000\r\n"
+      },
+      "tracks": [
+        {
+          "location": "local",
+          "mid": "0",
+          "trackName": "audio"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "0",
+          "trackName": "audio"
+        }
+      ],
+      "sessionDescription": {
+        "sdp": "v=0\r\no=- 6375722411430395391 1791782503 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=msid-semantic:WMS*\r\na=fingerprint:sha-256 93:95:4F:08:91:0D:96:8E:A6:88:C8:A3:96:3F:14:14:98:01:0B:64:B5:35:A5:1D:1C:BE:FB:72:89:85:46:37\r\na=ice-lite\r\na=extmap-allow-mixed\r\na=group:BUNDLE 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 96 0\r\nc=IN IP4 192.0.2.1\r\na=setup:passive\r\na=mid:0\r\na=ice-ufrag:a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5\r\na=ice-pwd:PTYdQppNpAIRnJkawQnPUesdgkATbEFz\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 OPUS/48000/2\r\na=rtpmap:0 PCMU/8000\r\na=recvonly\r\na=candidate:513273236 1 udp 2130706431 192.0.2.1 1473 typ host\r\na=candidate:513273236 2 udp 2130706431 192.0.2.1 1473 typ host\r\na=end-of-candidates\r\n",
+        "type": "answer"
+      }
+    }
+  },
+  {
+    "operation": "POST /sessions/new",
+    "status": 201,
+    "response": {
+      "sessionId": "7d8e34e8ee9b03876aefcb3fb35e651a3038d5faa71004b7f44cdb196867d1d9"
+    }
+  },
+  {
+    "operation": "POST /sessions/{id}/tracks/new",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "sessionId": "a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5",
+          "trackName": "audio"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": true,
+      "tracks": [
+        {
+          "sessionId": "a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5",
+          "trackName": "audio",
+          "mid": "0"
+        }
+      ],
+      "sessionDescription": {
+        "sdp": "v=0\r\no=- 4922992054974378841 1791782503 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=msid-semantic:WMS*\r\na=fingerprint:sha-256 76:6F:85:C4:12:28:45:5C:76:31:5F:33:71:7E:BB:D6:A6:E0:55:20:94:FB:F0:59:93:C8:2F:2A:C5:8C:4A:4E\r\na=ice-lite\r\na=extmap-allow-mixed\r\na=group:BUNDLE 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111 0 8\r\nc=IN IP4 192.0.2.1\r\na=setup:actpass\r\na=mid:0\r\na=ice-ufrag:7d8e34e8ee9b03876aefcb3fb35e651a3038d5faa71004b7f44cdb196867d1d9\r\na=ice-pwd:OTyLBivvgtFTeDUAvxdWuLnwtakEqboF\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtcp-fb:111 transport-cc \r\na=rtpmap:0 PCMU/8000\r\na=rtcp-fb:0 transport-cc \r\na=rtpmap:8 PCMA/8000\r\na=rtcp-fb:8 transport-cc \r\na=extmap:1 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=ssrc:2318989811 cname:yIkvzUPJ\r\na=ssrc:2318989811 msid:yIkvzUPJ EGFRsOOrTCbYFGbT\r\na=ssrc:2318989811 mslabel:yIkvzUPJ\r\na=ssrc:2318989811 label:EGFRsOOrTCbYFGbT\r\na=msid:yIkvzUPJ EGFRsOOrTCbYFGbT\r\na=sendonly\r\na=candidate:513273236 1 udp 2130706431 192.0.2.1 1473 typ host\r\na=candidate:513273236 2 udp 2130706431 192.0.2.1 1473 typ host\r\na=end-of-candidates\r\n",
+        "type": "offer"
+      }
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/renegotiate",
+    "request": {
+      "sessionDescription": {
+        "type": "answer",
+        "sdp": "v=0\r\no=- 69968145 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic:WMS *\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111 0\r\nc=IN IP4 192.0.2.1\r\na=candidate:0723bf7dbd3da8145ab8b9f83 1 udp 2116026367 192.0.2.1 51658 typ host generation 0 ufrag 9db1\r\na=candidate:4d8cad13dbab837f05aad488d 1 udp 2116026367 2001:db8::1 51791 typ host generation 0 ufrag 9db1\r\na=candidate:9ae871aacb19657960692eadb 1 udp 1679818751 192.0.2.1 51658 typ srflx raddr 192.0.2.1 rport 51658\r\na=candidate:db1f32a173aee453d9caecabf 1 udp 16777215 192.0.2.1 40423 typ relay raddr 192.0.2.1 rport 50355 generation 0 ufrag 9db1\r\na=end-of-candidates\r\na=ice-ufrag:9db1\r\na=ice-pwd:339955ac2340c63d814115\r\na=ice-options:trickle\r\na=fingerprint:sha-256 A3:4D:01:95:48:E1:57:65:75:34:87:D2:DE:69:1C:01:A8:93:30:6A:A0:66:EC:E8:33:A2:B0:FE:20:EF:D9:91\r\na=setup:active\r\na=recvonly\r\na=mid:0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=rtcp-mux\r\na=ssrc:1346235177 cname:506f1c46-f6e7-4fd5-9741-91e87d7d34db\r\na=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:0 PCMU/8000\r\na=rtcp-fb:0 transport-cc\r\n"
+      }
+    },
+    "status": 200,
+    "response": {}
+  },
+  {
+    "operation": "POST /sessions/{id}/tracks/new",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "sessionId": "a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5",
+          "trackName": "no-such-track"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "sessionId": "a54dea2674014a27da993a2ae52e3c0fda5cc08ebc29920e89ab3402997f31c5",
+          "trackName": "no-such-track",
+          "mid": "",
+          "errorCode": "not_found_track_error",
+          "errorDescription": "Track not found on remote peer. Make sure the publisher peer is connected and sending packets for this track"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/renegotiate",
+    "request": {
+      "sessionDescription": {
+        "type": "answer",
+        "sdp": "v=0"
+      }
+    },
+    "status": 425,
+    "response": {
+      "errorCode": "session_error",
+      "errorDescription": "Session is not ready yet. Please ensure the PeerConnection is connected before making this request"
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/tracks/close",
+    "request": {
+      "tracks": [
+        {
+          "mid": "0"
+        }
+      ],
+      "force": true
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "0"
+        }
+      ]
+    }
+  }
+]

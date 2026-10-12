@@ -13,6 +13,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "test": "pnpm -r test",
+    "test:live": "pnpm --filter @campflare/live test:live",
     "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
