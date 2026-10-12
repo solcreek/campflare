@@ -89,7 +89,9 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     // Signed in for now, but it won't last past a restart.
     await screen.findByRole("heading", { name: "general", level: 1 })
-    expect(await screen.findByText("Couldn't keep the sign-in: access denied")).toBeTruthy()
+    const notice = await screen.findByText("Couldn't keep the sign-in: access denied")
+    // At the top: at the bottom right a toast covered the composer's Send button.
+    expect(notice.closest("[data-sonner-toaster]")?.getAttribute("data-y-position")).toBe("top")
     act(() => hello())
     await user.click(screen.getByRole("button", { name: /Test Team/ }))
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))

@@ -94,7 +94,8 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
           probeOrigin={origin}
         />
       )}
-      <Toaster />
+      {/* At the top: the composer and its Send button live at the bottom. */}
+      <Toaster position="top-center" />
     </TooltipProvider>
   )
 }
