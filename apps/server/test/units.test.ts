@@ -130,8 +130,9 @@ describe("search syntax", () => {
   it("escapes for FTS and LIKE", () => {
     expect(ftsString('say "hi"')).toBe('"say ""hi"""')
     expect(likePattern("50%_off\\")).toBe("%50\\%\\_off\\\\%")
-    expect(indexable("部署")).toBe(false)
-    expect(indexable("部署了")).toBe(true)
+    // Characters, not bytes or UTF-16 units: CJK, Hangul and accented Latin alike.
+    for (const short of ["東京", "배포", "ño", "é"]) expect(indexable(short)).toBe(false)
+    for (const long of ["東京都", "배포가", "año", "été", "abc"]) expect(indexable(long)).toBe(true)
   })
 })
 
