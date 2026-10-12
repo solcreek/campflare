@@ -210,6 +210,7 @@ that guarantee doesn't hold.
 
 ```sh
 campflare login --url https://chat.example.com --token xoxp-…   # or any Slack-compatible server
+campflare login --url https://chat.example.com --oauth          # Campflare: sign in in the browser
 campflare send '#dev' "build is green"
 campflare send @vincent "have a look" -f screenshot.png
 make test 2>&1 | tail -5 | campflare send @me                  # text from stdin
