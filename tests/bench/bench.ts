@@ -94,6 +94,7 @@ interface Sample {
   ms: number
   queries: number
   rounds: number
+  rowsRead: number
   bytes: number
 }
 
@@ -112,6 +113,7 @@ async function call({ method, args = {}, token }: Call): Promise<Sample> {
     ms,
     queries: Number(res.headers.get("x-bench-d1-queries")),
     rounds: Number(res.headers.get("x-bench-d1-rounds")),
+    rowsRead: Number(res.headers.get("x-bench-d1-rows-read")),
     bytes: text.length,
   }
 }
@@ -138,6 +140,7 @@ interface Result {
   rps?: number
   queries?: number
   rounds?: number
+  rowsRead?: number
   bytes?: number
 }
 
@@ -151,6 +154,7 @@ async function measure(make: (i: number) => Call, { throughput = true } = {}): P
     ...summarise(samples.map((s) => s.ms)),
     queries: round(mean(samples.map((s) => s.queries)), 1),
     rounds: round(mean(samples.map((s) => s.rounds)), 1),
+    rowsRead: Math.round(mean(samples.map((s) => s.rowsRead))),
     bytes: Math.round(mean(samples.map((s) => s.bytes))),
   }
   if (throughput) {
@@ -310,10 +314,11 @@ function table(report: Report, baseline?: Report) {
         ? ""
         : `${r.queries}${b?.queries !== undefined && b.queries !== r.queries ? ` (was ${b.queries})` : ""}`,
       r.rounds === undefined ? "" : String(r.rounds),
+      r.rowsRead === undefined ? "" : `${r.rowsRead}${delta(r.rowsRead, b?.rowsRead)}`,
       r.bytes === undefined ? "" : String(r.bytes),
     ]
   })
-  const header = ["scenario", "p50 ms", "p95 ms", "p99 ms", "req/s", "D1 queries", "D1 rounds", "bytes"]
+  const header = ["scenario", "p50 ms", "p95 ms", "p99 ms", "req/s", "D1 queries", "D1 rounds", "rows read", "bytes"]
   const widths = header.map((h, c) => Math.max(h.length, ...rows.map((r) => r[c]!.length)))
   const line = (cells: string[]) =>
     cells.map((cell, c) => (c === 0 ? cell.padEnd(widths[c]!) : cell.padStart(widths[c]!))).join("  ")
