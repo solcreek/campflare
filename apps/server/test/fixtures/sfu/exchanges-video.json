@@ -1,0 +1,163 @@
+[
+  {
+    "operation": "POST /sessions/new",
+    "status": 201,
+    "response": {
+      "sessionId": "59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad"
+    }
+  },
+  {
+    "operation": "POST /sessions/{id}/tracks/new",
+    "request": {
+      "sessionDescription": {
+        "type": "offer",
+        "sdp": "v=0\r\no=- 3392825712520819987 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 63313 UDP/TLS/RTP/SAVPF 96 97 102 103 104 107 108 109 114 115 116 117 39 40 45 46 98 99 100 101 118 119 49 50 122 123 124\r\nc=IN IP4 192.0.2.1\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=candidate:2678213521 1 udp 2122194687 192.0.2.1 58764 typ host generation 0 network-id 1 network-cost 10\r\na=candidate:1166895794 1 udp 2122063615 192.0.2.1 63313 typ host generation 0 network-id 3 network-cost 50\r\na=candidate:2376099183 1 udp 2121998079 192.0.2.1 49307 typ host generation 0 network-id 4 network-cost 50\r\na=candidate:2317012640 1 udp 2122265343 2001:db8::1 53818 typ host generation 0 network-id 2 network-cost 10\r\na=candidate:4040421748 1 udp 2122134271 2001:db8::1 56364 typ host generation 0 network-id 5 network-cost 50\r\na=candidate:1493357275 1 udp 1685855999 192.0.2.1 63313 typ srflx raddr 192.0.2.1 rport 63313 generation 0 network-id 3 network-cost 50\r\na=candidate:3778834076 1 tcp 1518214911 192.0.2.1 9 typ host tcptype active generation 0 network-id 1 network-cost 10\r\na=candidate:991121343 1 tcp 1518083839 192.0.2.1 9 typ host tcptype active generation 0 network-id 3 network-cost 50\r\na=candidate:4080943202 1 tcp 1518018303 192.0.2.1 9 typ host tcptype active generation 0 network-id 4 network-cost 50\r\na=candidate:4102351789 1 tcp 1518285567 2001:db8::1 9 typ host tcptype active generation 0 network-id 2 network-cost 10\r\na=candidate:2387465337 1 tcp 1518154495 2001:db8::1 9 typ host tcptype active generation 0 network-id 5 network-cost 50\r\na=ice-ufrag:Wu/t\r\na=ice-pwd:+a+T7s0unTpCSpOAZzh+GpZn\r\na=ice-options:trickle\r\na=fingerprint:sha-256 40:8F:D7:20:BF:85:8C:ED:79:4F:79:F6:89:07:6B:AE:5E:5B:E6:60:63:4D:52:1F:83:6F:9E:DA:36:2F:CD:6D\r\na=setup:actpass\r\na=mid:0\r\na=extmap:1 urn:ietf:params:rtp-hdrext:toffset\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 urn:3gpp:video-orientation\r\na=extmap:4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/playout-delay\r\na=extmap:6 http://www.webrtc.org/experiments/rtp-hdrext/video-content-type\r\na=extmap:7 http://www.webrtc.org/experiments/rtp-hdrext/video-timing\r\na=extmap:8 http://www.webrtc.org/experiments/rtp-hdrext/color-space\r\na=extmap:9 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:10 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\r\na=extmap:11 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\r\na=extmap:13 https://aomediacodec.github.io/av1-rtp-spec/#dependency-descriptor-rtp-header-extension\r\na=extmap:14 http://www.webrtc.org/experiments/rtp-hdrext/video-layers-allocation00\r\na=sendonly\r\na=msid:- e9d1ff1f-f0b7-40de-b1b0-a9ab25c3533b\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtcp-xr:rcvr-rtt=all\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=rtpmap:102 H264/90000\r\na=rtcp-fb:102 goog-remb\r\na=rtcp-fb:102 transport-cc\r\na=rtcp-fb:102 ccm fir\r\na=rtcp-fb:102 nack\r\na=rtcp-fb:102 nack pli\r\na=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f\r\na=rtpmap:103 rtx/90000\r\na=fmtp:103 apt=102\r\na=rtpmap:104 H264/90000\r\na=rtcp-fb:104 goog-remb\r\na=rtcp-fb:104 transport-cc\r\na=rtcp-fb:104 ccm fir\r\na=rtcp-fb:104 nack\r\na=rtcp-fb:104 nack pli\r\na=fmtp:104 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f\r\na=rtpmap:107 rtx/90000\r\na=fmtp:107 apt=104\r\na=rtpmap:108 H264/90000\r\na=rtcp-fb:108 goog-remb\r\na=rtcp-fb:108 transport-cc\r\na=rtcp-fb:108 ccm fir\r\na=rtcp-fb:108 nack\r\na=rtcp-fb:108 nack pli\r\na=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\na=rtpmap:109 rtx/90000\r\na=fmtp:109 apt=108\r\na=rtpmap:114 H264/90000\r\na=rtcp-fb:114 goog-remb\r\na=rtcp-fb:114 transport-cc\r\na=rtcp-fb:114 ccm fir\r\na=rtcp-fb:114 nack\r\na=rtcp-fb:114 nack pli\r\na=fmtp:114 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f\r\na=rtpmap:115 rtx/90000\r\na=fmtp:115 apt=114\r\na=rtpmap:116 H264/90000\r\na=rtcp-fb:116 goog-remb\r\na=rtcp-fb:116 transport-cc\r\na=rtcp-fb:116 ccm fir\r\na=rtcp-fb:116 nack\r\na=rtcp-fb:116 nack pli\r\na=fmtp:116 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f\r\na=rtpmap:117 rtx/90000\r\na=fmtp:117 apt=116\r\na=rtpmap:39 H264/90000\r\na=rtcp-fb:39 goog-remb\r\na=rtcp-fb:39 transport-cc\r\na=rtcp-fb:39 ccm fir\r\na=rtcp-fb:39 nack\r\na=rtcp-fb:39 nack pli\r\na=fmtp:39 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f\r\na=rtpmap:40 rtx/90000\r\na=fmtp:40 apt=39\r\na=rtpmap:45 AV1/90000\r\na=rtcp-fb:45 goog-remb\r\na=rtcp-fb:45 transport-cc\r\na=rtcp-fb:45 ccm fir\r\na=rtcp-fb:45 nack\r\na=rtcp-fb:45 nack pli\r\na=fmtp:45 level-idx=5;profile=0;tier=0\r\na=rtpmap:46 rtx/90000\r\na=fmtp:46 apt=45\r\na=rtpmap:98 VP9/90000\r\na=rtcp-fb:98 goog-remb\r\na=rtcp-fb:98 transport-cc\r\na=rtcp-fb:98 ccm fir\r\na=rtcp-fb:98 nack\r\na=rtcp-fb:98 nack pli\r\na=fmtp:98 profile-id=0\r\na=rtpmap:99 rtx/90000\r\na=fmtp:99 apt=98\r\na=rtpmap:100 VP9/90000\r\na=rtcp-fb:100 goog-remb\r\na=rtcp-fb:100 transport-cc\r\na=rtcp-fb:100 ccm fir\r\na=rtcp-fb:100 nack\r\na=rtcp-fb:100 nack pli\r\na=fmtp:100 profile-id=2\r\na=rtpmap:101 rtx/90000\r\na=fmtp:101 apt=100\r\na=rtpmap:118 H264/90000\r\na=rtcp-fb:118 goog-remb\r\na=rtcp-fb:118 transport-cc\r\na=rtcp-fb:118 ccm fir\r\na=rtcp-fb:118 nack\r\na=rtcp-fb:118 nack pli\r\na=fmtp:118 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f\r\na=rtpmap:119 rtx/90000\r\na=fmtp:119 apt=118\r\na=rtpmap:49 H265/90000\r\na=rtcp-fb:49 goog-remb\r\na=rtcp-fb:49 transport-cc\r\na=rtcp-fb:49 ccm fir\r\na=rtcp-fb:49 nack\r\na=rtcp-fb:49 nack pli\r\na=fmtp:49 level-id=186;profile-id=1;tier-flag=0;tx-mode=SRST\r\na=rtpmap:50 rtx/90000\r\na=fmtp:50 apt=49\r\na=rtpmap:122 red/90000\r\na=rtpmap:123 rtx/90000\r\na=fmtp:123 apt=122\r\na=rtpmap:124 ulpfec/90000\r\na=rid:f send\r\na=rid:h send\r\na=rid:q send\r\na=simulcast:send f;h;q\r\n"
+      },
+      "tracks": [
+        {
+          "location": "local",
+          "mid": "0",
+          "trackName": "camera"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "0",
+          "trackName": "camera"
+        }
+      ],
+      "sessionDescription": {
+        "sdp": "v=0\r\no=- 8671668280910833342 1791783732 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=msid-semantic:WMS*\r\na=fingerprint:sha-256 24:8D:83:CE:EC:BA:60:03:A3:D8:0A:44:A4:61:76:44:EB:9B:E2:D1:9C:09:D2:81:BE:61:F3:F7:BD:61:C8:73\r\na=ice-lite\r\na=extmap-allow-mixed\r\na=group:BUNDLE 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 108 45 98 49\r\nc=IN IP4 192.0.2.1\r\na=setup:passive\r\na=mid:0\r\na=ice-ufrag:59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad\r\na=ice-pwd:ttXEjKzryThfVcrJKuNkYRMemZTjbDXH\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb \r\na=rtcp-fb:96 transport-cc \r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack \r\na=rtcp-fb:96 nack pli\r\na=rtpmap:108 H264/90000\r\na=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\na=rtcp-fb:108 goog-remb \r\na=rtcp-fb:108 transport-cc \r\na=rtcp-fb:108 ccm fir\r\na=rtcp-fb:108 nack \r\na=rtcp-fb:108 nack pli\r\na=rtpmap:45 AV1/90000\r\na=fmtp:45 level-idx=5;profile=0;tier=0\r\na=rtcp-fb:45 goog-remb \r\na=rtcp-fb:45 transport-cc \r\na=rtcp-fb:45 ccm fir\r\na=rtcp-fb:45 nack \r\na=rtcp-fb:45 nack pli\r\na=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\na=rtcp-fb:98 goog-remb \r\na=rtcp-fb:98 transport-cc \r\na=rtcp-fb:98 ccm fir\r\na=rtcp-fb:98 nack \r\na=rtcp-fb:98 nack pli\r\na=rtpmap:49 H265/90000\r\na=fmtp:49 level-id=186;profile-id=1;tier-flag=0;tx-mode=SRST\r\na=rtcp-fb:49 goog-remb \r\na=rtcp-fb:49 transport-cc \r\na=rtcp-fb:49 ccm fir\r\na=rtcp-fb:49 nack \r\na=rtcp-fb:49 nack pli\r\na=extmap:11 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\r\na=extmap:4 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=extmap:9 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:10 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\r\na=rid:f recv\r\na=rid:h recv\r\na=rid:q recv\r\na=simulcast:recv f;h;q\r\na=recvonly\r\na=candidate:513273236 1 udp 2130706431 192.0.2.1 1473 typ host\r\na=candidate:513273236 2 udp 2130706431 192.0.2.1 1473 typ host\r\na=end-of-candidates\r\n",
+        "type": "answer"
+      }
+    }
+  },
+  {
+    "operation": "POST /sessions/new",
+    "status": 201,
+    "response": {
+      "sessionId": "f68a7e7f038da0f1ef502832a0df14b1778ed849be62edd7456c5569274d02c3"
+    }
+  },
+  {
+    "operation": "POST /sessions/{id}/tracks/new",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "sessionId": "59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad",
+          "trackName": "camera",
+          "simulcast": {
+            "preferredRid": "f",
+            "priorityOrdering": "none",
+            "ridNotAvailable": "asciibetical"
+          }
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": true,
+      "tracks": [
+        {
+          "sessionId": "59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad",
+          "trackName": "camera",
+          "mid": "0"
+        }
+      ],
+      "sessionDescription": {
+        "sdp": "v=0\r\no=- 3355115739957054277 1791783731 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=msid-semantic:WMS*\r\na=fingerprint:sha-256 A8:6B:AB:1F:11:F6:C9:04:90:51:E5:3A:EB:5D:AD:FB:00:5F:6A:1A:6D:0A:84:39:BF:EB:E5:C5:58:AC:0B:91\r\na=ice-lite\r\na=extmap-allow-mixed\r\na=group:BUNDLE 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 125 37 98 36 96 35 116 117 45 46\r\nc=IN IP4 192.0.2.1\r\na=setup:actpass\r\na=mid:0\r\na=ice-ufrag:f68a7e7f038da0f1ef502832a0df14b1778ed849be62edd7456c5569274d02c3\r\na=ice-pwd:LDLxyxvFbGSfrpqwWVgHdtjWzfpKsUzf\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:125 H264/90000\r\na=fmtp:125 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\na=rtcp-fb:125 goog-remb \r\na=rtcp-fb:125 ccm fir\r\na=rtcp-fb:125 nack \r\na=rtcp-fb:125 nack pli\r\na=rtcp-fb:125 transport-cc \r\na=rtpmap:37 rtx/90000\r\na=fmtp:37 apt=125\r\na=rtcp-fb:37 transport-cc \r\na=rtpmap:98 VP9/90000\r\na=fmtp:98 profile-id=0\r\na=rtcp-fb:98 goog-remb \r\na=rtcp-fb:98 ccm fir\r\na=rtcp-fb:98 nack \r\na=rtcp-fb:98 nack pli\r\na=rtcp-fb:98 transport-cc \r\na=rtpmap:36 rtx/90000\r\na=fmtp:36 apt=98\r\na=rtcp-fb:36 transport-cc \r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb \r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack \r\na=rtcp-fb:96 nack pli\r\na=rtcp-fb:96 transport-cc \r\na=rtpmap:35 rtx/90000\r\na=fmtp:35 apt=96\r\na=rtcp-fb:35 transport-cc \r\na=rtpmap:116 H265/90000\r\na=rtcp-fb:116 goog-remb \r\na=rtcp-fb:116 ccm fir\r\na=rtcp-fb:116 nack \r\na=rtcp-fb:116 nack pli\r\na=rtcp-fb:116 transport-cc \r\na=rtpmap:117 rtx/90000\r\na=fmtp:117 apt=116\r\na=rtcp-fb:117 transport-cc \r\na=rtpmap:45 AV1/90000\r\na=rtcp-fb:45 goog-remb \r\na=rtcp-fb:45 ccm fir\r\na=rtcp-fb:45 nack \r\na=rtcp-fb:45 nack pli\r\na=rtcp-fb:45 transport-cc \r\na=rtpmap:46 rtx/90000\r\na=fmtp:46 apt=45\r\na=rtcp-fb:46 transport-cc \r\na=extmap:1 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=extmap:2 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:3 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\r\na=extmap:4 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\r\na=ssrc-group:FID 3775389170 1776549731\r\na=ssrc:3775389170 cname:MidQSqVB\r\na=ssrc:3775389170 msid:MidQSqVB SZlUpLuRMoVweTuW\r\na=ssrc:3775389170 mslabel:MidQSqVB\r\na=ssrc:3775389170 label:SZlUpLuRMoVweTuW\r\na=ssrc:1776549731 cname:MidQSqVB\r\na=ssrc:1776549731 msid:MidQSqVB SZlUpLuRMoVweTuW\r\na=ssrc:1776549731 mslabel:MidQSqVB\r\na=ssrc:1776549731 label:SZlUpLuRMoVweTuW\r\na=msid:MidQSqVB SZlUpLuRMoVweTuW\r\na=ssrc:1776549731 cname:MidQSqVB\r\na=ssrc:1776549731 msid:MidQSqVB SZlUpLuRMoVweTuW\r\na=ssrc:1776549731 mslabel:MidQSqVB\r\na=ssrc:1776549731 label:SZlUpLuRMoVweTuW\r\na=sendonly\r\na=candidate:513273236 1 udp 2130706431 192.0.2.1 1473 typ host\r\na=candidate:513273236 2 udp 2130706431 192.0.2.1 1473 typ host\r\na=end-of-candidates\r\n",
+        "type": "offer"
+      }
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/renegotiate",
+    "request": {
+      "sessionDescription": {
+        "type": "answer",
+        "sdp": "v=0\r\no=- 1026289949979203382 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 55261 UDP/TLS/RTP/SAVPF 125 37 98 36 96 35 116 117 45 46\r\nc=IN IP4 192.0.2.1\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=candidate:2637454867 1 udp 2122194687 192.0.2.1 59089 typ host generation 0 network-id 1 network-cost 10\r\na=candidate:1065943104 1 udp 2122063615 192.0.2.1 55261 typ host generation 0 network-id 3 network-cost 50\r\na=candidate:3340993318 1 udp 2121998079 192.0.2.1 58985 typ host generation 0 network-id 4 network-cost 50\r\na=candidate:3439322796 1 udp 2122265343 2001:db8::1 49986 typ host generation 0 network-id 2 network-cost 10\r\na=candidate:1295726942 1 udp 2122134271 2001:db8::1 56258 typ host generation 0 network-id 5 network-cost 50\r\na=candidate:201020932 1 udp 1685855999 192.0.2.1 55261 typ srflx raddr 192.0.2.1 rport 55261 generation 0 network-id 3 network-cost 50\r\na=candidate:3824925835 1 tcp 1518214911 192.0.2.1 9 typ host tcptype active generation 0 network-id 1 network-cost 10\r\na=candidate:1095164632 1 tcp 1518083839 192.0.2.1 9 typ host tcptype active generation 0 network-id 3 network-cost 50\r\na=candidate:3119276478 1 tcp 1518018303 192.0.2.1 9 typ host tcptype active generation 0 network-id 4 network-cost 50\r\na=candidate:2989491252 1 tcp 1518285567 2001:db8::1 9 typ host tcptype active generation 0 network-id 2 network-cost 10\r\na=candidate:871685062 1 tcp 1518154495 2001:db8::1 9 typ host tcptype active generation 0 network-id 5 network-cost 50\r\na=ice-ufrag:kqYK\r\na=ice-pwd:Bx7eOvFXQ1FVybigiuYwdwPZ\r\na=ice-options:trickle\r\na=fingerprint:sha-256 F3:6A:41:26:03:DF:51:0B:46:33:CC:DE:D1:3F:F9:78:70:57:30:B5:B7:DC:5D:11:29:FA:F3:61:6B:8F:52:1E\r\na=setup:active\r\na=mid:0\r\na=extmap:1 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=extmap:2 urn:ietf:params:rtp-hdrext:sdes:mid\r\na=extmap:3 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\r\na=extmap:4 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:125 H264/90000\r\na=rtcp-fb:125 goog-remb\r\na=rtcp-fb:125 transport-cc\r\na=rtcp-fb:125 ccm fir\r\na=rtcp-fb:125 nack\r\na=rtcp-fb:125 nack pli\r\na=fmtp:125 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\na=rtpmap:37 rtx/90000\r\na=fmtp:37 apt=125\r\na=rtpmap:98 VP9/90000\r\na=rtcp-fb:98 goog-remb\r\na=rtcp-fb:98 transport-cc\r\na=rtcp-fb:98 ccm fir\r\na=rtcp-fb:98 nack\r\na=rtcp-fb:98 nack pli\r\na=fmtp:98 profile-id=0\r\na=rtpmap:36 rtx/90000\r\na=fmtp:36 apt=98\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:35 rtx/90000\r\na=fmtp:35 apt=96\r\na=rtpmap:116 H265/90000\r\na=rtcp-fb:116 goog-remb\r\na=rtcp-fb:116 transport-cc\r\na=rtcp-fb:116 ccm fir\r\na=rtcp-fb:116 nack\r\na=rtcp-fb:116 nack pli\r\na=fmtp:116 level-id=93;profile-id=1;tier-flag=0;tx-mode=SRST\r\na=rtpmap:117 rtx/90000\r\na=fmtp:117 apt=116\r\na=rtpmap:45 AV1/90000\r\na=rtcp-fb:45 goog-remb\r\na=rtcp-fb:45 transport-cc\r\na=rtcp-fb:45 ccm fir\r\na=rtcp-fb:45 nack\r\na=rtcp-fb:45 nack pli\r\na=fmtp:45 level-idx=5;profile=0;tier=0\r\na=rtpmap:46 rtx/90000\r\na=fmtp:46 apt=45\r\n"
+      }
+    },
+    "status": 200,
+    "response": {}
+  },
+  {
+    "operation": "PUT /sessions/{id}/tracks/update",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "mid": "0",
+          "sessionId": "59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad",
+          "trackName": "camera",
+          "simulcast": {
+            "preferredRid": "q",
+            "priorityOrdering": "none",
+            "ridNotAvailable": "asciibetical"
+          }
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "0"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/tracks/update",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "mid": "99",
+          "sessionId": "59676d1b2eb35d2196cd76d28fd31ae3ca6148857ac95eb01d64cdd1c02136ad",
+          "trackName": "camera",
+          "simulcast": {
+            "preferredRid": "h"
+          }
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "99",
+          "errorCode": "internal_error",
+          "errorDescription": "Backend error"
+        }
+      ]
+    }
+  },
+  {
+    "operation": "PUT /sessions/{id}/tracks/close",
+    "request": {
+      "tracks": [
+        {
+          "mid": "0"
+        }
+      ],
+      "force": true
+    },
+    "status": 200,
+    "response": {
+      "requiresImmediateRenegotiation": false,
+      "tracks": [
+        {
+          "mid": "0"
+        }
+      ]
+    }
+  }
+]

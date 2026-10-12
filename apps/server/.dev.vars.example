@@ -1,2 +1,15 @@
 SIGNING_KEY=dev-signing-key-change-me
 BOOTSTRAP_SECRET=dev-bootstrap
+# Huddles (off while these are empty): a Realtime SFU app, and optionally a TURN key.
+# cf realtime sfu apps create --name campflare-dev   → uid, secret
+# cf realtime turn keys create --name campflare-dev  → uid, secret
+REALTIME_APP_ID=
+REALTIME_APP_SECRET=
+REALTIME_TURN_KEY_ID=
+REALTIME_TURN_KEY_TOKEN=
+# Huddle transcription (off while these are empty): Workers AI over REST, with an account token
+# scoped to Workers AI Read (cf accounts tokens create), and the public origin the
+# SFU connects back to (in development, a tunnel: cloudflared tunnel --url http://localhost:8787).
+CF_ACCOUNT_ID=
+WORKERS_AI_TOKEN=
+HUDDLE_PUBLIC_URL=

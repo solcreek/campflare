@@ -152,6 +152,21 @@ missed something. This is live events for clients that can't hold a WebSocket
 open: agents, scripts, scheduled jobs. `follow()` in `@campflare/client` and
 `campflare events --follow` wrap it.
 
+## Huddles
+
+A conversation can have a call: audio, video for several people (simulcast,
+with the layer chosen per viewer), and optionally a live transcript with a
+summary at the end, posted in a thread by a Huddle Scribe bot. Media goes
+through Cloudflare's Realtime SFU; signalling is `campflare.huddles.*` (`join`,
+`subscribe`, `answer`, `layer`, `publish`, `unpublish`, `leave`, `info`, `ice_servers`,
+`transcribe`) and RTM events (`huddle_joined`, `huddle_left`, `huddle_tracks`, `huddle_transcription`).
+Speech is transcribed by Whisper and summarised by Llama 3.3 on Workers AI.
+
+Huddles are off until the Worker has a Realtime SFU app (`REALTIME_*`;
+transcription also needs `CF_ACCOUNT_ID` and `WORKERS_AI_TOKEN`); see
+`apps/server/.dev.vars.example`. There's no UI yet: `/huddle` is a test page.
+How it works, how it's tested and what it measured: [docs/huddles.md](docs/huddles.md).
+
 ## MCP
 
 `https://<host>/mcp` is a remote MCP server (Streamable HTTP), built on the
@@ -272,3 +287,5 @@ client and CLI bundles. The Worker is bundled by wrangler.
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
   emoji, scheduled DND hours, time zones.
 - Sharding a very large workspace's hub across several Durable Objects.
+- Huddles: expiring the seat of a browser that died without leaving, and
+  Slack's `calls.*` API (see [docs/huddles.md](docs/huddles.md)).

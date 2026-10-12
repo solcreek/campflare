@@ -31,6 +31,12 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
 
 - `pnpm test` in a package adds `--coverage` with thresholds, so a partial run
   fails the thresholds. Use `npx vitest run <file>` for a subset.
+- `pnpm test:live` (`tests/live/`, opt-in, not in `pnpm check`) hits real
+  Cloudflare services with the credentials in `apps/server/.dev.vars`:
+  werift WebRTC peers and real Chrome (playwright-core, the installed Chrome)
+  against the Realtime SFU. `RECORD_FIXTURES=1` refreshes the recorded SFU
+  responses that the offline fake SFU (`apps/server/test/fake-sfu.ts`) serves.
+  Server tests override the Realtime bindings, so they never reach the real API.
 - `apps/cli` and `tests/conformance` tests start a real `wrangler dev` on a free
   port with fresh state (`tests/conformance/global-setup.ts`), so they're slower
   and need nothing running.
@@ -232,6 +238,25 @@ check it on the redirects a POST answers with, so `'self'` alone blocks the retu
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, tokens and apps (an app is
 a bot user + xoxb + xapp).
+
+**Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
+`REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
+the Worker: browsers send WebRTC to Cloudflare's Realtime SFU, and
+`campflare.huddles.*` (`methods.ts`) drives the SFU's Connection API (`sfu.ts`)
+with the App Secret, relaying SDP. `TeamHub` holds the seats (`huddle_seats`:
+who publishes which tracks) and which user owns each SFU session
+(`huddle_sessions`), so only members join and only a session's owner answers on
+it; joins, leaves and camera changes go out as RTM events. Transcription: the
+SFU's WebSocket adapter streams each speaker's audio (PCM in protobuf) to
+`/huddle/scribe/<ticket>` (a signed, reusable ticket naming the speaker), which
+lands in the `HuddleScribe` DO (`scribe.ts`, one per call): it segments by
+loudness (`audio.ts`), transcribes with Whisper (`speech.ts`) and posts as the
+Huddle Scribe bot (`scribe-bot.ts`) with `huddle_transcript` metadata; on stop
+it summarises (`summary.ts`). The SFU dials out, so that endpoint must be public
+(`HUDDLE_PUBLIC_URL`, or the request's origin through a tunnel). Tests replace
+the SFU with `test/fake-sfu.ts`, built from recorded responses, and Workers AI
+with recorded answers (`setSpeechFetch`, `setSummaryFetch`); `tests/live/` is
+the real thing.
 
 ## App architecture
 

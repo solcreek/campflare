@@ -9,6 +9,9 @@ import "./methods/dnd"
 import "./methods/events"
 import "./methods/oauth"
 import { handleDownload, handleUpload } from "./methods/files"
+import "./huddle/methods"
+import { huddlePage, huddleScript } from "./huddle/page"
+import { readScribeTicket } from "./huddle/ticket"
 import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
@@ -25,6 +28,7 @@ import { first } from "./db/query"
 import type { UserRow } from "./db/rows"
 
 export { TeamHub } from "./hub"
+export { HuddleScribe } from "./huddle/scribe"
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -87,6 +91,20 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
 })
 
 mountAuth(app)
+
+/** A test page for huddles, until there's a UI. */
+app.get("/huddle", () => huddlePage())
+app.get("/huddle.js", () => huddleScript())
+
+/** The SFU's WebSocket adapter, streaming one speaker of a transcribed call. */
+app.get("/huddle/scribe/:ticket", async (c) => {
+  const ticket = await readScribeTicket(c.env.SIGNING_KEY, c.req.param("ticket"))
+  if (!ticket) return c.text("invalid or expired ticket", 401)
+  const scribe = c.env.SCRIBE.get(c.env.SCRIBE.idFromName(`${ticket.teamId}/${ticket.channelId}`))
+  const headers = new Headers(c.req.raw.headers)
+  headers.set("x-campflare-speaker", JSON.stringify({ user: ticket.user }))
+  return scribe.fetch(new Request(c.req.raw.url, { headers }))
+})
 
 /** The remote MCP server (Streamable HTTP). */
 app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUntil(p)))

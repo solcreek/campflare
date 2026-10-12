@@ -1,0 +1,81 @@
+[
+  {
+    "operation": "POST /adapters/websocket/new",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "outputCodec": "pcm",
+          "sessionId": "b655ef79afff2f9e21b48dd361780d0f911e6f7b29fb3d4449c4f33972b1c709",
+          "trackName": "audio",
+          "endpoint": "wss://tunnel.example.com/huddle/scribe/eyJ0ZWFtSWQiOiJUMCIsImNoYW5uZWxJZCI6IkMwIiwidXNlciI6IlUzWlpTRzdBTDVQIiwiZXhwaXJlcyI6MTc5MTgwODk2MzA2MH0.4f039c44617d97ae10b104f31c164902"
+        },
+        {
+          "location": "remote",
+          "outputCodec": "pcm",
+          "sessionId": "b655ef79afff2f9e21b48dd361780d0f911e6f7b29fb3d4449c4f33972b1c709",
+          "trackName": "audio",
+          "endpoint": "wss://tunnel.example.com/huddle/scribe/not-a-ticket"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "tracks": [
+        {
+          "adapterId": "19fc96d0dd181f34b4fd8898875cd7c6",
+          "trackName": "audio",
+          "endpoint": "wss://tunnel.example.com/huddle/scribe/eyJ0ZWFtSWQiOiJUMCIsImNoYW5uZWxJZCI6IkMwIiwidXNlciI6IlUzWlpTRzdBTDVQIiwiZXhwaXJlcyI6MTc5MTgwODk2MzA2MH0.4f039c44617d97ae10b104f31c164902"
+        },
+        {
+          "trackName": "audio",
+          "errorCode": "websocket_handshake_failed",
+          "errorDescription": "The handshake with the provided endpoint failed. This commonly means you are connecting to an HTTP server that does not support the WebSocket protocol. Please ensure the URL is a valid WebSocket endpoint (e.g., starts with ws:// or wss://)."
+        }
+      ]
+    }
+  },
+  {
+    "operation": "POST /adapters/websocket/close",
+    "request": {
+      "tracks": [
+        {
+          "adapterId": "19fc96d0dd181f34b4fd8898875cd7c6"
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "tracks": [
+        {
+          "adapterId": "19fc96d0dd181f34b4fd8898875cd7c6",
+          "bytesProcessed": 1062
+        }
+      ]
+    }
+  },
+  {
+    "operation": "POST /adapters/websocket/new",
+    "request": {
+      "tracks": [
+        {
+          "location": "remote",
+          "outputCodec": "pcm",
+          "sessionId": "b655ef79afff2f9e21b48dd361780d0f911e6f7b29fb3d4449c4f33972b1c709",
+          "trackName": "audio",
+          "endpoint": "wss://tunnel.example.com/huddle/scribe/not-a-ticket"
+        }
+      ]
+    },
+    "status": 503,
+    "response": {
+      "tracks": [
+        {
+          "trackName": "audio",
+          "errorCode": "websocket_handshake_failed",
+          "errorDescription": "The handshake with the provided endpoint failed. This commonly means you are connecting to an HTTP server that does not support the WebSocket protocol. Please ensure the URL is a valid WebSocket endpoint (e.g., starts with ws:// or wss://)."
+        }
+      ]
+    }
+  }
+]
