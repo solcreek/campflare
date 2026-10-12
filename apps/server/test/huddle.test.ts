@@ -317,3 +317,16 @@ describe("SFU client details", () => {
     await expect(sfuReplying({}).forceClose("x", [])).resolves.toBeUndefined()
   })
 })
+
+describe("the /huddle page", () => {
+  it("serves the page and its script, scripts from this origin only", async () => {
+    const { SELF } = await import("cloudflare:test")
+    const page = await SELF.fetch("https://campflare.test/huddle")
+    expect(page.headers.get("content-type")).toContain("text/html")
+    expect(await page.text()).toContain('<script src="/huddle.js" type="module"></script>')
+    expect(page.headers.get("content-security-policy")).toContain("script-src 'self'")
+    const script = await SELF.fetch("https://campflare.test/huddle.js")
+    expect(script.headers.get("content-type")).toContain("text/javascript")
+    expect(await script.text()).toContain("campflare.huddles.join")
+  })
+})

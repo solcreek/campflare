@@ -9,6 +9,7 @@ import "./methods/dnd"
 import "./methods/events"
 import { handleDownload, handleUpload } from "./methods/files"
 import "./huddle/methods"
+import { huddlePage, huddleScript } from "./huddle/page"
 import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
@@ -68,6 +69,10 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
 })
 
 mountAuth(app)
+
+/** The huddle experiment's test page. */
+app.get("/huddle", () => huddlePage())
+app.get("/huddle.js", () => huddleScript())
 
 /** The remote MCP server (Streamable HTTP). */
 app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUntil(p)))
