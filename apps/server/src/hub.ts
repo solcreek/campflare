@@ -11,6 +11,10 @@ import { ids } from "./api/ids"
 //   connection of a user who can see them. This is what a first-party UI uses.
 //
 // Connections use the hibernation API, so an idle workspace costs nothing.
+//
+// Every event is also kept in the hub's SQLite for a week, numbered in order,
+// so a client without a live link (an agent, a script) can ask for what it
+// missed since a cursor, and wait for the next ones: poll().
 
 export interface Connection {
   kind: "socket" | "rtm"
@@ -34,12 +38,122 @@ export interface PublishInput {
   rtmOnly?: boolean
 }
 
+export interface PollInput {
+  /** The user whose view to read. */
+  user: string
+  /** Events after this one; undefined starts from now. */
+  cursor?: number
+  limit: number
+  /** How long to wait for an event when there is none yet. */
+  waitMs: number
+}
+
+export interface PollResult {
+  /** Each event as JSON: RPC return values must be serialisable, which `unknown` isn't. */
+  events: { cursor: string; event: string }[]
+  cursor: string
+  hasMore: boolean
+  error?: "invalid_cursor" | "cursor_expired"
+}
+
+export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
 export class TeamHub extends DurableObject<Env> {
   private roundRobin = new Map<string, number>()
+  /** Open polls, woken by each new event to look again. */
+  private waiters = new Set<() => void>()
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS used_tickets (nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL)")
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      at INTEGER NOT NULL,
+      audience TEXT NOT NULL,
+      rtm_only INTEGER NOT NULL,
+      body TEXT NOT NULL
+    )`)
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS events_at ON events (at)")
+  }
+
+  /** The last event number handed out (0 before the first). */
+  private latestSeq(): number {
+    const row = this.ctx.storage.sql
+      .exec<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'events'")
+      .toArray()[0]
+    return row?.seq ?? 0
+  }
+
+  private record(input: PublishInput, body: Record<string, unknown>): number {
+    const now = Date.now()
+    const [row] = this.ctx.storage.sql
+      .exec<{ seq: number }>(
+        "INSERT INTO events (at, audience, rtm_only, body) VALUES (?, ?, ?, ?) RETURNING seq",
+        now,
+        JSON.stringify(input.audience),
+        input.rtmOnly ? 1 : 0,
+        JSON.stringify(body),
+      )
+      .toArray()
+    const seq = row!.seq
+    // Pruning now and then keeps the table a week long without a timer.
+    if (seq % 100 === 0) this.ctx.storage.sql.exec("DELETE FROM events WHERE at < ?", now - EVENT_RETENTION_MS)
+    for (const wake of this.waiters) wake()
+    return seq
+  }
+
+  /** The events a user can see after `cursor`, waiting up to waitMs for one if there are none yet. */
+  async poll(input: PollInput): Promise<PollResult> {
+    const deadline = Date.now() + input.waitMs
+    const latest = this.latestSeq()
+    if (input.cursor === undefined) return { events: [], cursor: String(latest), hasMore: false }
+    if (!Number.isInteger(input.cursor) || input.cursor < 0 || input.cursor > latest) {
+      return { events: [], cursor: "", hasMore: false, error: "invalid_cursor" }
+    }
+    const oldest = this.ctx.storage.sql
+      .exec<{ seq: number | null }>("SELECT MIN(seq) AS seq FROM events")
+      .toArray()[0]?.seq
+    // The next event the caller needs is gone: it would miss events without knowing.
+    if (input.cursor < latest && (oldest === null || oldest === undefined || oldest > input.cursor + 1)) {
+      return { events: [], cursor: "", hasMore: false, error: "cursor_expired" }
+    }
+    let cursor = input.cursor
+    for (;;) {
+      const scannedTo = this.latestSeq()
+      const rows = this.ctx.storage.sql
+        .exec<{ seq: number; body: string }>(
+          `SELECT seq, body FROM events
+           WHERE seq > ? AND (audience = '"team"' OR EXISTS (SELECT 1 FROM json_each(audience) WHERE value = ?))
+           ORDER BY seq LIMIT ?`,
+          cursor,
+          input.user,
+          input.limit,
+        )
+        .toArray()
+      if (rows.length > 0) {
+        const hasMore = rows.length === input.limit
+        // A full page continues after its last event; a short one has seen everything up to now.
+        const next = hasMore ? rows.at(-1)!.seq : scannedTo
+        return {
+          events: rows.map((r) => ({ cursor: String(r.seq), event: r.body })),
+          cursor: String(next),
+          hasMore,
+        }
+      }
+      // Nothing for this user up to now: skip past others' events next time.
+      cursor = scannedTo
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return { events: [], cursor: String(cursor), hasMore: false }
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          clearTimeout(timer)
+          this.waiters.delete(wake)
+          resolve()
+        }
+        const timer = setTimeout(wake, remaining)
+        this.waiters.add(wake)
+      })
+    }
   }
 
   /** WebSocket upgrades, already authenticated by the Worker, which passes the connection in a header. */
@@ -82,6 +196,7 @@ export class TeamHub extends DurableObject<Env> {
     const { event, audience } = input
     const eventTs = (event.event_ts as string | undefined) ?? `${(Date.now() / 1000).toFixed(6)}`
     const body = { ...event, event_ts: eventTs }
+    this.record(input, body)
     const sees = (users: string[]) => audience === "team" || users.some((u) => audience.includes(u))
     let delivered = 0
 
