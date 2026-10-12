@@ -179,7 +179,15 @@ Better Auth's `/auth/oauth2/authorize` (adding `openid`), so sign-in, consent,
 redirect matching and codes (single-use, 10 minutes, hashed) are Better
 Auth's. `oauth.v2.access` (`src/methods/oauth.ts`) redeems the code at Better
 Auth's token endpoint in process, maps the ID token's `sub` through `account`
-to the Campflare user, and mints an xoxp labelled `OAuth: <client>`. Bot
+to the Campflare user, and mints an xoxp labelled `OAuth: <client>`, with the
+client id in `tokens.client_id` (migration 0006). Slack would hand the same app
+the same token again; we keep only hashes, so every sign-in mints one, and the
+person keeps the newest `OAUTH_TOKENS_PER_CLIENT` (5) per client, older ones
+revoked in the same batch. Not just one: nothing tells two computers apart, and
+revoking every earlier token would sign the CLI out on the other machine; other
+clients and hand-made tokens are never touched. The same lookup batch deletes
+the access/refresh tokens Better Auth issued for the code (by its
+`authorizationCodeId`, the code's SHA-256 in base64url); consent stays. Bot
 `scope` is refused (400); `refresh_token` is `invalid_grant_type` (our tokens
 don't expire). Clients: our own public apps are rows from migration 0005,
 `campflare-cli` and `campflare-desktop` (redirect `http://127.0.0.1:<any

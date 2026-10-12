@@ -1,4 +1,4 @@
-import { DEFAULT_USER_SCOPES, issueToken } from "../api/auth"
+import { DEFAULT_USER_SCOPES, prepareToken } from "../api/auth"
 import { method } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { AUTH_BASE_PATH } from "../auth"
@@ -13,6 +13,13 @@ import type { TeamRow, UserRow } from "../db/rows"
 // client, the redirect URI, the PKCE verifier, and that the code is unused and
 // unexpired. Its answer names the person (the ID token's sub), whose linked
 // Campflare user gets a new user token, stored hashed like every token.
+
+/**
+ * How many tokens one person keeps for one client. Slack hands an app the same token again; we store
+ * only hashes, so each sign-in mints a new one. Revoking all the earlier ones would sign the person out
+ * of the same app on their other computers, so the newest few stay live and older ones are revoked.
+ */
+export const OAUTH_TOKENS_PER_CLIENT = 5
 
 /** Better Auth's OAuth errors as Slack's oauth.v2.access error codes. */
 function slackError(error: string | undefined, description: string | undefined): string {
@@ -107,13 +114,29 @@ method("oauth.v2.access", "none", async (ctx) => {
 
   const known = new Set(DEFAULT_USER_SCOPES)
   const scopes = splitScopes(answer.scope).filter((s) => known.has(s))
-  const token = await issueToken(ctx.env, {
+  const { token, insert } = await prepareToken(ctx.env, {
     teamId: team.id,
     kind: "user",
     userId: user.id,
     scopes,
     label: `OAuth: ${clientName}`,
+    clientId,
   })
+  // At most OAUTH_TOKENS_PER_CLIENT live tokens per person and client: the new one, and the newest
+  // before it. Older ones are revoked in the same trip (they answer token_revoked from now on).
+  const live = `SELECT hash FROM tokens WHERE user_id = ? AND client_id = ? AND revoked = 0`
+  await ctx.env.DB.batch([
+    insert,
+    stmt(
+      ctx.env.DB,
+      `UPDATE tokens SET revoked = 1 WHERE hash IN (${live}) AND hash NOT IN (${live} ORDER BY created DESC, rowid DESC LIMIT ?)`,
+      user.id,
+      clientId,
+      user.id,
+      clientId,
+      OAUTH_TOKENS_PER_CLIENT,
+    ),
+  ])
   return {
     app_id: clientId,
     authed_user: { id: user.id, scope: scopes.join(","), access_token: token, token_type: "user" },
