@@ -1,7 +1,7 @@
 export { applyEvent, initialState, isReply, keyOf, reduce } from "./state"
 export type { Action, Timeline, WorkspaceState } from "./state"
 export { browsableChannels, conversationTitle, displayName, sidebar, thread, timeline } from "./selectors"
-export type { Sidebar } from "./selectors"
+export type { Directory, Sidebar } from "./selectors"
 export { commonEmoji, emojiChar, parse as parseMrkdwn, parseInline, plainText } from "./mrkdwn"
 export type { Block, Inline } from "./mrkdwn"
 export { createWorkspace } from "./workspace"
