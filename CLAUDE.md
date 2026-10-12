@@ -125,7 +125,10 @@ The hub's SQLite also holds:
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;
 `files.completeUploadExternal` shares them and posts the message. `url_private`
 is served by `handleDownload` with the same Bearer tokens, with range support,
-and `content-security-policy: sandbox`.
+and `content-security-policy: sandbox`. `/files-pri/*` and `/upload/v1/*` answer
+CORS (any origin, Authorization allowed, no credentials) so browser apps fetch
+with the token; there are no signed download URLs. `/avatars/:id` draws the
+user's initials (one query; a CJK name gives its first character).
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
@@ -178,7 +181,10 @@ top-level messages, a thread's list holds replies. Sends are optimistic: a
 pending message with a `~nnnnnnnn` ts (sorts last) becomes the stored one, or
 stays with `failed` for Retry or Discard. `start()` is idempotent (StrictMode).
 `src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
-never HTML, and only links http(s) and mailto.
+never HTML, and only links http(s) and mailto. `src/files.ts` decides image vs
+card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into
+shared object URLs via `client.fetchFile` (token sent to the server's origin
+only), revoked after a grace period; `workspace.upload` is optimistic like `send`.
 
 **Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
 select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
