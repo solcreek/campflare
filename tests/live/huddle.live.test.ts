@@ -3,9 +3,9 @@ import { afterAll, beforeAll, describe, expect, inject, it } from "vitest"
 import { seed, type Seeded } from "../../scripts/seed.ts"
 import { devVars } from "./env.ts"
 
-// The /huddle page in real Chrome, with fake microphones, against wrangler
-// dev and the real Realtime SFU: two people join #general and each must
-// receive the other's audio.
+// The /huddle page in real Chrome, with fake microphones and no cameras,
+// against wrangler dev and the real Realtime SFU: two people join #general
+// and each must receive the other's audio.
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -42,6 +42,7 @@ async function joinAs(token: string): Promise<Page> {
   await page.goto(`${base}/huddle`)
   await page.fill("#token", token)
   await page.fill("#channel", "#general")
+  await page.uncheck("#with-camera") // this test is about audio; huddle-video.live.test.ts does cameras
   await page.click("#join")
   await page.waitForFunction(() => document.querySelector("#status")?.textContent === "In the call.", undefined, {
     timeout: 30_000,
@@ -76,8 +77,8 @@ describe.skipIf(!configured)("huddle page (live)", () => {
 
     // Vincent subscribed to Alex on joining; Alex subscribed to Vincent on hearing huddle_joined.
     await until(async () => (await received(vincent)) > 50 && (await received(alex)) > 50)
-    expect(await alex.locator("#people li").count()).toBe(2)
-    expect(await vincent.locator("#people li").count()).toBe(2)
+    expect(await alex.locator(".tile").count()).toBe(2)
+    expect(await vincent.locator(".tile").count()).toBe(2)
     expect(await vincent.locator("audio").count()).toBe(1)
     const stats = await alex.evaluate(() => (window as unknown as { huddleStats?: string[] }).huddleStats ?? [])
     expect(stats.join("\n")).toMatch(/send: connected/)
@@ -85,7 +86,7 @@ describe.skipIf(!configured)("huddle page (live)", () => {
 
     // Leaving shows up on the other side.
     await vincent.click("#leave")
-    await alex.waitForFunction(() => document.querySelectorAll("#people li").length === 1, undefined, {
+    await alex.waitForFunction(() => document.querySelectorAll(".tile").length === 1, undefined, {
       timeout: 10_000,
     })
     expect(await vincent.locator("#status").textContent()).toBe("Not in a call.")
