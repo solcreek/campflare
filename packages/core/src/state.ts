@@ -42,6 +42,8 @@ export type Action =
   | { type: "replies"; channel: string; threadTs: string; messages: Message[] }
   | { type: "sending"; message: Message }
   | { type: "sent"; channel: string; localTs: string; message: Message }
+  /** A pending upload's files are stored on the server under these ids, not yet shared. */
+  | { type: "uploaded"; channel: string; localTs: string; fileIds: string[] }
   | { type: "sendFailed"; channel: string; localTs: string; error: string }
   /** Drops a message that never reached the server. */
   | { type: "discard"; channel: string; localTs: string }
@@ -112,12 +114,10 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
       return upsert(state, action.message)
     case "sent":
       return upsert(remove(state, action.channel, action.localTs), { ...action.message, channel: action.channel })
-    case "sendFailed": {
-      const key = keyOf(action.channel, action.localTs)
-      const message = state.messages[key]
-      if (!message) return state
-      return { ...state, messages: { ...state.messages, [key]: { ...message, failed: action.error } } }
-    }
+    case "uploaded":
+      return patchMessage(state, action.channel, action.localTs, { uploaded: action.fileIds })
+    case "sendFailed":
+      return patchMessage(state, action.channel, action.localTs, { failed: action.error })
     case "discard":
       return remove(state, action.channel, action.localTs)
     case "read":
@@ -136,14 +136,15 @@ function history(state: WorkspaceState, a: Extract<Action, { type: "history" }>)
     page.push(key)
   }
   const before = state.timelines[a.channel]?.keys ?? []
-  let kept = before
+  // A pending message the page holds the stored copy of is that copy now.
+  let kept = before.filter((k) => !page.some((p) => standsFor(messages[p]!, messages[k])))
   if (!a.older && page.length > 0) {
     // The latest page is the truth for its range: what it lacks there was deleted meanwhile.
     const oldest = a.messages[a.messages.length - 1]!.ts
     const inPage = new Set(page)
-    kept = before.filter((k) => tsOf(k) < oldest || inPage.has(k) || messages[k]?.pending)
-    for (const k of before) if (!kept.includes(k)) delete messages[k]
+    kept = kept.filter((k) => tsOf(k) < oldest || inPage.has(k) || messages[k]?.pending)
   }
+  for (const k of before) if (!kept.includes(k)) delete messages[k]
   const hasMore = a.older || before.length === 0 ? a.hasMore : (state.timelines[a.channel]?.hasMore ?? a.hasMore)
   return {
     ...state,
@@ -160,7 +161,10 @@ function replies(state: WorkspaceState, a: Extract<Action, { type: "replies" }>)
     if (m.ts !== a.threadTs) keys.push(keyOf(a.channel, m.ts))
   }
   const threadKey = keyOf(a.channel, a.threadTs)
-  const pending = (state.threads[threadKey]?.keys ?? []).filter((k) => messages[k]?.pending)
+  const before = state.threads[threadKey]?.keys ?? []
+  // A pending reply the page holds the stored copy of is that copy now.
+  for (const k of before) if (keys.some((p) => standsFor(messages[p]!, messages[k]))) delete messages[k]
+  const pending = before.filter((k) => messages[k]?.pending)
   return {
     ...state,
     messages,
@@ -168,19 +172,34 @@ function replies(state: WorkspaceState, a: Extract<Action, { type: "replies" }>)
   }
 }
 
-/** The pending message a stored one stands for: same channel and client_msg_id. */
+function patchMessage(state: WorkspaceState, channel: string, ts: string, patch: Partial<Message>): WorkspaceState {
+  const key = keyOf(channel, ts)
+  const message = state.messages[key]
+  if (!message) return state
+  return { ...state, messages: { ...state.messages, [key]: { ...message, ...patch } } }
+}
+
+/**
+ * Whether a stored message is the one a pending message became: a sent message by the
+ * client_msg_id the server echoes, an upload by the file ids files.completeUploadExternal shares.
+ */
+function standsFor(stored: Message, pending: Message | undefined): boolean {
+  if (!pending?.pending || stored.pending) return false
+  if (stored.client_msg_id && stored.client_msg_id === pending.client_msg_id) return true
+  const ids = pending.uploaded ?? []
+  return ids.length > 0 && Boolean(stored.files?.some((f) => ids.includes(f.id)))
+}
+
+/** The pending message a stored one stands for, in the same conversation or thread. */
 function pendingTwin(state: WorkspaceState, m: Message): string | undefined {
-  if (m.pending || !m.client_msg_id) return undefined
+  if (m.pending || (!m.client_msg_id && !m.files?.length)) return undefined
   const list = isReply(m) ? state.threads[keyOf(m.channel, m.thread_ts!)] : state.timelines[m.channel]
-  return list?.keys.find((k) => {
-    const other = state.messages[k]
-    return other?.pending && other.client_msg_id === m.client_msg_id
-  })
+  return list?.keys.find((k) => standsFor(m, state.messages[k]))
 }
 
 /** Adds or replaces a message, filing it under its conversation or its thread. */
 function upsert(state: WorkspaceState, m: Message): WorkspaceState {
-  // RTM's copy of your message can arrive before chat.postMessage answers: it takes the pending one's place.
+  // RTM's copy of your message can beat chat.postMessage's or an upload's answer: it takes the pending one's place.
   const twin = pendingTwin(state, m)
   if (twin) state = remove(state, m.channel, state.messages[twin]!.ts)
   const key = keyOf(m.channel, m.ts)
