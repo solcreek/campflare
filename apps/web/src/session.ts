@@ -94,10 +94,15 @@ export function platformStore(global: { __TAURI__?: TauriGlobal } = globalThis a
 
 export type DevAccounts = NonNullable<typeof __CAMPFLARE_DEV__>
 
-/** The dev server's account named by `?as=` (the owner by default), when there is a dev server. */
+/**
+ * The dev server's account named by `?as=` (the owner by default), when there is a dev server.
+ * `?as=none` (or anyone unknown) shows the login screen instead, and so does the browser
+ * coming back from a sign-in (`?state=`), which signs in as whoever the person chose.
+ */
 export function devSession(dev: DevAccounts | null, search: string): Session | null {
-  if (!dev) return null
-  const as = new URLSearchParams(search).get("as") ?? "alex"
+  const query = new URLSearchParams(search)
+  if (!dev || query.has("state")) return null
+  const as = query.get("as") ?? "alex"
   const token = dev.people[as]
   return token ? { url: dev.url, token } : null
 }
