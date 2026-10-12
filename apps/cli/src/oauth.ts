@@ -1,5 +1,4 @@
-import { createClient } from "@campflare/client"
-import { createHash, randomBytes } from "node:crypto"
+import { authorizeUrl, callbackCode, createPkce, exchangeCode, OAuthError, randomState } from "@campflare/client"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { Io } from "./io"
@@ -8,6 +7,8 @@ import type { Io } from "./io"
 // does, and end up with a user token. The CLI is a public client
 // (campflare-cli): it can't keep a secret, so PKCE proves the code is its own,
 // and the browser comes back to a listener on a free loopback port (RFC 8252).
+// The protocol itself (PKCE, the authorize URL, the exchange) is the client
+// library's, shared with the app.
 
 export const CLIENT_ID = "campflare-cli"
 
@@ -58,10 +59,8 @@ function callback(server: Server): Promise<URLSearchParams> {
 
 /** Runs the browser sign-in against a server and returns the new user token. */
 export async function oauthLogin(io: Io, url: string, opts: { port?: number } = {}): Promise<string> {
-  const server = url.replace(/\/+$/, "").replace(/\/api$/, "")
-  const verifier = randomBytes(32).toString("base64url")
-  const challenge = createHash("sha256").update(verifier).digest("base64url")
-  const state = randomBytes(16).toString("base64url")
+  const { verifier, challenge } = await createPkce()
+  const state = randomState()
 
   const listener = createServer()
   await new Promise<void>((ok, fail) => {
@@ -70,15 +69,7 @@ export async function oauthLogin(io: Io, url: string, opts: { port?: number } = 
   })
   try {
     const redirectUri = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/callback`
-    const authorize = new URL("/oauth/v2/authorize", server)
-    authorize.search = new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: redirectUri,
-      user_scope: USER_SCOPES.join(","),
-      state,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-    }).toString()
+    const authorize = authorizeUrl(url, { clientId: CLIENT_ID, redirectUri, state, challenge, userScopes: USER_SCOPES })
 
     // Listening for the browser, and for Ctrl-C, before the browser opens.
     const returned = Promise.race([
@@ -89,21 +80,17 @@ export async function oauthLogin(io: Io, url: string, opts: { port?: number } = 
     ])
     // Printed too, for a terminal with no browser: open it anywhere that can reach this machine's loopback.
     io.stderr(`Opening your browser to sign in. If it doesn't open, visit:\n\n  ${authorize}\n\n`)
-    await io.openUrl?.(authorize.toString())
+    await io.openUrl?.(authorize)
     const query = await returned
 
-    if (query.get("state") !== state) throw new Error("sign-in failed: the browser came back with the wrong state")
-    const error = query.get("error")
-    if (error) throw new Error(`sign-in failed: ${error}${error === "access_denied" ? " (you chose Deny)" : ""}`)
-    const res = await createClient({ url, fetch: io.fetch }).call<{
-      ok: boolean
-      authed_user: { access_token: string }
-    }>("oauth.v2.access", {
-      client_id: CLIENT_ID,
-      code: query.get("code") ?? "",
-      redirect_uri: redirectUri,
-      code_verifier: verifier,
-    })
+    let code: string
+    try {
+      code = callbackCode(query, state)
+    } catch (err) {
+      if (err instanceof OAuthError && err.code === "access_denied") throw new Error(`${err.message} (you chose Deny)`)
+      throw err
+    }
+    const res = await exchangeCode(url, { clientId: CLIENT_ID, code, redirectUri, verifier, fetch: io.fetch })
     return res.authed_user.access_token
   } finally {
     listener.closeAllConnections()
