@@ -3,12 +3,14 @@
 // Plain W3C WebDriver over fetch: the protocol is a handful of JSON calls.
 
 import assert from "node:assert/strict"
-import { after, before, test } from "node:test"
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { after, before, test as nodeTest } from "node:test"
 
 const base = process.env.WEBDRIVER_URL ?? "http://127.0.0.1:4444"
 const application = process.env.CAMPFLARE_DESKTOP_APP
 // W3C WebDriver's key for an element reference.
-const ELEMENT = "element-6066-11e4-a52e-4f735466ecbf"
+const ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
 
 /** A WebDriver command: POST with a JSON body, GET and DELETE without. */
 async function call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
@@ -45,7 +47,29 @@ async function find(xpath: string): Promise<string> {
     using: "xpath",
     value: xpath,
   })
-  return found[ELEMENT]!
+  const id = found?.[ELEMENT]
+  if (!id) throw new Error(`no element for ${xpath}: ${JSON.stringify(found)}`)
+  return id
+}
+
+/** A test that, when it fails, leaves what the window showed in e2e/out/<name>.png and .html (CI uploads them). */
+function test(name: string, fn: () => Promise<void>) {
+  nodeTest(name, async () => {
+    try {
+      await fn()
+    } catch (error) {
+      const out = join(import.meta.dirname, "out")
+      mkdirSync(out, { recursive: true })
+      const file = join(out, name.replace(/[^\w-]+/g, "-"))
+      const [png, html] = await Promise.allSettled([
+        call<string>("GET", `/session/${session}/screenshot`),
+        call<string>("GET", `/session/${session}/source`),
+      ])
+      if (png.status === "fulfilled") writeFileSync(`${file}.png`, Buffer.from(png.value, "base64"))
+      writeFileSync(`${file}.html`, html.status === "fulfilled" ? html.value : String(html.reason))
+      throw error
+    }
+  })
 }
 
 const text = (element: string) => call<string>("GET", `/session/${session}/element/${element}/text`)
@@ -57,5 +81,7 @@ test("with no session, the app opens on the sign-in screen", async () => {
   const token = await find("//label[span[normalize-space()='Token']]//input")
   assert.equal(await call("GET", `/session/${session}/element/${token}/attribute/type`), "password")
   assert.ok(server)
-  assert.equal(await text(await find("//button[@type='submit']")), "Sign in")
+  // Both ways in: the browser (OAuth through the loopback listener) and a pasted token.
+  assert.ok(await find("//button[normalize-space()='Sign in with your browser']"))
+  assert.ok(await find("//button[normalize-space()='Sign in with a token']"))
 })

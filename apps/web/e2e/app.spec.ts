@@ -121,6 +121,38 @@ test("images show inline, and an upload reaches the other person", async ({ brow
   await expect(messages(alex).getByText("Uploading…")).toHaveCount(0)
 })
 
+test("an image opens full size, and Escape closes it", async ({ browser }) => {
+  const alex = await open(browser)
+  const name = "An orange sunset fading into purple"
+  await messages(alex)
+    .getByRole("button", { name: `Open ${name}` })
+    .first()
+    .click()
+  const viewer = alex.getByRole("dialog")
+  await expectLoaded(viewer.getByRole("img", { name }))
+  await expect(viewer.getByRole("button", { name: /^Download / })).toBeVisible()
+  await alex.keyboard.press("Escape")
+  await expect(viewer).toHaveCount(0)
+})
+
+test("a pasted image is attached under a name of its own", async ({ browser }) => {
+  const alex = await open(browser)
+  const box = alex.getByRole("textbox", { name: "Message #general" })
+  // A paste event as the browser dispatches it: the system clipboard isn't the test's to fill.
+  await box.evaluate(
+    async (el, bytes) => {
+      const data = new DataTransfer()
+      data.items.add(new File([new Uint8Array(bytes)], "image.png", { type: "image/png" }))
+      el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }))
+    },
+    Array.from(await sunsetPng(40, 30)),
+  )
+  await expect(
+    alex.getByRole("list", { name: "Attachments" }).getByText(/^Pasted image \d{4}-\d\d-\d\d at [\d.]+\.png$/),
+  ).toBeVisible()
+  await expect(box).toHaveValue("")
+})
+
 test("every screen has a URL", async ({ browser }) => {
   const alex = await open(browser)
   await sidebarItem(alex, "dev").click()
@@ -150,6 +182,16 @@ test("signs in through the browser: the server's sign-in and consent, then back 
     })
   ).json()) as { ok: boolean; token: string }
   expect(created.ok).toBe(true)
+  // The person sets their own password with their token, as `campflare password set` does.
+  const password = `Zoé の合言葉 ${run}`
+  const set = (await (
+    await fetch(`${stack.apiUrl}/api/campflare.users.setPassword`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${created.token}` },
+      body: new URLSearchParams({ password }),
+    })
+  ).json()) as { ok: boolean }
+  expect(set.ok).toBe(true)
 
   const page = await (await browser.newContext()).newPage()
   // ?as=none: the dev server's auto sign-in steps aside for the login screen.
@@ -157,11 +199,12 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   await page.getByLabel("Server").fill(stack.apiUrl)
   await page.getByRole("button", { name: "Sign in with your browser" }).click()
 
-  // The server's own pages: a token of the person's own, then consent for the app.
-  await expect(page.getByLabel("Campflare token")).toBeVisible()
+  // The server's own pages: email and password, then consent for the app.
+  await expect(page.getByLabel("Email")).toBeVisible()
   expect(new URL(page.url()).origin).toBe(stack.apiUrl)
-  await page.getByLabel("Campflare token").fill(created.token)
-  await page.getByRole("button", { name: "Continue" }).click()
+  await page.getByLabel("Email").fill(`zoe-${run}@campflare.test`)
+  await page.getByLabel("Password").fill(password)
+  await page.getByRole("button", { name: "Sign in" }).click()
   await expect(page.getByRole("heading", { name: /^Allow / })).toBeVisible()
   await page.getByRole("button", { name: "Allow" }).click()
 

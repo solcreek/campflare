@@ -15,86 +15,49 @@
 //   shot --state /tmp/s/state         the stack of `pnpm dev:all --state /tmp/s/state --web`
 //   shot '#/C123' --click 'textbox:Message' --type 'hi' --press Enter
 //                                     steps, in order, on each route before the screenshot
+//
+// Exits 1 when there is no app to look at, the command line is wrong, or a
+// step failed (the screenshot is still taken, and the problem listed).
 
 import { chromium, type Page } from "@playwright/test"
 import { resolve } from "node:path"
-import { parseArgs } from "node:util"
-import { chooseStackFile, readStack } from "../../../scripts/dev-stack.ts"
+import {
+  clickTarget,
+  failedSteps,
+  findApp,
+  outFor,
+  pageOptions,
+  pageUrl,
+  parseShotArgs,
+  report,
+  stepProblem,
+  UsageError,
+  type ShotOptions,
+  type Step,
+} from "./shot-options.ts"
 
 const root = resolve(import.meta.dirname, "../../..")
 // pnpm runs this in apps/web; paths on the command line are relative to where it was typed.
 const cwd = process.env.INIT_CWD ?? process.cwd()
 
-const { values, positionals, tokens } = parseArgs({
-  allowPositionals: true,
-  tokens: true,
-  options: {
-    url: { type: "string" },
-    state: { type: "string" },
-    as: { type: "string" },
-    out: { type: "string", default: ".shots/shot.png" },
-    width: { type: "string", default: "1280" },
-    height: { type: "string", default: "800" },
-    dark: { type: "boolean", default: false },
-    wait: { type: "string", default: "1500", short: "w" },
-    click: { type: "string", multiple: true },
-    type: { type: "string", multiple: true },
-    press: { type: "string", multiple: true },
-  },
-})
-
-// Says why there is none and returns undefined (not process.exit: that cuts piped stderr short).
-function appUrl(): string | undefined {
-  if (values.url) return values.url.replace(/\/$/, "")
-  if (process.env.CAMPFLARE_WEB_PORT) return `http://localhost:${process.env.CAMPFLARE_WEB_PORT}`
-  const file = chooseStackFile(root, values.state && resolve(cwd, values.state), process.env.CAMPFLARE_DEV_ENV)
-  const stack = readStack(file)
-  if (!stack) {
-    console.error(`No dev stack is running (no live ${file.replace(`${root}/`, "")}).
-Start one:  pnpm dev:all --port 0 --web    (add --state <dir> for a separate one, then shot --state <dir>)
-or point at an app:  pnpm shot --url http://localhost:<port>`)
-    return undefined
-  }
-  if (!stack.appUrl) {
-    console.error(`The dev stack on ${stack.apiUrl} (pid ${stack.pid}) runs without the app: restart it with --web.`)
-    return undefined
-  }
-  return stack.appUrl
-}
-
-type Step = { kind: "click" | "type" | "press"; value: string }
-const steps: Step[] = tokens.flatMap((t) =>
-  t.kind === "option" && (t.name === "click" || t.name === "type" || t.name === "press") && t.value !== undefined
-    ? [{ kind: t.name, value: t.value }]
-    : [],
-)
-
 async function run(page: Page, step: Step) {
   if (step.kind === "type") return page.keyboard.type(step.value)
   if (step.kind === "press") return page.keyboard.press(step.value)
-  const colon = step.value.indexOf(":")
-  if (colon < 1) throw new Error(`--click wants "<role>:<accessible name>", e.g. "button:Send", not "${step.value}"`)
-  const role = step.value.slice(0, colon) as Parameters<Page["getByRole"]>[0]
-  const name = step.value.slice(colon + 1)
+  const { role, name } = clickTarget(step.value)
+  const as = role as Parameters<Page["getByRole"]>[0]
   // The exact name if there is one ("dev" is not "Campflare Dev menu"), else a substring.
-  const exact = page.getByRole(role, { name, exact: true })
-  const target = (await exact.count()) ? exact : page.getByRole(role, { name })
+  const exact = page.getByRole(as, { name, exact: true })
+  const target = (await exact.count()) ? exact : page.getByRole(as, { name })
   await target.first().click({ timeout: 5000 })
 }
 
-/** shot.png, then shot-2.png, shot-3.png… for further routes. */
-const outFor = (i: number) => (i === 0 ? values.out : values.out.replace(/(\.\w+)?$/, (ext) => `-${i + 1}${ext}`))
-
-async function shoot(base: string) {
-  const routes = positionals.length ? positionals : [""]
-
+/** Shoots every route; returns the steps that failed. */
+async function shoot(base: string, options: ShotOptions): Promise<string[]> {
+  const failed: string[] = []
   const browser = await chromium.launch()
   try {
-    for (const [i, route] of routes.entries()) {
-      const page = await browser.newPage({
-        viewport: { width: Number(values.width), height: Number(values.height) },
-        colorScheme: values.dark ? "dark" : "light",
-      })
+    for (const [i, route] of options.routes.entries()) {
+      const page = await browser.newPage(pageOptions(options))
       const problems: string[] = []
       page.on("console", (m) => {
         if (m.type() === "error" || m.type() === "warning") problems.push(`console.${m.type()}: ${m.text()}`)
@@ -105,35 +68,50 @@ async function shoot(base: string) {
         if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`)
       })
 
-      const url = `${base}/${values.as ? `?as=${values.as}` : ""}${route}`
+      const url = pageUrl(base, options.as, route)
       await page.goto(url)
       await page.waitForLoadState("networkidle").catch(() => {})
-      await page.waitForTimeout(Number(values.wait))
-      for (const step of steps) {
+      await page.waitForTimeout(options.wait)
+      for (const step of options.steps) {
         try {
           await run(page, step)
         } catch (error) {
-          problems.push(
-            `--${step.kind} ${step.value}: ${error instanceof Error ? error.message.split("\n")[0] : error}`,
-          )
+          problems.push(stepProblem(step, error))
+          failed.push(`${stepProblem(step, error)} (${route || "start"})`)
         }
       }
-      if (steps.length) await page.waitForTimeout(500)
-      const out = outFor(i)
+      if (options.steps.length) await page.waitForTimeout(500)
+      const out = outFor(options.out, i)
       await page.screenshot({ path: out })
       const outline = await page.locator("body").ariaSnapshot()
       await page.close()
 
-      if (i > 0) console.log("")
-      console.log(`screenshot  ${out}  (${url})`)
-      console.log(problems.length ? `problems\n  ${problems.join("\n  ")}` : "problems    none")
-      console.log(`outline\n${outline}`)
+      console.log(report(i, { out, url, problems, outline }))
     }
   } finally {
     await browser.close()
   }
+  return failed
 }
 
-const base = appUrl()
-if (base) await shoot(base)
-else process.exitCode = 1
+// Errors set exitCode rather than process.exit, which cuts piped output short.
+try {
+  const options = parseShotArgs(process.argv.slice(2))
+  const app = findApp(options, { root, cwd, env: process.env })
+  if ("error" in app) {
+    console.error(app.error)
+    process.exitCode = 1
+  } else {
+    const failed = await shoot(app.url, options)
+    if (failed.length) {
+      console.error(failedSteps(failed))
+      process.exitCode = 1
+    }
+  }
+} catch (error) {
+  if (!(error instanceof UsageError)) throw error
+  console.error(
+    `shot: ${error.message}\nUsage: pnpm shot [route...] [--as <handle>] [--dark] [--click role:name] [--type text] [--press key] …`,
+  )
+  process.exitCode = 1
+}

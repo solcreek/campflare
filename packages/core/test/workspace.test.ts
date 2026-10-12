@@ -222,6 +222,66 @@ describe("createWorkspace", () => {
     expect(api.calls.at(-1)!.method).toBe("conversations.replies")
   })
 
+  it("never shows an upload twice when RTM's copy beats the HTTP answer", async () => {
+    const head = "0000000100.000000"
+    let n = 0
+    const { api, ws } = await started(
+      {
+        "files.getUploadURLExternal": (args) => ({
+          upload_url: `https://x.test/upload/v1/${args.filename}`,
+          file_id: `F${++n}`,
+        }),
+        "conversations.replies": () => ({ messages: [{ ts: head, thread_ts: head, reply_count: 1 }, stored()] }),
+      },
+      "rtm",
+    )
+    await settle()
+    const socket = FakeSocket.all[0]!
+    socket.receive({ type: "hello" })
+    await ws.loadHistory("C1")
+    let posted: Record<string, unknown> = {}
+    const stored = () => posted
+    // Completion posts the message, and RTM delivers it before completion's answer.
+    api.handlers["files.completeUploadExternal"] = (args) => {
+      const files = JSON.parse(args.files!) as { id: string }[]
+      posted = { ts: `0000000${300 + n}.000000`, user: "U1", thread_ts: args.thread_ts, files }
+      socket.receive({ type: "message", channel: "C1", ...posted })
+      return { files }
+    }
+    api.handlers["conversations.history"] = () => ({
+      messages: [posted, { ts: "0000000200.000000", user: "U1" }, { ts: head, user: "U1" }],
+    })
+    const copies: number[] = []
+    ws.subscribe(() => {
+      const s = ws.getState()
+      copies.push(timeline(s, "C1").filter((m) => m.user === "U1" && m.files).length)
+    })
+    const bytes = new Uint8Array([1])
+    await ws.upload("C1", [
+      { name: "北京.png", bytes },
+      { name: "Straße.txt", bytes },
+    ])
+    expect(Math.max(...copies)).toBe(1)
+    expect(timeline(ws.getState(), "C1").map((m) => [m.ts, m.pending])).toEqual([
+      [head, undefined],
+      ["0000000200.000000", undefined],
+      ["0000000302.000000", undefined],
+    ])
+
+    // In a thread: one reply, counted once.
+    copies.length = 0
+    ws.subscribe(() => {
+      copies.push(thread(ws.getState(), "C1", head).filter((m) => m.files).length)
+    })
+    await ws.upload("C1", [{ name: "도쿄.jpg", bytes }], { threadTs: head })
+    expect(Math.max(...copies)).toBe(1)
+    expect(thread(ws.getState(), "C1", head).map((m) => [m.ts, m.pending])).toEqual([
+      [head, undefined],
+      ["0000000303.000000", undefined],
+    ])
+    expect(ws.getState().messages[keyOf("C1", head)]?.reply_count).toBe(1)
+  })
+
   it("keeps a failed upload's files for retry", async () => {
     const { api, ws } = await started({ "files.getUploadURLExternal": () => new Error("file_too_large") })
     await ws.upload("C1", [{ name: "big.zip", bytes: new Uint8Array(4) }])

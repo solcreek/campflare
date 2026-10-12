@@ -1,6 +1,14 @@
-import { formatBytes, type NewFile } from "@campflare/core"
+import { formatBytes, type NewFile, pastedFileName } from "@campflare/core"
 import { PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react"
-import { type DragEvent, type KeyboardEvent, type Ref, useImperativeHandle, useRef, useState } from "react"
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type Ref,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -48,6 +56,19 @@ export function useFileDrop(onFiles: (files: File[]) => void) {
   }
 }
 
+/**
+ * The files a paste carries, named sensibly when the clipboard gave a generic name. None when it
+ * carries plain text too: office apps put a picture of copied cells or slides beside their text,
+ * and the text is what was meant.
+ */
+export function pastedFiles(data: DataTransfer | null, when = new Date()): File[] {
+  if (!data || data.files.length === 0 || data.getData("text/plain")) return []
+  return [...data.files].map((f, i) => {
+    const name = pastedFileName(f.name, f.type, when, i)
+    return name === f.name ? f : new File([f], name, { type: f.type, lastModified: f.lastModified })
+  })
+}
+
 const readFile = async (f: File): Promise<NewFile> => ({
   name: f.name,
   type: f.type || undefined,
@@ -82,6 +103,14 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
     }
     // A failure stays on the message itself, with Retry; nothing to catch here.
     void workspace.send(channel, text, { threadTs })
+  }
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = pastedFiles(e.clipboardData)
+    if (pasted.length === 0) return
+    // The files would otherwise be dropped, or pasted as their names.
+    e.preventDefault()
+    attach(pasted)
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -154,6 +183,7 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
           className="max-h-48 min-h-9 resize-none"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
         <Button type="submit" size="icon" aria-label="Send" disabled={disabled || (!text.trim() && files.length === 0)}>
           <SendHorizontalIcon />

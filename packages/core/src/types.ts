@@ -84,6 +84,8 @@ export interface Message {
   client_msg_id?: string
   /** Local only: sent, not yet confirmed by the server. Its ts is a placeholder. */
   pending?: boolean
+  /** Local only: a pending upload's file ids on the server, once its bytes are stored. */
+  uploaded?: string[]
   /** Local only: sending failed with this error code. */
   failed?: string
   [key: string]: unknown

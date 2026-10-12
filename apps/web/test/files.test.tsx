@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
 import { ALEX, fakeServer, FakeSocket, hello, VINCENT } from "./server"
+import { ViewportObserver } from "./setup"
 
 afterEach(() => {
   FakeSocket.all = []
@@ -123,6 +124,153 @@ describe("files in messages", () => {
   })
 })
 
+describe("lazy images", () => {
+  const far: Message = {
+    ts: "1700000400.000000",
+    channel: "CGEN",
+    user: ALEX,
+    text: "早い写真",
+    files: [
+      {
+        id: "F6",
+        name: "plage-été.jpg",
+        mimetype: "image/jpeg",
+        original_w: 600,
+        original_h: 1200,
+        url_private: `${FILES}F6/plage.jpg`,
+      },
+    ],
+  }
+
+  it("fetches an image only once it nears the viewport, in a box of its final size", async () => {
+    ViewportObserver.manual = true
+    const { server } = await signedIn([withFiles, far], (s) => {
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+      s.api.files[`${FILES}F6/plage.jpg`] = new Uint8Array([2])
+    })
+    const fetched = () => server.api.fileRequests.map((r) => r.url.split("/").pop())
+    const plage = within(log()).getByRole("button", { name: "Open plage-été.jpg" })
+    const tokyo = within(log()).getByRole("button", { name: "Open Nachtansicht von Tokio" })
+    // Nothing is fetched yet, and the placeholders already take the images' room: 600×1200 in 360×240.
+    const placeholder = within(plage).getByRole("img", { name: "Loading plage-été.jpg" })
+    expect([placeholder.style.width, placeholder.style.height]).toEqual(["120px", "240px"])
+    expect(fetched()).toEqual([])
+
+    act(() => ViewportObserver.show(plage, false))
+    expect(fetched()).toEqual([])
+    act(() => ViewportObserver.show(plage))
+    const image = (await within(plage).findByRole("img", { name: "plage-été.jpg" })) as HTMLImageElement
+    expect([image.width, image.height]).toEqual([120, 240])
+    expect(fetched()).toEqual(["plage.jpg"])
+    expect(within(tokyo).getByRole("img", { name: "Loading Nachtansicht von Tokio" })).toBeTruthy()
+
+    // Seen once is enough: it stays loaded, and isn't observed any more.
+    act(() => ViewportObserver.show(plage, false))
+    expect(within(plage).getByRole("img", { name: "plage-été.jpg" })).toBeTruthy()
+    act(() => ViewportObserver.show(tokyo))
+    await within(tokyo).findByRole("img", { name: "Nachtansicht von Tokio" })
+    expect(fetched()).toEqual(["plage.jpg", "tokyo.png"])
+    // Only the image not yet near the viewport (seoul.webp) is still watched.
+    expect([...ViewportObserver.all].flatMap((o) => [...o.targets])).toEqual([
+      within(log()).getByRole("button", { name: "Open 서울" }),
+    ])
+  })
+
+  it("loads every image where there's no IntersectionObserver", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined)
+    try {
+      await signedIn([far], (s) => (s.api.files[`${FILES}F6/plage.jpg`] = new Uint8Array([2])))
+      expect(await within(log()).findByRole("img", { name: "plage-été.jpg" })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe("the image viewer", () => {
+  const twoImages: Message = {
+    ...withFiles,
+    files: [
+      withFiles.files![0]!,
+      { ...withFiles.files![2]!, url_private_download: `${FILES}F3/download/seoul.webp` },
+      withFiles.files![1]!,
+    ],
+  }
+
+  it("opens an image full size, steps through the message's images, downloads and closes", async () => {
+    const { server, user } = await signedIn([twoImages], (s) => {
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+      s.api.files[`${FILES}F3/seoul.webp`] = new Uint8Array([2])
+    })
+    await within(log()).findByRole("img", { name: "서울" })
+    await user.click(await within(log()).findByRole("button", { name: "Open Nachtansicht von Tokio" }))
+
+    let viewer = screen.getByRole("dialog", { name: "東京の夜" })
+    expect(within(viewer).getByText("1 of 2 · tokyo.png · 2 KB")).toBeTruthy()
+    const big = within(viewer).getByRole("img", { name: "Nachtansicht von Tokio" }) as HTMLImageElement
+    expect(big.src).toMatch(/^blob:/)
+    // The same bytes as inline: fetched once.
+    expect(server.api.fileRequests.filter((r) => r.url.endsWith("tokyo.png"))).toHaveLength(1)
+
+    // Arrow keys step through the images and wrap around; the PDF isn't one of them.
+    await user.keyboard("{ArrowRight}")
+    viewer = screen.getByRole("dialog", { name: "서울" })
+    expect(within(viewer).getByText("2 of 2 · seoul.webp · 10 B")).toBeTruthy()
+    await user.keyboard("{ArrowRight}")
+    expect(screen.getByRole("dialog", { name: "東京の夜" })).toBeTruthy()
+    await user.keyboard("{ArrowLeft}")
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Previous image" }))
+    expect(screen.getByRole("dialog", { name: "東京の夜" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Next image" }))
+    viewer = screen.getByRole("dialog", { name: "서울" })
+    // Other keys do nothing.
+    await user.keyboard("a")
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+
+    // Download saves the one shown, under its file name.
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
+    server.api.files[`${FILES}F3/download/seoul.webp`] = new Uint8Array([2])
+    await user.click(within(viewer).getByRole("button", { name: "Download seoul.webp" }))
+    await waitFor(() => expect(click).toHaveBeenCalledOnce())
+    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("seoul.webp")
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    // The close button closes it too.
+    await user.click(within(log()).getByRole("button", { name: "Open 서울" }))
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Close" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    // And so does a click outside it.
+    await user.click(within(log()).getByRole("button", { name: "Open 서울" }))
+    expect(screen.getByRole("dialog", { name: "서울" })).toBeTruthy()
+    await user.click(document.body)
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("shows a lone image without stepping, and says when its bytes don't come", async () => {
+    const lone: Message = {
+      ...withFiles,
+      files: [{ id: "F7", name: "größe.png", mimetype: "image/png", url_private: `${FILES}F7/gr%C3%B6%C3%9Fe.png` }],
+    }
+    let fail!: () => void
+    const { user } = await signedIn([lone], (s) => {
+      s.api.client.fetchFile = () => new Promise((_, reject) => (fail = () => reject(new Error("offline"))))
+    })
+    await user.click(within(log()).getByRole("button", { name: "Open größe.png" }))
+    const viewer = screen.getByRole("dialog", { name: "größe.png" })
+    expect(within(viewer).getByRole("img", { name: "Loading größe.png" })).toBeTruthy()
+    expect(within(viewer).queryByRole("button", { name: "Next image" })).toBeNull()
+    await user.keyboard("{ArrowRight}")
+    expect(screen.getByRole("dialog", { name: "größe.png" })).toBeTruthy()
+    await act(async () => fail())
+    expect(await within(viewer).findByText("Couldn't load this image.")).toBeTruthy()
+  })
+})
+
 describe("uploads from the composer", () => {
   it("attaches with the button, shows the upload pending, then the stored message", async () => {
     const { server, user } = await signedIn([])
@@ -162,6 +310,50 @@ describe("uploads from the composer", () => {
     await act(async () => finish())
     expect(await within(log()).findByRole("img", { name: "café.png" })).toBeTruthy()
     expect(within(log()).queryByText("Uploading…")).toBeNull()
+  })
+
+  it("attaches images pasted into the composer, and leaves text pastes alone", async () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 2, 9, 5, 7), toFake: ["Date"] })
+    const { server } = await signedIn([])
+    const box = screen.getByRole("textbox", { name: "Message #general" })
+    const paste = (fill: (data: DataTransfer) => void) => {
+      const clipboardData = new DataTransfer()
+      fill(clipboardData)
+      const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData })
+      fireEvent(box, event)
+      return event
+    }
+
+    // Text, even with the picture an office app puts beside it, pastes as text.
+    const text = paste((data) => {
+      data.setData("text/plain", "Größe ¿qué? 大きさ")
+      data.items.add(new File([new Uint8Array(4)], "image.png", { type: "image/png" }))
+    })
+    expect(text.defaultPrevented).toBe(false)
+    expect(screen.queryByRole("list", { name: "Attachments" })).toBeNull()
+
+    // A screenshot comes as "image.png": it gets a name of its own; a named file keeps its name.
+    const image = paste((data) => {
+      data.items.add(new File([new Uint8Array(4)], "image.png", { type: "image/png" }))
+      data.items.add(new File([new Uint8Array(8)], "서울-야경.jpg", { type: "image/jpeg" }))
+    })
+    expect(image.defaultPrevented).toBe(true)
+    const attachments = screen.getByRole("list", { name: "Attachments" })
+    expect(within(attachments).getByText("Pasted image 2026-10-02 at 09.05.07.png")).toBeTruthy()
+    expect(within(attachments).getByText("서울-야경.jpg")).toBeTruthy()
+    vi.useRealTimers()
+
+    const sent: NewFile[][] = []
+    server.api.client.upload = async (files) => {
+      sent.push(files as NewFile[])
+      return []
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]!.map((f) => [f.name, f.bytes.byteLength])).toEqual([
+      ["Pasted image 2026-10-02 at 09.05.07.png", 4],
+      ["서울-야경.jpg", 8],
+    ])
   })
 
   it("takes files dropped on the conversation, and keeps a failed upload for retry", async () => {

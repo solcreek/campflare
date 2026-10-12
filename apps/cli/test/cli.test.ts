@@ -68,6 +68,42 @@ describe("accounts", () => {
     expect(cli.err).toContain("not valid JSON")
   })
 
+  it("sets a password from stdin or a hidden prompt, never from arguments", async () => {
+    const admin = await loggedIn()
+    const email = `amelie-${Date.now()}@example.test`
+    expect(await admin.run("admin", "add-user", "amelie", "--email", email, "--json")).toBe(0)
+    const { token } = JSON.parse(admin.out) as { token: string }
+    const env = { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: token }
+    const signIn = (password: string) =>
+      fetch(`${baseUrl}/auth/sign-in/campflare-password`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: baseUrl },
+        body: JSON.stringify({ email, password }),
+      })
+
+    const piped = memoryIo({ env, stdin: "Amélie à Montréal\n" })
+    expect(await piped.run("password", "set")).toBe(0)
+    expect(piped.out).toContain("Password set")
+    expect((await signIn("Amélie à Montréal")).status).toBe(200)
+
+    const typed = memoryIo({ env, secrets: ["アメリの新しい合言葉", "アメリの新しい合言葉"] })
+    expect(await typed.run("password", "set")).toBe(0)
+    expect((await signIn("アメリの新しい合言葉")).status).toBe(200)
+    expect((await signIn("Amélie à Montréal")).status).toBe(401)
+
+    const mistyped = memoryIo({ env, secrets: ["첫 번째 비밀번호", "두 번째 비밀번호"] })
+    expect(await mistyped.run("password", "set")).toBe(2)
+    expect(mistyped.err).toContain("differ")
+
+    const short = memoryIo({ env, stdin: "short\n" })
+    expect(await short.run("password", "set")).toBe(1)
+    expect(short.err).toContain("invalid_password")
+    expect(short.err).toContain("at least 10 characters")
+
+    expect(await memoryIo({ env }).run("password", "set")).toBe(2) // no stdin, no terminal
+    expect(await memoryIo({ env }).run("password", "show")).toBe(2)
+  })
+
   it("manages tokens", async () => {
     const cli = await loggedIn()
     expect(await cli.run("token", "create")).toBe(0)

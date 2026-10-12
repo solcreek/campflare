@@ -41,6 +41,33 @@ export function fitImage(f: MessageFile, maxWidth: number, maxHeight: number): {
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) }
 }
 
+/** Names clipboards give pasted content: "image.png" in Chromium and Firefox, "Pasted Graphic.png" from macOS apps. */
+const GENERIC_NAME = /^(image|blob|untitled|pasted graphic( \d+)?)?(\.[a-z0-9]+)?$/i
+
+const EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+}
+
+const pad = (n: number) => String(n).padStart(2, "0")
+
+/**
+ * A pasted file's name: its own when it has a real one, else "Pasted image 2026-10-12 at 14.03.05.png"
+ * in local time. `index` numbers the second and later files of one paste: "… (2).png".
+ */
+export function pastedFileName(name: string, type: string, when: Date, index = 0): string {
+  if (!GENERIC_NAME.test(name.trim())) return name
+  const ext = EXTENSIONS[type] ?? /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase()
+  const date = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
+  const time = `${pad(when.getHours())}.${pad(when.getMinutes())}.${pad(when.getSeconds())}`
+  const what = type.startsWith("image/") ? "image" : "file"
+  const base = `Pasted ${what} ${date} at ${time}${index > 0 ? ` (${index + 1})` : ""}`
+  return ext ? `${base}.${ext}` : base
+}
+
 export interface FileCacheOptions {
   /** A GET with the session's token: client.fetchFile. */
   fetchFile: (url: string) => Promise<Response>

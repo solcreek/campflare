@@ -37,6 +37,9 @@ export async function setup(project: TestProject) {
       "dev",
       "--port",
       String(port),
+      // Its own inspector port: suites started at once would otherwise race for 9229.
+      "--inspector-port",
+      String(await freePort()),
       "--persist-to",
       state,
       "--var",

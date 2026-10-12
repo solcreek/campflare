@@ -10,7 +10,7 @@ import {
 import { createLocalJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { actorFor, authenticate } from "../api/auth"
 import { publicOrigin } from "../api/origin"
-import { CAMPFLARE_PROVIDER } from "../auth/campflare-token"
+import { CAMPFLARE_PROVIDER } from "../auth/sign-in"
 import { authFor } from "../auth/routes"
 import { first } from "../db/query"
 import type { Actor } from "../api/context"

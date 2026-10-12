@@ -58,7 +58,7 @@ Seeing the app: with `pnpm dev:all --port 0 --web` running in the background,
 `pnpm shot '#/<channel id>'` finds it through the run file, saves
 `apps/web/.shots/shot.png` (Read it to look) and prints console errors, failed requests
 and the accessible outline. Several routes give one shot each; `--click 'button:Send'`,
-`--type hi`, `--press Enter` act first, in order. Every screen is a hash route
+`--type hi`, `--press Enter` act first, in order; a step that fails exits 1. Every screen is a hash route
 (`#/C123`, `#/C123/<thread ts>`), so any state you need has a URL. Two people at once: `?as=vincent` in a second window.
 UI tests select by role and accessible name, as a person would; keep controls
 labelled and the jsx-a11y lint passing so they stay selectable.
@@ -67,15 +67,20 @@ labelled and the jsx-a11y lint passing so they stay selectable.
 
 GitHub Actions, every action pinned by commit SHA (Dependabot bumps them weekly).
 `.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu:
-`pnpm install --frozen-lockfile`, `pnpm build`, `pnpm check`, then `pnpm e2e`
-(Playwright traces and screenshots are uploaded when it fails). A lockfile out
+`pnpm install --frozen-lockfile`, `pnpm build`, Chromium, `pnpm check`, then `pnpm e2e`
+(Playwright traces and screenshots are uploaded when it fails). Chromium comes before
+the check because `tests/conformance/shot.test.ts` drives `pnpm shot` in it; locally
+that test skips, saying so, when `pnpm ready` would report no browsers. A lockfile out
 of step with `package.json` fails the install. `.github/workflows/desktop.yml`
 builds the Tauri installers (macOS universal, Windows, Linux; unsigned so far)
 as run artifacts and runs the desktop end-to-end tests on Linux
 (`apps/desktop/e2e/`, tauri-driver under xvfb). It runs only by hand (Actions →
 Desktop → Run workflow, or `gh workflow run desktop.yml`) and on `v*` tags,
-because macOS and Windows minutes are expensive. `pnpm --filter
-@campflare/desktop e2e` can't run on macOS (no WebDriver for WKWebView).
+because macOS and Windows minutes are expensive; `gh workflow run desktop.yml
+--ref <branch> -f e2e-only=true` runs just the Linux tests. A failed desktop test
+uploads the window's page source (and a screenshot, blank under xvfb so far) as
+the `desktop-e2e` artifact. `pnpm --filter @campflare/desktop e2e` can't run on
+macOS (no WebDriver for WKWebView).
 
 ## Layout
 
@@ -149,6 +154,9 @@ and `content-security-policy: sandbox`. `/files-pri/*` and `/upload/v1/*` answer
 CORS (any origin, Authorization allowed, no credentials) so browser apps fetch
 with the token; there are no signed download URLs. `/avatars/:id` draws the
 user's initials (one query; a CJK name gives its first character).
+Thumbnails are a TODO: uploads record an image's `width`/`height` (sent as
+`original_w`/`original_h`) but no `thumb_*` are made, since resizing in a Worker
+is heavy. Until then the app fetches the whole file for an inline image.
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
@@ -164,9 +172,29 @@ Node over HTTP (`tests/conformance/mcp.test.ts`), in both protocol eras.
 authorization server for MCP clients. `createAuth()` builds Better Auth per
 request (its URLs follow the request's origin) with `jwt()`, `mcp()` (tokens
 bound to `<origin>/mcp`, RFC 9728 metadata), `cimd()` (MCP 2026-07-28 profile;
-DCR off) and `campflareTokenSignIn()`, a plugin that signs a person in with an
-xoxp token and links them as an `account` (providerId `campflare`, accountId =
-Campflare user id). Routes (`src/auth/routes.ts`): `/auth/*` and
+DCR off) and `campflareSignIn()` (`src/auth/sign-in.ts`), a plugin that signs a
+person in with an email and password (`/sign-in/campflare-password`) or an xoxp
+token (`/sign-in/campflare-token`) and links them as an `account` (providerId
+`campflare`, accountId = Campflare user id); both start the same session, so
+the OAuth flows don't care which was used.
+
+**Passwords.** Not Better Auth's `emailAndPassword`: its emails are global,
+ours unique per workspace only. A password belongs to a Campflare user, in our
+`passwords` table (migration 0007): PBKDF2-SHA256 via WebCrypto at 100,000
+iterations (the Workers maximum; native, unlike a JS scrypt), salted, NFC
+normalized (`src/auth/password.ts`). People set their own with
+`campflare.users.setPassword` (xoxp; at least 10 characters; `invalid_password`,
+`email_required`) or `campflare password set` (stdin or a hidden prompt, never
+argv); an admin may pass `password` to `campflare.users.create`. Sign-in checks
+the password of every active user with that email: one match signs in; more
+than one answers `workspace_required`, and `/login` then asks for the workspace
+(domain or name). An unknown email still costs one hash. Five wrong passwords in
+a row lock those users for a minute (`too_many_attempts`, even with the right
+one; reset by a right one or a new password). That is per account only: there's
+no per-IP rate limit (Better Auth's limiter isn't configured). The `/login` page
+shows email and password first and the token form folded in a `<details>`.
+
+Routes (`src/auth/routes.ts`): `/auth/*` and
 `/.well-known/*` go to Better Auth; `/login` and `/consent` render script-free
 forms whose POSTs are forwarded to Better Auth as JSON (the only body type it
 accepts), turning its `{ url }` answer into a redirect. `/mcp` verifies those
@@ -185,7 +213,15 @@ Better Auth's `/auth/oauth2/authorize` (adding `openid`), so sign-in, consent,
 redirect matching and codes (single-use, 10 minutes, hashed) are Better
 Auth's. `oauth.v2.access` (`src/methods/oauth.ts`) redeems the code at Better
 Auth's token endpoint in process, maps the ID token's `sub` through `account`
-to the Campflare user, and mints an xoxp labelled `OAuth: <client>`. Bot
+to the Campflare user, and mints an xoxp labelled `OAuth: <client>`, with the
+client id in `tokens.client_id` (migration 0006). Slack would hand the same app
+the same token again; we keep only hashes, so every sign-in mints one, and the
+person keeps the newest `OAUTH_TOKENS_PER_CLIENT` (5) per client, older ones
+revoked in the same batch. Not just one: nothing tells two computers apart, and
+revoking every earlier token would sign the CLI out on the other machine; other
+clients and hand-made tokens are never touched. The same lookup batch deletes
+the access/refresh tokens Better Auth issued for the code (by its
+`authorizationCodeId`, the code's SHA-256 in base64url); consent stays. Bot
 `scope` is refused (400); `refresh_token` is `invalid_grant_type` (our tokens
 don't expire). Clients: our own public apps are rows from migration 0005,
 `campflare-cli` and `campflare-desktop` (redirect `http://127.0.0.1:<any
@@ -238,7 +274,11 @@ truth for its range. All changes go through one pure `reduce(state, action)`
 with no server. Messages are keyed `channel/ts`; a conversation's timeline holds
 top-level messages, a thread's list holds replies. Sends are optimistic: a
 pending message with a `~nnnnnnnn` ts (sorts last) becomes the stored one, or
-stays with `failed` for Retry or Discard. `start()` is idempotent (StrictMode).
+stays with `failed` for Retry or Discard. A stored copy that arrives first (RTM,
+a reloaded page) replaces the pending one at once (`pendingTwin`): a send by the
+`client_msg_id` the server echoes, an upload by its file ids, which
+`client.upload`'s `onUploaded` reports before completion, so uploads need no
+API beyond Slack's. `start()` is idempotent (StrictMode).
 `src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
 never HTML, and only links http(s) and mailto. `src/files.ts` decides image vs
 card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into
@@ -260,6 +300,11 @@ on the desktop, see below. A pasted token is the second way in. In dev,
 `?as=none` shows the login screen, and a return from the browser is never
 auto-signed-in. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
+Inline images (`message-files.tsx`) take their final box from
+`original_w`/`original_h` before the bytes come, and fetch them only when they
+near the viewport (`useInView`, IntersectionObserver; tests replace it with
+`ViewportObserver` in `test/setup.ts`); a click opens the message's images in a
+viewer dialog.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
 Rust side opens other origins' links in the system browser and keeps the session

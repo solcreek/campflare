@@ -5,7 +5,7 @@ import { betterAuth } from "better-auth"
 import { jwt } from "better-auth/plugins"
 import { DEFAULT_USER_SCOPES } from "../api/auth"
 import type { Env } from "../env"
-import { campflareTokenSignIn } from "./campflare-token"
+import { campflareSignIn } from "./sign-in"
 import { fetchClientMetadataResource } from "./cimd-fetch"
 
 // Better Auth is the OAuth 2.1 authorization server for MCP clients: it signs
@@ -41,7 +41,7 @@ export function createAuth(env: Env, origin: string, overrides: AuthOverrides = 
         fetchClientMetadataResource: overrides.fetchClientMetadataResource ?? fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
       }),
-      campflareTokenSignIn(env),
+      campflareSignIn(env),
     ],
   })
 }

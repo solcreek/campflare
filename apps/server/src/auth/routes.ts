@@ -29,14 +29,27 @@ export function mountAuth(app: Hono<{ Bindings: Env }>) {
 
   app.post("/login", async (c) => {
     const form = await c.req.formData()
-    const oauthQuery = String(form.get("oauth_query") ?? "")
-    const res = await forward(c.env, c.req.raw, "/sign-in/campflare-token", {
-      token: String(form.get("token") ?? ""),
-      ...(oauthQuery ? { oauth_query: oauthQuery } : {}),
-    })
+    const field = (name: string) => String(form.get(name) ?? "")
+    const oauthQuery = field("oauth_query")
+    const carry = oauthQuery ? { oauth_query: oauthQuery } : {}
+    const byToken = form.has("token")
+    const res = byToken
+      ? await forward(c.env, c.req.raw, "/sign-in/campflare-token", { token: field("token"), ...carry })
+      : await forward(c.env, c.req.raw, "/sign-in/campflare-password", {
+          email: field("email"),
+          password: field("password"),
+          ...(field("workspace") ? { workspace: field("workspace") } : {}),
+          ...carry,
+        })
     if (res.status >= 400) {
       const reason = ((await res.json().catch(() => ({}))) as { message?: string }).message
-      return loginPage(new URL(`/login?${oauthQuery}`, c.req.url), signInError(reason))
+      const again = new URL(`/login?${oauthQuery}`, c.req.url)
+      if (byToken) return loginPage(again, { error: tokenError(reason), token: true })
+      return loginPage(again, {
+        error: passwordError(reason),
+        email: field("email"),
+        askWorkspace: reason === "workspace_required" || field("workspace") !== "",
+      })
     }
     return res
   })
@@ -92,9 +105,15 @@ async function forward(env: Env, original: Request, path: string, body: Record<s
   return new Response(null, { status: 302, headers: redirect })
 }
 
-function signInError(code: string | undefined): string {
+function tokenError(code: string | undefined): string {
   if (code === "token_revoked") return "That token has been revoked."
   if (code === "account_inactive") return "That account is deactivated."
   if (code === "a user token (xoxp-) is needed") return "That's not a user token: use one that starts with xoxp-."
   return "That token didn't work. Check it and try again."
+}
+
+function passwordError(code: string | undefined): string {
+  if (code === "workspace_required") return "That email has a password in more than one workspace. Which one?"
+  if (code === "too_many_attempts") return "Too many wrong passwords. Wait a minute and try again."
+  return "That email and password don't match."
 }
