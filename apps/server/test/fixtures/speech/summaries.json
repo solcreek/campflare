@@ -1,0 +1,158 @@
+[
+  {
+    "name": "mostly Chinese, mixed",
+    "status": 200,
+    "response": {
+      "result": {
+        "id": "chatcmpl-53097c5b-df6a-4d66-8654-dae12227f3c6",
+        "object": "chat.completion",
+        "created": 1791787581,
+        "model": "@cf/meta/llama-3.3-70b-instruct-sd",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "決定了週四早上十點部署 staging。\n部署前已經解決了migration的問題，Vincent 負責 rollback 計畫，Alex 來通知客戶。\n決定：週四早上十點部署 staging\n行動項目：\nAlex：通知客戶\nVincent：負責 rollback 計畫",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "usage": {
+          "prompt_tokens": 189,
+          "completion_tokens": 72,
+          "total_tokens": 261,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 19.786174774169922
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null,
+        "response": "決定了週四早上十點部署 staging。\n部署前已經解決了migration的問題，Vincent 負責 rollback 計畫，Alex 來通知客戶。\n決定：週四早上十點部署 staging\n行動項目：\nAlex：通知客戶\nVincent：負責 rollback 計畫",
+        "tool_calls": []
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "name": "Spanish",
+    "status": 200,
+    "response": {
+      "result": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "Se discutió la publicación de la nueva versión y se determinó el momento adecuado.\nLa publicación se realizará después de completar las pruebas.\n\nDecidieron publicar la nueva versión el jueves por la mañana.\nDecidieron que Ada preparará las notas de la versión.\n\nAda: preparar las notas de la versión.",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1791787583,
+        "ec_transfer_params": null,
+        "id": "chatcmpl-fdebf253-08cf-4edd-9c41-23d867d14ce3",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "@cf/meta/llama-3.3-70b-instruct-sd",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "response": "Se discutió la publicación de la nueva versión y se determinó el momento adecuado.\nLa publicación se realizará después de completar las pruebas.\n\nDecidieron publicar la nueva versión el jueves por la mañana.\nDecidieron que Ada preparará las notas de la versión.\n\nAda: preparar las notas de la versión.",
+        "service_tier": null,
+        "tool_calls": [],
+        "usage": {
+          "prompt_tokens": 157,
+          "completion_tokens": 74,
+          "total_tokens": 231,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 19.342418670654297
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "name": "Japanese",
+    "status": 200,
+    "response": {
+      "result": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "会議ではリリースの日程について話し合いました。\nリリースの日程を決めるために、テストの終了時期を考慮しました。\n決定事項: リリースの日程を木曜日の午前にすること\nアクションアイテム: \nMinjun: リリースノートを書くこと",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1791787585,
+        "ec_transfer_params": null,
+        "id": "chatcmpl-63977411-2e11-4bfe-93a1-17d2e125e762",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "@cf/meta/llama-3.3-70b-instruct-sd",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "response": "会議ではリリースの日程について話し合いました。\nリリースの日程を決めるために、テストの終了時期を考慮しました。\n決定事項: リリースの日程を木曜日の午前にすること\nアクションアイテム: \nMinjun: リリースノートを書くこと",
+        "service_tier": null,
+        "tool_calls": [],
+        "usage": {
+          "prompt_tokens": 166,
+          "completion_tokens": 79,
+          "total_tokens": 245,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 20.60645294189453
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  }
+]
