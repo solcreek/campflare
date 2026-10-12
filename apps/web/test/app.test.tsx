@@ -3,7 +3,7 @@ import type { ReactElement } from "react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 import { App } from "@/app"
-import { browserStore, type Session } from "@/session"
+import { browserStore, type Session, type SessionStore } from "@/session"
 import { ALEX, fakeServer, FakeSocket, hello, VINCENT } from "./server"
 
 afterEach(() => {
@@ -15,7 +15,7 @@ const session: Session = { url: "https://x.test", token: "xoxp-1" }
 
 async function signedIn(server = fakeServer()) {
   const store = browserStore()
-  store.save(session)
+  await store.save(session)
   const user = userEvent.setup()
   render(<App store={store} connect={server.connect} />)
   await screen.findByRole("heading", { name: "general", level: 1 })
@@ -38,7 +38,9 @@ describe("App", () => {
     const store = browserStore()
     const user = userEvent.setup()
     render(<App store={store} connect={server.connect} fetch={server.api.fetch} />)
-    expect(screen.getByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
+    // The store answers asynchronously (the desktop keychain is behind IPC).
+    expect(screen.getByText("Loading…")).toBeTruthy()
+    expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
     const url = screen.getByLabelText("Server")
     await user.clear(url)
     await user.type(url, "https://x.test")
@@ -48,23 +50,44 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Token"), "xoxp-bad")
     await user.click(screen.getByRole("button", { name: "Sign in" }))
     expect((await screen.findByRole("alert")).textContent).toBe("invalid_auth")
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
 
     // An unreachable server.
     cleanupAndRender(<App store={store} connect={server.connect} fetch={failing} />)
-    await user.type(screen.getByLabelText("Token"), "xoxp-1")
+    await user.type(await screen.findByLabelText("Token"), "xoxp-1")
     await user.click(screen.getByRole("button", { name: "Sign in" }))
     expect((await screen.findByRole("alert")).textContent).toBe("Couldn't reach the server")
 
     // The right one: kept, and the workspace opens.
     server.api.handlers["auth.test"] = () => ({ user_id: ALEX, team_id: "T1", team: "Test Team" })
     cleanupAndRender(<App store={store} connect={server.connect} fetch={server.api.fetch} />)
-    await user.clear(screen.getByLabelText("Server"))
+    await user.clear(await screen.findByLabelText("Server"))
     await user.type(screen.getByLabelText("Server"), " https://x.test ")
     await user.type(screen.getByLabelText("Token"), "xoxp-1")
     await user.click(screen.getByRole("button", { name: "Sign in" }))
     await screen.findByRole("heading", { name: "general", level: 1 })
-    expect(store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+  })
+
+  it("treats a store it can't read as signed out, and says when one can't keep the session", async () => {
+    const server = fakeServer()
+    const broken: SessionStore = {
+      load: () => Promise.reject(new Error("locked")),
+      save: () => Promise.reject(new Error("access denied")),
+      clear: () => Promise.reject("gone"),
+    }
+    const user = userEvent.setup()
+    render(<App store={broken} connect={server.connect} fetch={server.api.fetch} />)
+    await user.type(await screen.findByLabelText("Token"), "xoxp-1")
+    await user.click(screen.getByRole("button", { name: "Sign in" }))
+    // Signed in for now, but it won't last past a restart.
+    await screen.findByRole("heading", { name: "general", level: 1 })
+    expect(await screen.findByText("Couldn't keep the sign-in: access denied")).toBeTruthy()
+    act(() => hello())
+    await user.click(screen.getByRole("button", { name: /Test Team/ }))
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
+    expect(await screen.findByText("Couldn't forget the sign-in: gone")).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
   })
 
   it("opens #general by default, with its history and live status", async () => {
@@ -230,7 +253,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /Test Team/ }))
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
     expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
   })
 
   it("offers a retry when the workspace fails to load", async () => {
@@ -243,6 +266,6 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Try again" }))
     await screen.findByRole("heading", { name: "general", level: 1 })
     // autoSession is never written to the store.
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
   })
 })

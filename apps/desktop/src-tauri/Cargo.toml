@@ -17,6 +17,8 @@ tauri = { version = "=2.12.0", features = [] }
 tauri-plugin-opener = "=2.6.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# v1: the Keychain on macOS, the Credential Manager on Windows, the Secret Service (zbus) on Linux.
+keyring = { version = "=4.2.0", default-features = false, features = ["v1"] }
 
 [profile.release]
 codegen-units = 1

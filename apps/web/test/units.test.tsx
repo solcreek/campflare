@@ -1,25 +1,110 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { isGrouped } from "@/components/message-list"
 import { Mrkdwn } from "@/components/mrkdwn"
 import { formatRoute, parseRoute } from "@/route"
-import { browserStore, devSession } from "@/session"
+import { browserStore, desktopStore, devSession, type Invoke, platformStore } from "@/session"
 import { followSystemTheme } from "@/theme"
 import { WorkspaceProvider, useWorkspace } from "@/workspace"
 import { fakeServer } from "./server"
 
+interface FakeShell {
+  kept: unknown
+  refuse: boolean
+  calls: string[]
+  invoke: Invoke
+}
+
+/** The shell's session_* commands over an in-memory keychain. */
+function fakeShell(): FakeShell {
+  const shell: FakeShell = {
+    kept: null,
+    refuse: false,
+    calls: [],
+    invoke: async (command, args) => {
+      shell.calls.push(command)
+      if (command === "session_load") return shell.kept
+      if (shell.refuse) throw new Error("User canceled the operation.")
+      if (command === "session_save") shell.kept = args?.session
+      if (command === "session_clear") shell.kept = null
+    },
+  }
+  return shell
+}
+
 describe("session", () => {
-  it("keeps a session in storage and ignores garbage", () => {
+  afterEach(() => localStorage.clear())
+
+  it("keeps a session in storage and ignores garbage", async () => {
     const store = browserStore()
-    expect(store.load()).toBeNull()
-    store.save({ url: "https://x.test", token: "xoxp-1" })
-    expect(store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
-    store.clear()
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
+    await store.save({ url: "https://x.test", token: "xoxp-1" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+    await store.clear()
+    expect(await store.load()).toBeNull()
     localStorage.setItem("campflare.session", "{not json")
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
     localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test" }))
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
+    localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test", token: 1 }))
+    expect(await store.load()).toBeNull()
+  })
+
+  const one = { url: "https://x.test", token: "xoxp-1" }
+  const two = { url: "https://y.test", token: "xoxp-2" }
+
+  it("uses the keychain in the desktop shell and localStorage in a browser", async () => {
+    const shell = fakeShell()
+    await platformStore({ __TAURI__: { core: { invoke: shell.invoke } } }).save(one)
+    expect(shell.kept).toEqual(one)
+    expect(localStorage.getItem("campflare.session")).toBeNull()
+
+    await platformStore({}).save(two)
+    await platformStore({ __TAURI__: {} }).save(two)
+    expect(await platformStore().load()).toEqual(two)
+    expect(shell.calls).toEqual(["session_save"])
+  })
+
+  it("keeps a session in the keychain", async () => {
+    const shell = fakeShell()
+    const store = desktopStore(shell.invoke)
+    expect(await store.load()).toBeNull()
+    await store.save(one)
+    expect(await store.load()).toEqual(one)
+    await store.clear()
+    expect(shell.kept).toBeNull()
+    expect(await store.load()).toBeNull()
+    shell.kept = { url: "https://x.test" }
+    expect(await store.load()).toBeNull()
+  })
+
+  it("moves a session from localStorage into the keychain", async () => {
+    const shell = fakeShell()
+    await browserStore().save(one)
+    expect(await desktopStore(shell.invoke).load()).toEqual(one)
+    expect(shell.kept).toEqual(one)
+    expect(localStorage.getItem("campflare.session")).toBeNull()
+
+    // The keychain's session wins over a leftover one, which goes.
+    await browserStore().save(two)
+    expect(await desktopStore(shell.invoke).load()).toEqual(one)
+    expect(localStorage.getItem("campflare.session")).toBeNull()
+  })
+
+  it("still signs in when the keychain refuses the move, and signs out of both", async () => {
+    const shell = fakeShell()
+    shell.refuse = true
+    const store = desktopStore(shell.invoke)
+    await browserStore().save(one)
+    expect(await store.load()).toEqual(one)
+    expect(shell.kept).toBeNull()
+    expect(await browserStore().load()).toEqual(one)
+    await expect(store.save(two)).rejects.toThrow("User canceled")
+
+    shell.refuse = false
+    await store.clear()
+    expect(await browserStore().load()).toBeNull()
+    expect(await store.load()).toBeNull()
   })
 
   it("signs in as the dev server's people", () => {
