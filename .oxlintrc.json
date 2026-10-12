@@ -20,7 +20,8 @@
       {
         "assertFunctionNames": ["expect", "expectError", "ok"]
       }
-    ]
+    ],
+    "unicorn/require-post-message-target-origin": "off"
   },
   "ignorePatterns": ["dist/**", ".wrangler/**", "**/worker-configuration.d.ts"]
 }

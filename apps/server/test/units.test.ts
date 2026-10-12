@@ -28,9 +28,12 @@ describe("ids and timestamps", () => {
   })
 })
 
-describe("Args", () => {
-  const args = (values: Record<string, unknown>) => new Args(values)
+const args = (values: Record<string, unknown>) => new Args(values)
+const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d) / 1000
+const riff = (chunk: string, body: number[]) =>
+  new Uint8Array([...new TextEncoder().encode(`RIFF\0\0\0\0WEBP${chunk}`), ...body, ...Array<number>(20).fill(0)])
 
+describe("Args", () => {
   it("reads typed values", () => {
     const a = args({
       s: "x",
@@ -113,7 +116,6 @@ describe("search syntax", () => {
   })
 
   it("turns dates into bounds", () => {
-    const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d) / 1000
     expect(parseSearch("before:2026-01-02", now)).toMatchObject({ until: day(2026, 1, 2) })
     expect(parseSearch("after:2026-01-02", now)).toMatchObject({ since: day(2026, 1, 3) })
     expect(parseSearch("on:2026-01-02", now)).toMatchObject({ since: day(2026, 1, 2), until: day(2026, 1, 3) })
@@ -148,8 +150,6 @@ describe("media", () => {
     ])
     expect(imageSize(jpeg)).toEqual({ width: 0x0304, height: 0x0102 })
     expect(imageSize(new Uint8Array([0xff, 0xd8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]))).toBeUndefined()
-    const riff = (chunk: string, body: number[]) =>
-      new Uint8Array([...new TextEncoder().encode(`RIFF\0\0\0\0WEBP${chunk}`), ...body, ...Array(20).fill(0)])
     const vp8 = riff("VP8 ", [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 50, 0])
     expect(imageSize(vp8)).toEqual({ width: 100, height: 50 })
     const vp8x = riff("VP8X", [0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 4, 0, 0])
