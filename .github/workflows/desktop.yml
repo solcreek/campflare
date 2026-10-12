@@ -163,7 +163,12 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri build --debug --no-bundle
 
+      # e2e/run.ts starts its own seeded server (scripts/dev.ts, wrangler from
+      # the dev dependencies). The runner has no Secret Service, so the app
+      # must keep its session in the file fallback, and the tests check that.
       - name: Desktop end-to-end tests
+        env:
+          CAMPFLARE_E2E_SESSION: file
         run: xvfb-run --auto-servernum pnpm --filter @campflare/desktop e2e --no-build
 
       # The window's screenshot and page source for each failed test (e2e/login.test.ts).

@@ -1,8 +1,9 @@
 //! The desktop shell: one window showing apps/web. The web app talks to the
 //! Campflare server itself (fetch and WebSocket from the webview), so the
 //! shell only adds what a browser tab would do differently: links open in the
-//! system browser, the session lives in the OS keychain (`session.rs`), and
-//! signing in through the browser comes back to a loopback listener (`oauth.rs`).
+//! system browser, the session lives in the OS keychain or, without one, a
+//! private file (`session.rs`), and signing in through the browser comes back
+//! to a loopback listener (`oauth.rs`).
 
 mod oauth;
 mod session;
