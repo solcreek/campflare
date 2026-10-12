@@ -157,15 +157,37 @@ or an id. Tools run the same handlers as the Web API, so permissions, events
 and error codes are the same; errors come back as tool errors the model can
 read.
 
-For now the bearer token is a Campflare user or bot token. From Claude Code:
+### Signing in
+
+MCP clients sign in with OAuth 2.1, as the specification asks. Better Auth, at
+`/auth`, is the authorization server:
+
+1. An unauthenticated call to `/mcp` answers `401` with
+   `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"`.
+2. That document names the authorization server; its metadata is at
+   `/.well-known/oauth-authorization-server/auth`.
+3. The client identifies itself with a Client ID Metadata Document (an HTTPS
+   URL as its `client_id`), the MCP 2026-07-28 way; dynamic client
+   registration is off. PKCE (S256) is required.
+4. The person signs in on `/login` and approves on `/consent`. Until there's
+   a UI with passwords or passkeys, signing in takes a Campflare user token
+   (`campflare token create`), which also says which workspace and person the
+   client acts as.
+5. The client gets a JWT access token bound to `/mcp` (and a refresh token
+   with `offline_access`).
+
+Agents configured by hand can skip OAuth and send a user or bot token:
 
 ```sh
 claude mcp add --transport http campflare http://localhost:8787/mcp \
   --header "Authorization: Bearer $CAMPFLARE_TOKEN"
 ```
 
-OAuth 2.1 sign-in for MCP clients (an authorization server issuing tokens
-bound to this resource) is the next step.
+Client metadata documents are fetched over an SSRF-guarded transport: https
+DNS names only, every DNS answer public (RFC 6890), no redirects. A Worker
+can't pin the address it checked, so the gap between that lookup and the fetch
+relies on Workers not reaching private networks; under local `wrangler dev`
+that guarantee doesn't hold.
 
 ## CLI
 
@@ -205,8 +227,10 @@ client and CLI bundles. The Worker is bundled by wrangler.
 
 ## Not yet
 
-- OAuth 2.1 for MCP clients, OAuth v2 (`oauth.v2.access`) for Slack apps, and
-  per-scope enforcement (tokens carry scopes, but no method checks them yet).
+- OAuth v2 (`oauth.v2.access`) for Slack apps, and per-scope enforcement
+  (tokens carry scopes, but no method checks them yet).
+- Signing in with a password, passkey or email link, and choosing a workspace
+  when one person is in several.
 - Events API over HTTP (request URLs); Socket Mode and RTM only so far.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
