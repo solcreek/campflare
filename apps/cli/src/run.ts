@@ -12,6 +12,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util"
 import { activeProfile, loadConfig, saveConfig, type Profile } from "./config"
 import { messageLine, plain, time } from "./format"
 import { UsageError, type Io } from "./io"
+import { oauthLogin } from "./oauth"
 import { resolveConversation, resolveUser, type Conversation, type User } from "./resolve"
 
 const HELP = `campflare — the command line for Campflare (and any Slack-compatible API)
@@ -20,6 +21,7 @@ Usage: campflare <command> [options]
 
 Account
   login --url <server> --token <xoxp-…> [--app-token <xapp-…>] [--profile <name>]
+  login --url <server> --oauth [--port N]   sign in through the browser instead
   bootstrap --url <server> --secret <s> --team <name> --user <handle> [--email <e>]
   whoami                         who the token belongs to
   profiles                       list saved profiles; --use <name> switches
@@ -114,10 +116,18 @@ const commands: Record<string, Command> = {
       url: { type: "string" },
       token: { type: "string" },
       "app-token": { type: "string" },
+      oauth: { type: "boolean" },
+      port: { type: "string" },
     })
     const url = str(values.url) ?? io.env.CAMPFLARE_URL
-    const token = str(values.token) ?? io.env.CAMPFLARE_TOKEN
-    if (!url || !token) throw new UsageError("login needs --url and --token")
+    if (values.oauth && values.token) throw new UsageError("login takes --oauth or --token, not both")
+    const port = str(values.port) === undefined ? undefined : Number(values.port)
+    if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
+      throw new UsageError("--port is a port number")
+    }
+    if (values.oauth && !url) throw new UsageError("login --oauth needs --url")
+    const token = values.oauth ? await oauthLogin(io, url!, { port }) : (str(values.token) ?? io.env.CAMPFLARE_TOKEN)
+    if (!url || !token) throw new UsageError("login needs --url and --token (or --oauth)")
     const client = createClient({ url, token, fetch: io.fetch })
     const who = await client.call<{ ok: boolean; user: string; team: string }>("auth.test")
     const name = str(values.profile) ?? "default"

@@ -13,6 +13,8 @@ export interface Io {
   configPath: string
   fetch?: Fetch
   WebSocket?: typeof globalThis.WebSocket
+  /** Opens a URL in the user's browser, if there is one to open. */
+  openUrl?(url: string): void | Promise<void>
   /** Resolves when the user interrupts (Ctrl-C), for long-running commands. */
   interrupted(): Promise<void>
 }

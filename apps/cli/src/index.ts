@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -25,6 +26,18 @@ const io: Io = {
     await writeFile(configPath, text, { mode: 0o600 })
   },
   configPath,
+  openUrl(url) {
+    // Best effort: with no browser, the URL printed beside it still works.
+    const [command, args] =
+      process.platform === "darwin"
+        ? ["open", [url]]
+        : process.platform === "win32"
+          ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
+          : ["xdg-open", [url]]
+    spawn(command as string, args as string[], { stdio: "ignore", detached: true })
+      .on("error", () => {})
+      .unref()
+  },
   interrupted: () => new Promise((resolve) => process.once("SIGINT", () => resolve())),
 }
 

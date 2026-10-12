@@ -167,6 +167,7 @@ don't expire). Clients: our own public apps are rows from migration 0005,
 port>/callback`, RFC 8252) and `campflare-web` (`http://localhost:<port>/`, a
 web app in development); a web app at its own https origin, or anyone else's
 app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
+`campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
