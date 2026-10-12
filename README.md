@@ -93,9 +93,10 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
 
-Search uses an FTS5 trigram index, so it matches substrings in any script:
-`部署` finds `部署失敗了`. Terms shorter than three characters fall back to a
-LIKE scan.
+Search uses an FTS5 trigram index that ignores case and diacritics. It matches
+substrings in any script: words in Chinese, Japanese and Korean, which aren't
+separated by spaces, as well as `cafe` for `Café` and `munchen` for `München`.
+Terms shorter than three characters fall back to a LIKE scan.
 
 ## Realtime
 

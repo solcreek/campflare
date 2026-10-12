@@ -57,8 +57,9 @@ bot apps in one query each).
 **Data.** D1 via thin helpers in `src/db/query.ts` (no ORM). Message `ts` is a
 fixed-width `"##########.######"` string so text order is time order; it's
 unique per channel by primary key, and `postMessage` retries with `nextTs()` on
-a clash. Search is FTS5 with the **trigram** tokenizer (so CJK substrings match);
-terms under 3 characters fall back to LIKE. A thread head with replies is
+a clash. Search is FTS5 with the **trigram** tokenizer and `remove_diacritics`
+(migration 0002), so CJK substrings match and Latin text matches without case or
+accents; terms under 3 characters fall back to LIKE. A thread head with replies is
 tombstoned on delete, not removed. Tokens are stored as SHA-256 hashes only.
 
 **Realtime.** After a write, handlers call `publish()` (`src/events.ts`), which
@@ -98,6 +99,10 @@ a bot user + xoxb + xapp).
   Keep the coverage thresholds passing.
 - Style is set by oxfmt: no semicolons, double quotes, width 120. Code,
   comments and commit messages are in English.
+- **Languages in data and tests:** no single non-English language. When text in
+  other languages is needed (seed data, search tests, examples), cover scripts
+  evenly: CJK (Chinese, Japanese, Korean) and accented Latin (Spanish, French,
+  German) at least.
 - `compatibility_date` is 2026-08-15, the newest that the workerd in
   `@cloudflare/vitest-pool-workers` 0.22 supports; vitest stays on 4.x for the same reason.
 
