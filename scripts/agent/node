@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The Node the agent hooks run on: the flake's when it's been built, else PATH's.
+here="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -x "$here/.dev/dev-tools/bin/node" ]; then exec "$here/.dev/dev-tools/bin/node" "$@"; fi
+exec node "$@"
