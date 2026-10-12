@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { expectError, ok, workspace } from "./helpers"
 
@@ -222,6 +223,26 @@ describe("conversations", () => {
 
     const ims = await ok<{ channels: Channel[] }>("users.conversations", { types: "im,mpim" }, w.owner.token)
     expect(ims.channels).toHaveLength(3)
+  })
+
+  it("counts unread messages up to a thousand", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    // Posting 1001 messages through the API is slow; write them straight to D1.
+    const rows = Array.from({ length: 1001 }, (_, i) => [w.general, `1700000000.${String(i).padStart(6, "0")}`, i])
+    await env.DB.batch(
+      rows.map(([channel, ts, i]) =>
+        env.DB.prepare("INSERT INTO messages (channel_id, ts, team_id, user_id, text) VALUES (?, ?, ?, ?, ?)").bind(
+          channel,
+          ts,
+          w.teamId,
+          bob.id,
+          `m${i}`,
+        ),
+      ),
+    )
+    const info = await ok<{ channel: Channel }>("conversations.info", { channel: w.general }, w.owner.token)
+    expect(info.channel.unread_count).toBe(1000)
   })
 
   it("tracks read state with conversations.mark", async () => {

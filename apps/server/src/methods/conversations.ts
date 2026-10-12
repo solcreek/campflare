@@ -24,14 +24,18 @@ import { typesFilter } from "./users"
 /** Top-level messages: thread replies stay in their thread unless broadcast. */
 const IN_HISTORY = "(thread_ts IS NULL OR thread_ts = ts OR subtype = 'thread_broadcast')"
 
+/** Unread counts stop here: counting reads every unread message, and a long-unread busy channel has thousands. */
+export const MAX_UNREAD = 1000
+
 async function unreadCount(ctx: Ctx<Actor>, c: ConversationRow, lastRead: string) {
   const row = await first<{ n: number }>(
     ctx.env.DB,
-    `SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND ts > ? AND deleted = 0 AND ${IN_HISTORY}
-     AND (user_id IS NULL OR user_id != ?)`,
+    `SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages WHERE channel_id = ? AND ts > ? AND deleted = 0 AND ${IN_HISTORY}
+     AND (user_id IS NULL OR user_id != ?) LIMIT ?)`,
     c.id,
     lastRead,
     ctx.auth.user.id,
+    MAX_UNREAD,
   )
   return row?.n ?? 0
 }
