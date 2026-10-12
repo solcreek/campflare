@@ -1,0 +1,262 @@
+import { requireWritable, resolveConversation } from "../db/conversations"
+import { postMessage } from "../db/messages"
+import { all, first, placeholders, run } from "../db/query"
+import type { ConversationRow, FileRow } from "../db/rows"
+import type { Env } from "../env"
+import { publish } from "../events"
+import { authenticate, tokenOf } from "../api/auth"
+import { method, type Actor, type Auth, type Ctx } from "../api/context"
+import { sign, verify } from "../api/crypto"
+import { invalidArguments, CampflareError } from "../api/errors"
+import { ids, nowSeconds } from "../api/ids"
+import { imageSize, mimeOf } from "../api/media"
+import { fileJson } from "../api/shapes"
+
+export const MAX_FILE_BYTES = 1024 * 1024 * 1024
+/** Bytes buffered to read an image's size; larger files stream straight to R2. */
+const SNIFF_LIMIT = 32 * 1024 * 1024
+
+const r2Key = (f: Pick<FileRow, "team_id" | "id">) => `${f.team_id}/${f.id}`
+
+async function getFile(ctx: Ctx<Actor>, id: string) {
+  const f = await first<FileRow>(ctx.env.DB, "SELECT * FROM files WHERE id = ? AND team_id = ?", id, ctx.auth.team.id)
+  if (!f) throw new CampflareError("file_not_found")
+  return f
+}
+
+/** A file is visible to its uploader, and to anyone who can read a conversation it's shared in. */
+async function canSee(env: Env, auth: Auth & { user: NonNullable<Auth["user"]> }, f: FileRow) {
+  if (f.team_id !== auth.team.id) return false
+  if (f.user_id === auth.user.id) return true
+  const channels = JSON.parse(f.channels) as string[]
+  if (channels.length === 0) return false
+  const row = await first<{ ok: number }>(
+    env.DB,
+    `SELECT 1 AS ok FROM conversations c LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?
+     WHERE c.id IN (${placeholders(channels.length)}) AND (m.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))
+     LIMIT 1`,
+    auth.user.id,
+    ...channels,
+  )
+  return Boolean(row)
+}
+
+method("files.getUploadURLExternal", "actor", async (ctx) => {
+  const filename = ctx.args.req("filename")
+  const length = ctx.args.int("length", -1)
+  if (length < 0) throw invalidArguments("missing required field: length")
+  if (length > MAX_FILE_BYTES) throw new CampflareError("file_too_large")
+  const id = ids.file()
+  await run(
+    ctx.env.DB,
+    `INSERT INTO files (id, team_id, user_id, name, title, mimetype, size, alt_txt, created)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id,
+    ctx.auth.team.id,
+    ctx.auth.user.id,
+    filename,
+    filename,
+    mimeOf(filename),
+    length,
+    ctx.args.str("alt_txt") ?? null,
+    nowSeconds(),
+  )
+  const token = await sign(ctx.env.SIGNING_KEY, `${id}:${Date.now() + 60 * 60_000}`)
+  return { upload_url: `${ctx.origin}/upload/v1/${token}`, file_id: id }
+})
+
+/** POST <upload_url>: the bytes, raw or as a multipart form's file field. */
+export async function handleUpload(env: Env, request: Request, token: string): Promise<Response> {
+  const payload = await verify(env.SIGNING_KEY, token)
+  const [fileId, expires] = payload?.split(":") ?? []
+  if (!fileId || Number(expires) < Date.now()) return new Response("invalid upload url", { status: 403 })
+  const f = await first<FileRow>(env.DB, "SELECT * FROM files WHERE id = ?", fileId)
+  if (!f || f.status !== "reserved") return new Response("upload not found", { status: 404 })
+
+  const type = request.headers.get("content-type") ?? ""
+  let body: ReadableStream | Uint8Array | null
+  let size: number | undefined
+  if (type.includes("multipart/form-data")) {
+    const form = await request.formData()
+    const file = [...form.values()].find((v): v is File => v instanceof File)
+    if (!file) return new Response("no file in form", { status: 400 })
+    body = new Uint8Array(await file.arrayBuffer())
+    size = body.byteLength
+  } else {
+    const declared = Number(request.headers.get("content-length") ?? "NaN")
+    if (f.mimetype.startsWith("image/") || !Number.isFinite(declared) || declared <= SNIFF_LIMIT) {
+      body = new Uint8Array(await request.arrayBuffer())
+      size = body.byteLength
+    } else {
+      body = request.body
+      size = declared
+    }
+  }
+  if (!body || size === undefined) return new Response("empty upload", { status: 400 })
+  if (size > MAX_FILE_BYTES) return new Response("file too large", { status: 413 })
+  const dims = body instanceof Uint8Array && f.mimetype.startsWith("image/") ? imageSize(body) : undefined
+
+  await env.FILES.put(r2Key(f), body, {
+    httpMetadata: { contentType: f.mimetype },
+    customMetadata: { name: f.name, user: f.user_id },
+  })
+  await run(
+    env.DB,
+    "UPDATE files SET status = 'uploaded', size = ?, width = ?, height = ? WHERE id = ?",
+    size,
+    dims?.width ?? null,
+    dims?.height ?? null,
+    f.id,
+  )
+  return new Response(`OK - ${size}`, { status: 200, headers: { "content-type": "text/plain" } })
+}
+
+method("files.completeUploadExternal", "actor", async (ctx) => {
+  const list = ctx.args.json<{ id?: string; title?: string }[]>("files")
+  if (!Array.isArray(list) || list.length === 0 || list.length > 10) throw invalidArguments("files must be 1–10 items")
+  const channelRef = ctx.args.str("channel_id") ?? ctx.args.list("channels")[0]
+  let c: ConversationRow | undefined
+  if (channelRef) {
+    c = await resolveConversation(ctx, channelRef)
+    await requireWritable(ctx, c)
+  }
+  const rows: FileRow[] = []
+  for (const item of list) {
+    if (!item.id) throw invalidArguments("each file needs an id")
+    const f = await getFile(ctx, item.id)
+    if (f.user_id !== ctx.auth.user.id) throw new CampflareError("file_not_found")
+    if (f.status === "reserved") throw new CampflareError("file_upload_not_complete")
+    const channels = new Set(JSON.parse(f.channels) as string[])
+    if (c) channels.add(c.id)
+    await run(
+      ctx.env.DB,
+      "UPDATE files SET status = 'complete', title = ?, channels = ? WHERE id = ?",
+      item.title || f.title,
+      JSON.stringify([...channels]),
+      f.id,
+    )
+    rows.push((await getFile(ctx, f.id))!)
+  }
+  if (c) {
+    const blocks = ctx.args.json<unknown>("blocks", "invalid_blocks")
+    await postMessage(ctx, c, {
+      user_id: ctx.auth.user.id,
+      ...(ctx.auth.kind === "bot" && ctx.auth.app ? { bot_id: ctx.auth.app.bot_id, app_id: ctx.auth.app.id } : {}),
+      text: ctx.args.str("initial_comment") ?? "",
+      blocks: Array.isArray(blocks) && blocks.length > 0 ? JSON.stringify(blocks) : null,
+      files: JSON.stringify(rows.map((f) => f.id)),
+      thread_ts: ctx.args.ts("thread_ts") ?? null,
+    })
+  }
+  for (const f of rows) {
+    publish(ctx, {
+      teamId: f.team_id,
+      audience: [f.user_id],
+      event: { type: "file_shared", file_id: f.id, user_id: f.user_id, file: { id: f.id }, channel_id: c?.id },
+    })
+  }
+  return { files: rows.map((f) => ({ id: f.id, title: f.title })) }
+})
+
+method("files.info", "actor", async (ctx) => {
+  const f = await getFile(ctx, ctx.args.req("file", "file_not_found"))
+  if (!(await canSee(ctx.env, ctx.auth, f))) throw new CampflareError("file_not_found")
+  return { file: fileJson(f, ctx.origin), comments: [], response_metadata: { next_cursor: "" } }
+})
+
+method("files.list", "actor", async (ctx) => {
+  const count = ctx.args.int("count", 100, { min: 1, max: 1000 })
+  const page = ctx.args.int("page", 1, { min: 1 })
+  const conditions = ["team_id = ?", "status = 'complete'"]
+  const params: unknown[] = [ctx.auth.team.id]
+  const user = ctx.args.str("user")
+  if (user) {
+    conditions.push("user_id = ?")
+    params.push(user)
+  }
+  const channel = ctx.args.str("channel")
+  if (channel) {
+    conditions.push("EXISTS (SELECT 1 FROM json_each(files.channels) WHERE value = ?)")
+    params.push(channel)
+  }
+  const from = ctx.args.int("ts_from", 0)
+  const to = ctx.args.int("ts_to", 0)
+  if (from) conditions.push(`created >= ${from}`)
+  if (to) conditions.push(`created <= ${to}`)
+  const rows = await all<FileRow>(
+    ctx.env.DB,
+    `SELECT * FROM files WHERE ${conditions.join(" AND ")} ORDER BY created DESC LIMIT 1000`,
+    ...params,
+  )
+  const visible: FileRow[] = []
+  for (const f of rows) if (await canSee(ctx.env, ctx.auth, f)) visible.push(f)
+  const pages = Math.max(1, Math.ceil(visible.length / count))
+  return {
+    files: visible.slice((page - 1) * count, page * count).map((f) => fileJson(f, ctx.origin)),
+    paging: { count, total: visible.length, page, pages },
+  }
+})
+
+method("files.delete", "actor", async (ctx) => {
+  const f = await getFile(ctx, ctx.args.req("file", "file_not_found"))
+  const admin = ctx.auth.kind === "user" && ctx.auth.user.is_admin
+  if (f.user_id !== ctx.auth.user.id && !admin) throw new CampflareError("cant_delete_file")
+  await ctx.env.FILES.delete(r2Key(f))
+  await run(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id)
+  const channels = JSON.parse(f.channels) as string[]
+  const audience = new Set<string>([f.user_id])
+  for (const id of channels) {
+    for (const r of await all<{ user_id: string }>(
+      ctx.env.DB,
+      "SELECT user_id FROM members WHERE conversation_id = ?",
+      id,
+    )) {
+      audience.add(r.user_id)
+    }
+  }
+  publish(ctx, {
+    teamId: f.team_id,
+    audience: [...audience],
+    event: { type: "file_deleted", file_id: f.id, channel_ids: channels },
+  })
+  return {}
+})
+
+/** GET /files-pri/<team>-<file>/[download/]<name>, with the same Bearer token the API takes. */
+export async function handleDownload(env: Env, request: Request, teamFile: string, download: boolean) {
+  const token = tokenOf(request, new URL(request.url).searchParams.get("t") ?? undefined)
+  if (!token) return new Response("not authed", { status: 401 })
+  let auth: Auth
+  try {
+    auth = await authenticate(env, token)
+  } catch {
+    return new Response("invalid auth", { status: 401 })
+  }
+  const [teamId, fileId] = teamFile.split("-")
+  const f = fileId
+    ? await first<FileRow>(env.DB, "SELECT * FROM files WHERE id = ? AND team_id = ?", fileId, teamId)
+    : undefined
+  if (!f || !auth.user || !(await canSee(env, { ...auth, user: auth.user }, f))) {
+    return new Response("not found", { status: 404 })
+  }
+  const object = await env.FILES.get(r2Key(f), { range: request.headers, onlyIf: request.headers })
+  if (!object) return new Response("not found", { status: 404 })
+  const headers = new Headers()
+  object.writeHttpMetadata(headers)
+  headers.set("etag", object.httpEtag)
+  headers.set("cache-control", "private, max-age=3600")
+  headers.set(
+    "content-disposition",
+    `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+  )
+  // Never let an uploaded HTML or SVG run as this origin.
+  headers.set("content-security-policy", "sandbox")
+  headers.set("x-content-type-options", "nosniff")
+  if (!("body" in object)) return new Response(null, { status: 304, headers })
+  const status = object.range && request.headers.has("range") ? 206 : 200
+  if (status === 206 && object.range && "offset" in object.range) {
+    const { offset = 0, length = object.size - offset } = object.range as { offset?: number; length?: number }
+    headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`)
+  }
+  return new Response(object.body, { status, headers })
+}
