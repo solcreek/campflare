@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { chooseStackFile, readStack, type DevStack } from "./dev-stack.ts"
 
 export interface Check {
   name: string
@@ -164,6 +165,19 @@ export async function devPort(port = 8787, fetcher: typeof fetch = fetch): Promi
         }
   } catch {
     return { name: "dev server", ok: true, advisory: true, detail: `:${port} is free (pnpm dev:all starts one)` }
+  }
+}
+
+/** The stack `pnpm dev:all` is serving from this checkout's default state, from its run file. */
+export function devStack(root: string, load: (file: string) => DevStack | null = readStack): Check {
+  const stack = load(chooseStackFile(root))
+  return {
+    name: "dev stack",
+    ok: true,
+    advisory: true,
+    detail: stack
+      ? `server ${stack.apiUrl}${stack.appUrl ? `, app ${stack.appUrl}` : ", no app (--web)"} (pid ${stack.pid})`
+      : "none from this checkout (pnpm dev:all --port 0 --web starts one)",
   }
 }
 

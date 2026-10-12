@@ -46,6 +46,8 @@ The app runs against the same server and signs in by itself in development
 
 ```sh
 pnpm web                                        # http://localhost:5173
+pnpm dev:all --port 0 --web                     # or server and app together, on free ports
+pnpm shot '#/<channel id>'                      # screenshot of that app, its console errors and outline
 pnpm desktop                                    # the same app in a desktop window (needs Rust)
 pnpm --filter @campflare/desktop bundle         # installers for this platform
 pnpm e2e                                        # browser tests against a fresh stack of their own
