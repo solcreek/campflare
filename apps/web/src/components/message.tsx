@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
+import { MessageFiles } from "./message-files"
 import { Emoji, Mrkdwn } from "./mrkdwn"
 
 /** Messages the server writes about a conversation, shown as one quiet line. */
@@ -167,6 +168,9 @@ export function MessageItem({ message, grouped, inThread, onOpenThread }: Messag
             <Mrkdwn text={message.text ?? ""} />
             {message.edited && <span className="text-xs text-muted-foreground"> (edited)</span>}
           </div>
+        )}
+        {(message.files?.length ?? 0) > 0 && (
+          <MessageFiles files={message.files!} uploading={message.pending && !message.failed} />
         )}
         {message.failed && (
           <div role="alert" className="mt-1 flex items-center gap-2 text-sm text-destructive">
