@@ -294,8 +294,21 @@ opens through the opener plugin. `build.rs` declares those commands,
 so each needs an `allow-*` grant in `capabilities/default.json`. A session left
 in localStorage by an older build moves into the keychain on first load. macOS may
 ask for Keychain access the first time (and again after a rebuild changes the
-binary's signature); Linux needs a running Secret Service (gnome-keyring, KWallet).
-The CSP in `tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
+binary's signature). Without a credential store (no Secret Service on a minimal
+or headless Linux, CI), the session falls back to `session.json` in the app's
+config dir, created 0600 and replaced atomically: keyring errors that mean no
+store or a platform failure (`classify()`) pick the file, other errors stay
+errors. The keychain is preferred whenever it works: load reads it first, and
+once it works again the file's session moves into it and the file goes;
+`session_clear` clears both. `session_save` answers `"keychain"` or `"file"`,
+and the app shows a one-time notice the first time it's the file. The stores
+sit behind a `SecretStore` trait, so `cargo test` fakes the keychain. The CSP in
+`tauri.conf.json` allows https/wss anywhere and http/ws on localhost. The
+end-to-end tests (`apps/desktop/e2e/`, `run.ts` + W3C WebDriver helpers in
+`driver.ts`) start a fresh seeded server (`scripts/dev.ts --port 0`), give the
+app its own XDG dirs on Linux, sign in with a pasted token, send a message,
+restart the app expecting it signed in, then sign out; CI sets
+`CAMPFLARE_E2E_SESSION=file` so they also check the fallback file.
 
 ## Conventions
 
