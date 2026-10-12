@@ -57,13 +57,21 @@ let checks = await run()
 const failing = () => checks.filter((c) => !c.ok && !c.advisory)
 
 if (values.fix) {
-  // Fixes run in this order: install first, since the others need node_modules.
-  const fixes = [...new Set(failing().flatMap((c) => (c.fix && !c.fix.includes("#") ? [c.fix] : [])))]
-  for (const command of fixes) {
-    if (!values.json) console.log(`→ ${command}`)
-    execSync(command, { cwd: root, stdio: values.json ? "ignore" : "inherit" })
+  // Some checks can only run once others are fixed (migrations need wrangler,
+  // which needs pnpm install), so fix, look again, and repeat while that helps.
+  const done = new Set<string>()
+  for (let round = 0; round < 3; round++) {
+    const fixes = [...new Set(failing().flatMap((c) => (c.fix && !c.fix.includes("#") ? [c.fix] : [])))].filter(
+      (f) => !done.has(f),
+    )
+    if (fixes.length === 0) break
+    for (const command of fixes) {
+      if (!values.json) console.log(`→ ${command}`)
+      execSync(command, { cwd: root, stdio: values.json ? "ignore" : "inherit" })
+      done.add(command)
+    }
+    checks = await run()
   }
-  if (fixes.length) checks = await run()
 }
 
 if (values.json) {
