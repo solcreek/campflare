@@ -1,6 +1,11 @@
+import { fileURLToPath } from "node:url"
 import { defineConfig } from "vitest/config"
 
 export default defineConfig({
+  // Test against the client's source, not a build that may be stale.
+  resolve: {
+    alias: { "@campflare/client": fileURLToPath(new URL("../../packages/client/src/index.ts", import.meta.url)) },
+  },
   test: {
     // A real server: wrangler dev with fresh local D1, R2 and Durable Objects.
     globalSetup: ["../../tests/conformance/global-setup.ts"],
