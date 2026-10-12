@@ -1,0 +1,638 @@
+[
+  {
+    "lang": "zh",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "zh",
+          "language_probability": 0.998046875,
+          "duration": 3.5575,
+          "duration_after_vad": 3.5575
+        },
+        "text": "部署已经完成,请大家确认测试结果。",
+        "word_count": 1,
+        "segments": [
+          {
+            "start": 0,
+            "end": 3.4,
+            "text": "部署已经完成,请大家确认测试结果。",
+            "temperature": 0,
+            "avg_logprob": -0.052468038756739006,
+            "compression_ratio": 0.8166666666666667,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": "部",
+                "start": 0,
+                "end": 0.1
+              },
+              {
+                "word": "署",
+                "start": 0.1,
+                "end": 0.32
+              },
+              {
+                "word": "已经",
+                "start": 0.32,
+                "end": 0.58
+              },
+              {
+                "word": "完成,",
+                "start": 0.58,
+                "end": 1.1
+              },
+              {
+                "word": "请",
+                "start": 1.58,
+                "end": 1.76
+              },
+              {
+                "word": "大家",
+                "start": 1.76,
+                "end": 2.14
+              },
+              {
+                "word": "确",
+                "start": 2.14,
+                "end": 2.4
+              },
+              {
+                "word": "认",
+                "start": 2.4,
+                "end": 2.58
+              },
+              {
+                "word": "测",
+                "start": 2.58,
+                "end": 2.8
+              },
+              {
+                "word": "试",
+                "start": 2.8,
+                "end": 3
+              },
+              {
+                "word": "结",
+                "start": 3,
+                "end": 3.14
+              },
+              {
+                "word": "果。",
+                "start": 3.14,
+                "end": 3.4
+              }
+            ],
+            "word_count": 1
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.100\n部\n\n00:00.100 --> 00:00.320\n署\n\n00:00.320 --> 00:00.580\n已经\n\n00:00.580 --> 00:01.100\n完成,\n\n00:01.580 --> 00:01.760\n请\n\n00:01.760 --> 00:02.140\n大家\n\n00:02.140 --> 00:02.400\n确\n\n00:02.400 --> 00:02.580\n认\n\n00:02.580 --> 00:02.800\n测\n\n00:02.800 --> 00:03.000\n试\n\n00:03.000 --> 00:03.140\n结\n\n00:03.140 --> 00:03.400\n果。\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.764784510533
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "ja",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "ja",
+          "language_probability": 0.99951171875,
+          "duration": 4.7628125,
+          "duration_after_vad": 4.7628125
+        },
+        "text": "デプロイが完了しました。テスト結果を確認してください。",
+        "word_count": 1,
+        "segments": [
+          {
+            "start": 0,
+            "end": 4.46,
+            "text": "デプロイが完了しました。テスト結果を確認してください。",
+            "temperature": 0,
+            "avg_logprob": -0.05048827975988388,
+            "compression_ratio": 0.9759036144578314,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": "デ",
+                "start": 0,
+                "end": 0.12
+              },
+              {
+                "word": "プ",
+                "start": 0.12,
+                "end": 0.26
+              },
+              {
+                "word": "ロ",
+                "start": 0.26,
+                "end": 0.38
+              },
+              {
+                "word": "イ",
+                "start": 0.38,
+                "end": 0.5
+              },
+              {
+                "word": "が",
+                "start": 0.5,
+                "end": 0.68
+              },
+              {
+                "word": "完了",
+                "start": 0.68,
+                "end": 1.2
+              },
+              {
+                "word": "しました。",
+                "start": 1.2,
+                "end": 1.88
+              },
+              {
+                "word": "テ",
+                "start": 2.14,
+                "end": 2.36
+              },
+              {
+                "word": "スト",
+                "start": 2.36,
+                "end": 2.56
+              },
+              {
+                "word": "結果",
+                "start": 2.56,
+                "end": 2.86
+              },
+              {
+                "word": "を",
+                "start": 2.86,
+                "end": 3.24
+              },
+              {
+                "word": "確",
+                "start": 3.24,
+                "end": 3.56
+              },
+              {
+                "word": "認",
+                "start": 3.56,
+                "end": 3.86
+              },
+              {
+                "word": "して",
+                "start": 3.86,
+                "end": 4.12
+              },
+              {
+                "word": "ください。",
+                "start": 4.12,
+                "end": 4.46
+              }
+            ],
+            "word_count": 1
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.120\nデ\n\n00:00.120 --> 00:00.260\nプ\n\n00:00.260 --> 00:00.380\nロ\n\n00:00.380 --> 00:00.500\nイ\n\n00:00.500 --> 00:00.680\nが\n\n00:00.680 --> 00:01.200\n完了\n\n00:01.200 --> 00:01.880\nしました。\n\n00:02.140 --> 00:02.360\nテ\n\n00:02.360 --> 00:02.560\nスト\n\n00:02.560 --> 00:02.860\n結果\n\n00:02.860 --> 00:03.240\nを\n\n00:03.240 --> 00:03.560\n確\n\n00:03.560 --> 00:03.860\n認\n\n00:03.860 --> 00:04.120\nして\n\n00:04.120 --> 00:04.460\nください。\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 3.7015179835763745
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "ko",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "ko",
+          "language_probability": 0.99951171875,
+          "duration": 3.7151875,
+          "duration_after_vad": 3.7151875
+        },
+        "text": "배포가 완료되었습니다. 테스트 결과를 확인해주세요.",
+        "word_count": 5,
+        "segments": [
+          {
+            "start": 0,
+            "end": 3.52,
+            "text": " 배포가 완료되었습니다. 테스트 결과를 확인해주세요.",
+            "temperature": 0,
+            "avg_logprob": -0.11309523667607989,
+            "compression_ratio": 0.8674698795180723,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": " 배포가",
+                "start": 0,
+                "end": 0.42
+              },
+              {
+                "word": " 완료되었습니다.",
+                "start": 0.42,
+                "end": 1.24
+              },
+              {
+                "word": " 테스트",
+                "start": 1.64,
+                "end": 2.14
+              },
+              {
+                "word": " 결과를",
+                "start": 2.14,
+                "end": 2.72
+              },
+              {
+                "word": " 확인해주세요.",
+                "start": 2.72,
+                "end": 3.52
+              }
+            ],
+            "word_count": 5
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.420\n 배포가\n\n00:00.420 --> 00:01.240\n 완료되었습니다.\n\n00:01.640 --> 00:02.140\n 테스트\n\n00:02.140 --> 00:02.720\n 결과를\n\n00:02.720 --> 00:03.520\n 확인해주세요.\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.887334603998825
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "en",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "en",
+          "language_probability": 0.99951171875,
+          "duration": 3.2976875,
+          "duration_after_vad": 3.2976875
+        },
+        "text": "The deployment is finished. Please check the test results.",
+        "word_count": 9,
+        "segments": [
+          {
+            "start": 0,
+            "end": 3.04,
+            "text": " The deployment is finished. Please check the test results.",
+            "temperature": 0,
+            "avg_logprob": -0.3674665221146175,
+            "compression_ratio": 0.8923076923076924,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": " The",
+                "start": 0,
+                "end": 0.1
+              },
+              {
+                "word": " deployment",
+                "start": 0.1,
+                "end": 0.5
+              },
+              {
+                "word": " is",
+                "start": 0.5,
+                "end": 0.82
+              },
+              {
+                "word": " finished.",
+                "start": 0.82,
+                "end": 1.26
+              },
+              {
+                "word": " Please",
+                "start": 1.5,
+                "end": 1.82
+              },
+              {
+                "word": " check",
+                "start": 1.82,
+                "end": 2.1
+              },
+              {
+                "word": " the",
+                "start": 2.1,
+                "end": 2.3
+              },
+              {
+                "word": " test",
+                "start": 2.3,
+                "end": 2.52
+              },
+              {
+                "word": " results.",
+                "start": 2.52,
+                "end": 3.04
+              }
+            ],
+            "word_count": 9
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.100\n The\n\n00:00.100 --> 00:00.500\n deployment\n\n00:00.500 --> 00:00.820\n is\n\n00:00.820 --> 00:01.260\n finished.\n\n00:01.500 --> 00:01.820\n Please\n\n00:01.820 --> 00:02.100\n check\n\n00:02.100 --> 00:02.300\n the\n\n00:02.300 --> 00:02.520\n test\n\n00:02.520 --> 00:03.040\n results.\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.562865866641825
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "es",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "es",
+          "language_probability": 0.99951171875,
+          "duration": 3.247,
+          "duration_after_vad": 3.247
+        },
+        "text": "El despliegue ha terminado. Por favor revisen los resultados.",
+        "word_count": 9,
+        "segments": [
+          {
+            "start": 0,
+            "end": 2.94,
+            "text": " El despliegue ha terminado. Por favor revisen los resultados.",
+            "temperature": 0,
+            "avg_logprob": -0.048802425986842105,
+            "compression_ratio": 0.9384615384615385,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": " El",
+                "start": 0,
+                "end": 0.12
+              },
+              {
+                "word": " despliegue",
+                "start": 0.12,
+                "end": 0.6
+              },
+              {
+                "word": " ha",
+                "start": 0.6,
+                "end": 0.74
+              },
+              {
+                "word": " terminado.",
+                "start": 0.74,
+                "end": 1.24
+              },
+              {
+                "word": " Por",
+                "start": 1.42,
+                "end": 1.66
+              },
+              {
+                "word": " favor",
+                "start": 1.66,
+                "end": 1.92
+              },
+              {
+                "word": " revisen",
+                "start": 1.92,
+                "end": 2.3
+              },
+              {
+                "word": " los",
+                "start": 2.3,
+                "end": 2.48
+              },
+              {
+                "word": " resultados.",
+                "start": 2.48,
+                "end": 2.94
+              }
+            ],
+            "word_count": 9
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.120\n El\n\n00:00.120 --> 00:00.600\n despliegue\n\n00:00.600 --> 00:00.740\n ha\n\n00:00.740 --> 00:01.240\n terminado.\n\n00:01.420 --> 00:01.660\n Por\n\n00:01.660 --> 00:01.920\n favor\n\n00:01.920 --> 00:02.300\n revisen\n\n00:02.300 --> 00:02.480\n los\n\n00:02.480 --> 00:02.940\n resultados.\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.5234730304147996
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "fr",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "fr",
+          "language_probability": 0.99853515625,
+          "duration": 3.8384375,
+          "duration_after_vad": 3.8384375
+        },
+        "text": "Le déploiement est terminé. Merci de vérifier les résultats.",
+        "word_count": 9,
+        "segments": [
+          {
+            "start": 0,
+            "end": 3.4,
+            "text": " Le déploiement est terminé. Merci de vérifier les résultats.",
+            "temperature": 0,
+            "avg_logprob": -0.09506836123764514,
+            "compression_ratio": 0.9411764705882353,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": " Le",
+                "start": 0,
+                "end": 0.12
+              },
+              {
+                "word": " déploiement",
+                "start": 0.12,
+                "end": 0.64
+              },
+              {
+                "word": " est",
+                "start": 0.64,
+                "end": 0.84
+              },
+              {
+                "word": " terminé.",
+                "start": 0.84,
+                "end": 1.36
+              },
+              {
+                "word": " Merci",
+                "start": 1.62,
+                "end": 2.06
+              },
+              {
+                "word": " de",
+                "start": 2.06,
+                "end": 2.22
+              },
+              {
+                "word": " vérifier",
+                "start": 2.22,
+                "end": 2.66
+              },
+              {
+                "word": " les",
+                "start": 2.66,
+                "end": 2.8
+              },
+              {
+                "word": " résultats.",
+                "start": 2.8,
+                "end": 3.4
+              }
+            ],
+            "word_count": 9
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.120\n Le\n\n00:00.120 --> 00:00.640\n déploiement\n\n00:00.640 --> 00:00.840\n est\n\n00:00.840 --> 00:01.360\n terminé.\n\n00:01.620 --> 00:02.060\n Merci\n\n00:02.060 --> 00:02.220\n de\n\n00:02.220 --> 00:02.660\n vérifier\n\n00:02.660 --> 00:02.800\n les\n\n00:02.800 --> 00:03.400\n résultats.\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.9831208839491246
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  },
+  {
+    "lang": "de",
+    "status": 200,
+    "response": {
+      "result": {
+        "transcription_info": {
+          "language": "de",
+          "language_probability": 0.99951171875,
+          "duration": 3.7935,
+          "duration_after_vad": 3.7935
+        },
+        "text": "Die Bereitstellung ist abgeschlossen. Bitte prüft die Ergebnisse.",
+        "word_count": 8,
+        "segments": [
+          {
+            "start": 0,
+            "end": 3.64,
+            "text": " Die Bereitstellung ist abgeschlossen. Bitte prüft die Ergebnisse.",
+            "temperature": 0,
+            "avg_logprob": -0.06743420738922923,
+            "compression_ratio": 0.9295774647887324,
+            "no_speech_prob": 0,
+            "words": [
+              {
+                "word": " Die",
+                "start": 0,
+                "end": 0.14
+              },
+              {
+                "word": " Bereitstellung",
+                "start": 0.14,
+                "end": 0.9
+              },
+              {
+                "word": " ist",
+                "start": 0.9,
+                "end": 1.16
+              },
+              {
+                "word": " abgeschlossen.",
+                "start": 1.16,
+                "end": 1.94
+              },
+              {
+                "word": " Bitte",
+                "start": 2.2,
+                "end": 2.52
+              },
+              {
+                "word": " prüft",
+                "start": 2.52,
+                "end": 2.9
+              },
+              {
+                "word": " die",
+                "start": 2.9,
+                "end": 3.06
+              },
+              {
+                "word": " Ergebnisse.",
+                "start": 3.06,
+                "end": 3.64
+              }
+            ],
+            "word_count": 8
+          }
+        ],
+        "vtt": "WEBVTT\n\n00:00.000 --> 00:00.140\n Die\n\n00:00.140 --> 00:00.900\n Bereitstellung\n\n00:00.900 --> 00:01.160\n ist\n\n00:01.160 --> 00:01.940\n abgeschlossen.\n\n00:02.200 --> 00:02.520\n Bitte\n\n00:02.520 --> 00:02.900\n prüft\n\n00:02.900 --> 00:03.060\n die\n\n00:03.060 --> 00:03.640\n Ergebnisse.\n\n",
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "neurons": 2.9481967788353995
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  }
+]
