@@ -1,6 +1,9 @@
 //! The desktop shell: one window showing apps/web. The web app talks to the
 //! Campflare server itself (fetch and WebSocket from the webview), so the
-//! shell only adds what a browser tab would do differently.
+//! shell only adds what a browser tab would do differently: links open in the
+//! system browser, and the session lives in the OS keychain (`session.rs`).
+
+mod session;
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -20,6 +23,11 @@ document.addEventListener("click", (event) => {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            session::session_load,
+            session::session_save,
+            session::session_clear
+        ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Campflare")

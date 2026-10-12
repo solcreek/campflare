@@ -1,10 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may ask of the shell: opening web and mail links outside the app",
+  "description": "What the main window may ask of the shell: opening web and mail links outside the app, and keeping the session in the OS keychain",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "allow-session-load",
+    "allow-session-save",
+    "allow-session-clear",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]
