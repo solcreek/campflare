@@ -235,6 +235,10 @@ pnpm test         # just the tests
 nix develop -c pnpm check                # the same, on the pinned toolchain, on any machine with Nix
 ```
 
+CI (GitHub Actions) runs `pnpm check` and `pnpm e2e` on every push and pull
+request; the desktop installers and the desktop end-to-end tests run by hand
+or on a `v*` tag (`.github/workflows/desktop.yml`).
+
 The toolchain comes from `flake.nix`: Node at the major in `.node-version`,
 pnpm, bun (for `pnpm otui`), sqlite3 (to look inside local D1 state) and jq.
 wrangler and workerd are not in it: they come from the pnpm lockfile, whose

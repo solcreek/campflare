@@ -1,0 +1,69 @@
+# Every push and pull request: format, lint, typecheck, every test suite with
+# coverage (pnpm check), then the app's browser tests (pnpm e2e). The same
+# commands as on a laptop, on the versions the repo pins: Node from
+# .node-version, pnpm from package.json#packageManager.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to the same branch or pull request makes the older run moot.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pnpm first: reads the version from package.json#packageManager, and caches its store.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # What `pnpm ready --fix` would do on a fresh checkout: local secrets
+      # for wrangler dev, and the client and CLI bundles that the CLI and
+      # conformance tests run.
+      - name: Local secrets
+        run: cp apps/server/.dev.vars.example apps/server/.dev.vars
+
+      - name: Build
+        run: pnpm build
+
+      - name: Check (format, lint, typecheck, tests with coverage)
+        run: pnpm check
+
+      - name: Install Chromium for the browser tests
+        run: pnpm --filter @campflare/web exec playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: pnpm e2e
+
+      - name: Upload Playwright traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-e2e
+          path: apps/web/.shots/e2e
+          retention-days: 14
+          if-no-files-found: ignore
