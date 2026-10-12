@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { StrictMode } from "react"
 import { afterEach, describe, expect, it } from "vitest"
 import { App } from "@/app"
 import { browserStore, devSession, type Invoke } from "@/session"
@@ -25,11 +26,15 @@ function web(search = "", hash = "", handlers: Record<string, Handler> = {}) {
   const left: string[] = []
   const replaced: string[] = []
   const store = browserStore()
+  const location = at(search, hash)
   const signIn = webSignIn({
-    location: at(search, hash),
+    location,
     storage: sessionStorage,
     navigate: (url) => left.push(url),
-    replaceUrl: (url) => replaced.push(url),
+    replaceUrl: (url) => {
+      replaced.push(url)
+      location.search = new URL(url, APP).search
+    },
     fetch: server.api.fetch,
   })
   return { server, left, replaced, store, signIn }
@@ -52,7 +57,12 @@ async function leaveForServer(server = "https://x.test") {
 /** The browser coming back to the app with this query; renders the app there. */
 function returnWith(query: Record<string, string>, hash = "", handlers: Record<string, Handler> = {}) {
   const app = web(`?${new URLSearchParams(query)}`, hash, handlers)
-  render(<App store={app.store} connect={app.server.connect} fetch={app.server.api.fetch} signIn={app.signIn} />)
+  // StrictMode, as main.tsx: effects run twice, and the address bar is clean by the second.
+  render(
+    <StrictMode>
+      <App store={app.store} connect={app.server.connect} fetch={app.server.api.fetch} signIn={app.signIn} />
+    </StrictMode>,
+  )
   return app
 }
 

@@ -22,14 +22,14 @@ export function LoginScreen({
   const [url, setUrl] = useState(() => (typeof location === "undefined" ? "" : location.origin))
   const [token, setToken] = useState("")
   const [error, setError] = useState<string>()
-  const [busy, setBusy] = useState<"browser" | "token" | "returning" | undefined>(() =>
-    signIn.returning() ? "returning" : undefined,
-  )
+  // Read once: finishing cleans the query out of the address bar, and StrictMode runs the effect twice.
+  const [returning] = useState(() => signIn.returning())
+  const [busy, setBusy] = useState<"browser" | "token" | "returning" | undefined>(returning ? "returning" : undefined)
   const id = useId()
 
   // The browser came back to this page: finish what an earlier page started.
   useEffect(() => {
-    if (!signIn.returning()) return
+    if (!returning) return
     let live = true
     signIn.finish().then(
       (session) => live && onSignIn(session),
@@ -42,7 +42,7 @@ export function LoginScreen({
     return () => {
       live = false
     }
-  }, [signIn, onSignIn])
+  }, [returning, signIn, onSignIn])
 
   // Each browser sign-in's number: one the person cancelled says nothing when it ends.
   const attempt = useRef(0)
