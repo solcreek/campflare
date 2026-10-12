@@ -1,2 +1,9 @@
 SIGNING_KEY=dev-signing-key-change-me
 BOOTSTRAP_SECRET=dev-bootstrap
+# Huddles (experiment): a Realtime SFU app, and optionally a TURN key.
+# cf realtime sfu apps create --name campflare-dev   → uid, secret
+# cf realtime turn keys create --name campflare-dev  → uid, secret
+REALTIME_APP_ID=
+REALTIME_APP_SECRET=
+REALTIME_TURN_KEY_ID=
+REALTIME_TURN_KEY_TOKEN=
