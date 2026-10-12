@@ -275,6 +275,16 @@ describe("OAuth v2 sign-in for a user token", () => {
     for (const other of [manual, desktop, owners]) expect((await call("auth.test", {}, other)).ok).toBe(true)
   })
 
+  it("lets auth.revoke end a token it issued", async () => {
+    const w = await workspace()
+    const token = await signIn(w.owner.token)
+    expect(await ok("auth.revoke", {}, token)).toMatchObject({ revoked: true })
+    expect((await call("auth.test", {}, token)).error).toBe("token_revoked")
+    expect(await labels(w.owner.token)).not.toContain("OAuth: Campflare CLI")
+    // Signing in again works as the first time did.
+    expect((await call("auth.test", {}, await signIn(w.owner.token))).ok).toBe(true)
+  })
+
   it("issues no token for a person deactivated after consenting", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
