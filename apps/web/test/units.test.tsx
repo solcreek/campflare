@@ -9,17 +9,19 @@ import { WorkspaceProvider, useWorkspace } from "@/workspace"
 import { fakeServer } from "./server"
 
 describe("session", () => {
-  it("keeps a session in storage and ignores garbage", () => {
+  it("keeps a session in storage and ignores garbage", async () => {
     const store = browserStore()
-    expect(store.load()).toBeNull()
-    store.save({ url: "https://x.test", token: "xoxp-1" })
-    expect(store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
-    store.clear()
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
+    await store.save({ url: "https://x.test", token: "xoxp-1" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+    await store.clear()
+    expect(await store.load()).toBeNull()
     localStorage.setItem("campflare.session", "{not json")
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
     localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test" }))
-    expect(store.load()).toBeNull()
+    expect(await store.load()).toBeNull()
+    localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test", token: 1 }))
+    expect(await store.load()).toBeNull()
   })
 
   it("signs in as the dev server's people", () => {

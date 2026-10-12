@@ -9,28 +9,34 @@ export interface Session {
   token: string
 }
 
+/** Where the session is kept. Async because the desktop keychain is behind IPC. */
 export interface SessionStore {
-  load(): Session | null
-  save(session: Session): void
-  clear(): void
+  load(): Promise<Session | null>
+  save(session: Session): Promise<void>
+  clear(): Promise<void>
 }
 
 const KEY = "campflare.session"
+
+/** A session from untrusted JSON, or null unless it has both fields as strings. */
+function asSession(value: unknown): Session | null {
+  const { url, token } = (value ?? {}) as Partial<Record<keyof Session, unknown>>
+  return typeof url === "string" && url && typeof token === "string" && token ? { url, token } : null
+}
 
 export function browserStore(
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = localStorage,
 ): SessionStore {
   return {
-    load() {
+    async load() {
       try {
-        const parsed = JSON.parse(storage.getItem(KEY) ?? "null") as Partial<Session> | null
-        return parsed?.url && parsed.token ? { url: parsed.url, token: parsed.token } : null
+        return asSession(JSON.parse(storage.getItem(KEY) ?? "null"))
       } catch {
         return null
       }
     },
-    save: (session) => storage.setItem(KEY, JSON.stringify(session)),
-    clear: () => storage.removeItem(KEY),
+    save: async (session) => storage.setItem(KEY, JSON.stringify(session)),
+    clear: async () => storage.removeItem(KEY),
   }
 }
 

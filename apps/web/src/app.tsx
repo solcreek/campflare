@@ -1,6 +1,7 @@
 import { createClient, type Fetch } from "@campflare/client"
 import { createWorkspace, type Workspace } from "@campflare/core"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { LoginScreen } from "./components/login-screen"
@@ -20,17 +21,39 @@ export interface AppProps {
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
 
+/** A store that failed to save or clear: the app goes on, but says so. */
+const reportStoreError = (what: string) => (error: unknown) =>
+  toast.error(`Couldn't ${what} the sign-in: ${error instanceof Error ? error.message : String(error)}`)
+
 export function App({ store, autoSession, connect = connectTo, fetch }: AppProps) {
-  const [session, setSession] = useState<Session | null>(() => autoSession ?? store.load())
+  // undefined while the store loads; a store that can't be read means signed out.
+  const [session, setSession] = useState<Session | null | undefined>(autoSession ?? undefined)
+  useEffect(() => {
+    if (autoSession) return
+    let live = true
+    store
+      .load()
+      .catch(() => null)
+      .then((loaded) => {
+        if (live) setSession(loaded)
+      })
+    return () => {
+      live = false
+    }
+  }, [store, autoSession])
   const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
 
   return (
     <TooltipProvider>
-      {workspace ? (
+      {session === undefined ? (
+        <main className="flex min-h-svh items-center justify-center text-muted-foreground" aria-busy="true">
+          Loading…
+        </main>
+      ) : workspace ? (
         <WorkspaceProvider workspace={workspace}>
           <Shell
             onSignOut={() => {
-              store.clear()
+              store.clear().catch(reportStoreError("forget"))
               setSession(null)
             }}
           />
@@ -39,7 +62,7 @@ export function App({ store, autoSession, connect = connectTo, fetch }: AppProps
         <LoginScreen
           fetch={fetch}
           onSignIn={(s) => {
-            store.save(s)
+            store.save(s).catch(reportStoreError("keep"))
             setSession(s)
           }}
         />
