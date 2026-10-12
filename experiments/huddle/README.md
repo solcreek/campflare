@@ -1,9 +1,12 @@
-# Huddles: audio calls on Cloudflare Realtime (experiment, step 1)
+# Huddles: calls on Cloudflare Realtime (experiment)
 
-Branch `experiments/huddle-1v1`. Can a conversation have a voice call, with
-media through Cloudflare's Realtime SFU and signalling through Campflare's
-own API and events? Step 1 answers this for audio between two or more people.
-Result (2026-10-12): yes.
+Branch `experiments/huddle-1v1`. Can a conversation have a call, with media
+through Cloudflare's Realtime SFU and signalling through Campflare's own API
+and events?
+
+- Step 1, audio between people: yes (2026-10-12).
+- Step 2, video and several people: yes, four people with cameras tested
+  live (2026-10-12).
 
 ## Run it
 
@@ -18,9 +21,16 @@ window), type `#general`, join. Each side should hear the other.
 ## How it works
 
 - **Media:** each browser keeps two PeerConnections to the SFU: one publishes
-  its microphone (`campflare.huddles.join`: its offer in, the SFU's answer
-  out), one receives everyone else (`campflare.huddles.subscribe`: the SFU's
-  offer out, `campflare.huddles.answer`: the browser's answer in).
+  its microphone and camera (`campflare.huddles.join`: its offer in, the SFU's
+  answer out), one receives everyone else (`campflare.huddles.subscribe`: the
+  SFU's offer out, `campflare.huddles.answer`: the browser's answer in).
+- **Video:** cameras publish as simulcast in three encodings (`f` full, `h`
+  half, `q` quarter). Each subscription picks one, and `campflare.huddles.layer`
+  switches it in place (`tracks/update`, no renegotiation). The page asks for
+  `f` with up to two video tiles, `h` up to four, `q` beyond, and a step up for
+  whoever is loudest. `publish` and `unpublish` turn a camera on and off
+  mid-call (announced as `huddle_tracks`); a camera that comes back is a new
+  transceiver and track name, never a force-closed one reused.
 - **Signalling:** `TeamHub` keeps who is in each conversation's call and which
   user owns each SFU session; members hear `huddle_joined` and `huddle_left`
   over RTM and subscribe to newcomers.
@@ -43,6 +53,11 @@ its interceptors don't apply, and the SFU client already takes a `fetch`.
 
 ## Measured
 
+- Simulcast: a subscriber received 1280 px on `f`, then 320 px seconds after
+  switching to `q` in place (Chrome publishing a 1280×720 fake camera).
+- Four people with cameras: each decodes the other three at 640 px (`h`), the
+  loudest at 1280 px (`f`), as the page's policy asks.
+
 - Round trip from a MacBook Air in Taiwan to the SFU: about 20 ms (Chrome's
   `candidate-pair.currentRoundTripTime`, 2026-10-12).
 - Audio at Opus rates is about 15 MB per listener per hour: inside the SFU's
@@ -61,11 +76,24 @@ cf realtime turn keys create --name campflare-dev    # → REALTIME_TURN_KEY_ID,
 Their secrets are only in `apps/server/.dev.vars` (gitignored). Delete with
 `cf realtime sfu apps delete` / `cf realtime turn keys delete`.
 
+## Found along the way
+
+- **Subscribing can beat the publisher's connection.** `huddle_joined` goes
+  out when `join` returns, before the newcomer's PeerConnection is up; the SFU
+  then refuses the subscription with `not_found_track_error` ("make sure the
+  publisher peer is connected and sending packets"). The page retries with
+  backoff for about 10 s. A server-side alternative would be announcing only
+  after the publisher reports it is connected.
+- The SFU answers `tracks/update` for a subscription that doesn't exist with
+  HTTP 200 and a per-track `internal_error`.
+
 ## Not yet
 
 - A seat outlives a browser that dies without `pagehide`; nothing expires it
   (the SFU itself drops tracks after 30 s without media).
-- No mute, no device picker, no reconnect after a network change.
-- Video, simulcast and active-speaker subscription (step 2), and transcription
-  through the WebSocket adapter (step 3).
+- Mute only silences the track locally (others aren't told); no device
+  picker, no screen sharing, no reconnect after a network change.
+- Layers don't react to the subscriber's bandwidth (`priorityOrdering: none`);
+  tiles that are off screen still receive video.
+- Transcription through the WebSocket adapter (step 3).
 - Slack's `calls.*` metadata API, so Slack clients see that a call is on.
