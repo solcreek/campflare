@@ -129,3 +129,32 @@ test("every screen has a URL", async ({ browser }) => {
     again.getByRole("complementary", { name: "Thread" }).getByText("Looking now", { exact: false }),
   ).toBeVisible()
 })
+
+test("signs in through the browser: the server's sign-in and consent, then back to the app", async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage()
+  // ?as=none: the dev server's auto sign-in steps aside for the login screen.
+  await page.goto(`${stack.appUrl}/?as=none`)
+  await page.getByLabel("Server").fill(stack.apiUrl)
+  await page.getByRole("button", { name: "Sign in with your browser" }).click()
+
+  // The server's own pages: a token of the person's own, then consent for the app.
+  await expect(page.getByLabel("Campflare token")).toBeVisible()
+  expect(new URL(page.url()).origin).toBe(stack.apiUrl)
+  await page.getByLabel("Campflare token").fill(stack.people.ada!)
+  await page.getByRole("button", { name: "Continue" }).click()
+  await expect(page.getByRole("heading", { name: /^Allow / })).toBeVisible()
+  await page.getByRole("button", { name: "Allow" }).click()
+
+  // Back in the app, signed in as that person, with the code gone from the address bar.
+  await expect(page.getByRole("status", { name: "Connected" })).toBeVisible()
+  expect(new URL(page.url()).search).toBe("")
+  const text = `Signed in through the browser ${Date.now()}`
+  await page.getByRole("textbox", { name: "Message #general" }).fill(text)
+  await page.keyboard.press("Enter")
+  // A message is named by its author, even one grouped under the previous.
+  await expect(
+    messages(page)
+      .getByRole("article", { name: /^Ada Lovelace / })
+      .filter({ hasText: text }),
+  ).toBeVisible()
+})
