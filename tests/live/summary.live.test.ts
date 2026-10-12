@@ -14,8 +14,9 @@ const FIXTURES = resolve(import.meta.dirname, "../../apps/server/test/fixtures/s
 const CALLS = [
   {
     name: "mostly Chinese, mixed",
-    // Chinese throughout, not English with Chinese bits: the summary follows the dominant language.
-    expect: /^[^a-z]*[週周星][^]*$/u,
+    expect: /週四|周四|星期四/,
+    // Written in Chinese, not English with Chinese bits (names like "staging" may stay as they were said).
+    mostly: /\p{Script=Han}/gu,
     lines: [
       { name: "Alex", text: "我們今天要決定 staging 的部署時間。", language: "zh" },
       { name: "Vincent", text: "I think Thursday morning works, after the migration fix lands.", language: "en" },
@@ -60,6 +61,11 @@ describe.skipIf(!configured)("call summaries (live)", () => {
       record.at(-1)!.name = call.name
       console.log(`--- ${call.name}\n${summary}`)
       expect(summary).toMatch(call.expect)
+      // Where a script is named, it outweighs Latin letters: written in that language, not around it.
+      const mostly = (call as { mostly?: RegExp }).mostly
+      const inScript = mostly ? (summary.match(mostly)?.length ?? 0) : 1
+      const latin = mostly ? (summary.match(/\p{Script=Latin}/gu)?.length ?? 0) : 0
+      expect(inScript).toBeGreaterThan(latin)
     }
     if (env.RECORD_FIXTURES) {
       mkdirSync(FIXTURES, { recursive: true })
