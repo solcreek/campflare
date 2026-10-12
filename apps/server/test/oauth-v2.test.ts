@@ -10,7 +10,11 @@ import { call, ok, ORIGIN, workspace } from "./helpers"
 // browser, then oauth.v2.access for a user token (xoxp-).
 
 const CLIENT_ID = "campflare-cli"
-const CLIENT_NAMES: Record<string, string> = { "campflare-cli": "Campflare CLI", "campflare-desktop": "Campflare for desktop", "https://agent.example.com/oauth/client.json": "Agente Ñandú 代理" }
+const CLIENT_NAMES: Record<string, string> = {
+  "campflare-cli": "Campflare CLI",
+  "campflare-desktop": "Campflare for desktop",
+  "https://agent.example.com/oauth/client.json": "Agente Ñandú 代理",
+}
 const redirectUri = (port = 49_152) => `http://127.0.0.1:${port}/callback`
 
 /** Opens /oauth/v2/authorize and follows Better Auth to the sign-in page. */
@@ -261,7 +265,12 @@ describe("OAuth v2 sign-in for a user token", () => {
       const before = { access: await count("oauthAccessToken"), refresh: await count("oauthRefreshToken") }
       for (const clientId of [CLIENT_ID, agent]) {
         const a = await authorize(w.owner.token, { clientId, userScope: "chat:write,offline_access" })
-        const res = await access({ client_id: clientId, code: a.code, code_verifier: a.verifier, redirect_uri: a.redirect })
+        const res = await access({
+          client_id: clientId,
+          code: a.code,
+          code_verifier: a.verifier,
+          redirect_uri: a.redirect,
+        })
         expect(res.ok).toBe(true)
       }
       expect(await count("oauthAccessToken")).toBe(before.access)
@@ -282,8 +291,9 @@ describe("OAuth v2 sign-in for a user token", () => {
   it("keeps the newest few tokens per person and client when they sign in again", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
-    const manual = (await ok<{ token: string }>("campflare.tokens.create", { label: "OAuth: Campflare CLI" }, bob.token))
-      .token
+    const manual = (
+      await ok<{ token: string }>("campflare.tokens.create", { label: "OAuth: Campflare CLI" }, bob.token)
+    ).token
     const desktop = await signIn(bob.token, "campflare-desktop")
     const owners = await signIn(w.owner.token)
 

@@ -114,7 +114,10 @@ type TokenOptions = {
 }
 
 /** A new token and the statement that stores its hash, for a caller that batches it with other writes. */
-export async function prepareToken(env: Env, opts: TokenOptions): Promise<{ token: string; insert: D1PreparedStatement }> {
+export async function prepareToken(
+  env: Env,
+  opts: TokenOptions,
+): Promise<{ token: string; insert: D1PreparedStatement }> {
   const random = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("")
   const token = `${PREFIX[opts.kind]}${opts.teamId}-${random}`
   const insert = stmt(
