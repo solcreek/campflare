@@ -181,13 +181,22 @@ never HTML, and only links http(s) and mailto.
 **Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
 select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
 `useMemo`. Core's selectors take only the slices they read for that reason.
-`session.ts` keeps `{url, token}` in localStorage (the desktop shell will move it
-to the keychain behind `SessionStore`). The composer ignores Enter while an IME
+`session.ts` keeps `{url, token}` behind an async `SessionStore`: localStorage in
+a browser, the OS keychain in the desktop shell. `platformStore()` tells them apart
+at runtime by `window.__TAURI__` (`withGlobalTauri`), so the web build never
+imports `@tauri-apps/*`. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
-Rust side only opens other origins' links in the system browser. The CSP in
-`tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
+Rust side opens other origins' links in the system browser and keeps the session
+in the OS credential store (`src/session.rs`, the `keyring` crate: Keychain,
+Credential Manager, Secret Service), service `com.campflare.desktop`, through
+`session_load`/`session_save`/`session_clear`. `build.rs` declares those commands,
+so each needs an `allow-*` grant in `capabilities/default.json`. A session left
+in localStorage by an older build moves into the keychain on first load. macOS may
+ask for Keychain access the first time (and again after a rebuild changes the
+binary's signature); Linux needs a running Secret Service (gnome-keyring, KWallet).
+The CSP in `tauri.conf.json` allows https/wss anywhere and http/ws on localhost.
 
 ## Conventions
 
