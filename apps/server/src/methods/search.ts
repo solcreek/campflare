@@ -71,12 +71,10 @@ method("search.messages", "user", async (ctx) => {
   const asc = ctx.args.str("sort_dir") === "asc"
   const q = parseSearch(query)
 
-  const where = [
-    "m.team_id = ?",
-    "m.deleted = 0",
-    CONTENT,
-    "(mem.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))",
-  ]
+  // The conversations the caller can read (and that the query allows) are worked out once, as `scope`,
+  // so each match costs a lookup in that list rather than a join to its conversation and membership.
+  const scope = ["c.team_id = ?", "(mem.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))"]
+  const where = ["m.team_id = ?", "m.deleted = 0", CONTENT, "m.channel_id IN (SELECT id FROM scope)"]
   const params: unknown[] = [ctx.auth.team.id]
   const fts = q.terms.filter(indexable)
   for (const term of q.terms.filter((t) => !indexable(t))) {
@@ -113,7 +111,7 @@ method("search.messages", "user", async (ctx) => {
   }
   for (const is of q.is.map((i) => i.toLowerCase())) {
     if (is === "thread") where.push("m.thread_ts IS NOT NULL")
-    else if (is === "dm") where.push("c.kind IN ('im', 'mpim')")
+    else if (is === "dm") scope.push("c.kind IN ('im', 'mpim')")
   }
 
   const from = fts.length ? "messages_fts JOIN messages m ON m.rowid = messages_fts.rowid" : "messages m"
@@ -121,35 +119,31 @@ method("search.messages", "user", async (ctx) => {
     where.unshift("messages_fts MATCH ?")
     params.unshift(fts.map(ftsString).join(" AND "))
   }
-  const joins = `JOIN conversations c ON c.id = m.channel_id
-    LEFT JOIN members mem ON mem.conversation_id = c.id AND mem.user_id = ?`
-  // The join's user comes first in the text, then the WHERE clause's.
-  const ordered = [ctx.auth.user.id, ...params]
-  const sql = `FROM ${from} ${joins} WHERE ${where.join(" AND ")}`
+  const withScope = `WITH scope AS (SELECT c.id FROM conversations c
+    LEFT JOIN members mem ON mem.conversation_id = c.id AND mem.user_id = ? WHERE ${scope.join(" AND ")})`
+  // The scope's parameters come first in the text, then the WHERE clause's.
+  const ordered = [ctx.auth.user.id, ctx.auth.team.id, ...params]
+  const sql = `FROM ${from} WHERE ${where.join(" AND ")}`
   const order = byScore && fts.length ? "bm25(messages_fts), m.ts DESC" : `m.ts ${asc ? "ASC" : "DESC"}`
 
   // The total counts no further than the last page a client can ask for (page ≤ 100): an exact count
   // reads every match, which on a common word is most of the workspace.
   const [counted, found] = await ctx.env.DB.batch([
-    stmt(ctx.env.DB, `SELECT COUNT(*) AS n FROM (SELECT 1 ${sql} LIMIT ?)`, ...ordered, MAX_PAGE * count),
+    stmt(ctx.env.DB, `${withScope} SELECT COUNT(*) AS n FROM (SELECT 1 ${sql} LIMIT ?)`, ...ordered, MAX_PAGE * count),
     stmt(
       ctx.env.DB,
-      `SELECT m.*, c.name AS c_name, c.kind AS c_kind, c.is_private AS c_private, c.member_key AS c_key
-       ${sql} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      `${withScope} SELECT m.* ${sql} ORDER BY ${order} LIMIT ? OFFSET ?`,
       ...ordered,
       count,
       (page - 1) * count,
     ),
   ])
   const total = (counted!.results[0] as { n: number } | undefined)?.n ?? 0
-  const rows = found!.results as (MessageRow & {
-    c_name: string
-    c_kind: ConversationRow["kind"]
-    c_private: number
-    c_key: string | null
-  })[]
+  const rows = found!.results as MessageRow[]
   const authorIds = [...new Set(rows.flatMap((r) => (r.user_id ? [r.user_id] : [])))]
-  const [authors, extras] = await Promise.all([
+  const channelIds = [...new Set(rows.map((r) => r.channel_id))]
+  // What the page needs besides itself, in parallel: its authors, conversations, reactions, files and apps.
+  const [authors, conversations, extras] = await Promise.all([
     authorIds.length
       ? all<UserRow>(
           ctx.env.DB,
@@ -157,31 +151,40 @@ method("search.messages", "user", async (ctx) => {
           JSON.stringify(authorIds),
         )
       : [],
+    channelIds.length
+      ? all<ConversationRow>(
+          ctx.env.DB,
+          "SELECT * FROM conversations WHERE id IN (SELECT value FROM json_each(?))",
+          JSON.stringify(channelIds),
+        )
+      : [],
     loadExtras(ctx.env, rows),
   ])
   const users = new Map(authors.map((u) => [u.id, u]))
+  const conversationOf = new Map(conversations.map((c) => [c.id, c]))
   const pages = Math.max(1, Math.ceil(total / count))
   const matches = rows.map((m, i) => {
     const json = messageJson(m, extras, ctx.origin)
+    const c = conversationOf.get(m.channel_id)!
     const imPeer =
-      m.c_kind === "im" ? (m.c_key?.split(",").find((u) => u !== ctx.auth.user.id) ?? ctx.auth.user.id) : undefined
+      c.kind === "im" ? (c.member_key?.split(",").find((u) => u !== ctx.auth.user.id) ?? ctx.auth.user.id) : undefined
     return {
       iid: `${m.channel_id}-${m.ts}`,
       team: m.team_id,
       score: byScore ? total - ((page - 1) * count + i) : 0,
       channel: {
         id: m.channel_id,
-        is_channel: m.c_kind === "channel",
-        is_group: m.c_kind === "mpim",
-        is_im: m.c_kind === "im",
-        is_mpim: m.c_kind === "mpim",
-        is_private: m.c_kind !== "channel" || Boolean(m.c_private),
+        is_channel: c.kind === "channel",
+        is_group: c.kind === "mpim",
+        is_im: c.kind === "im",
+        is_mpim: c.kind === "mpim",
+        is_private: c.kind !== "channel" || Boolean(c.is_private),
         is_shared: false,
         is_org_shared: false,
         is_ext_shared: false,
         is_pending_ext_shared: false,
         pending_shared: [],
-        name: imPeer ?? m.c_name,
+        name: imPeer ?? c.name,
         ...(imPeer ? { user: imPeer } : {}),
       },
       type: "message",
