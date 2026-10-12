@@ -8,6 +8,7 @@
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
+    "playwright-core": "1.63.0",
     "werift": "0.24.4"
   }
 }
