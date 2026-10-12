@@ -9,7 +9,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply campflare --remote",
     "types": "wrangler types --include-runtime=false src/worker-configuration.d.ts",
     "typecheck": "tsc -p .",
-    "test": "vitest run"
+    "test": "vitest run --coverage"
   },
   "dependencies": {
     "hono": "4.13.9"

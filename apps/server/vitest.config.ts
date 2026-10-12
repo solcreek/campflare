@@ -22,7 +22,7 @@ export default defineConfig(async () => {
         provider: "istanbul" as const,
         include: ["src/**/*.ts"],
         reporter: ["text", "html", "json-summary"],
-        thresholds: { lines: 90, functions: 90, branches: 75, statements: 90 },
+        thresholds: { lines: 95, functions: 95, branches: 85, statements: 95 },
       },
     },
   }
