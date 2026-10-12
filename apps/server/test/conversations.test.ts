@@ -246,6 +246,25 @@ describe("conversations", () => {
 })
 
 describe("history and threads", () => {
+  it("returns a full default page, past D1's 100 bound parameters", async () => {
+    const w = await workspace()
+    const posted: string[] = []
+    for (let i = 0; i < 101; i++) {
+      posted.push(
+        (await ok<{ ts: string }>("chat.postMessage", { channel: w.general, text: `n${i}` }, w.owner.token)).ts,
+      )
+    }
+    await ok("reactions.add", { channel: w.general, timestamp: posted[1], name: "tada" }, w.owner.token)
+    const page = await ok<Messages & { messages: { reactions?: { name: string }[] }[] }>(
+      "conversations.history",
+      { channel: w.general },
+      w.owner.token,
+    )
+    expect(page.messages).toHaveLength(100)
+    expect(page.has_more).toBe(true)
+    expect(page.messages.at(-1)).toMatchObject({ text: "n1", reactions: [{ name: "tada" }] })
+  })
+
   it("pages history newest first, with latest/oldest/inclusive", async () => {
     const w = await workspace()
     const ts: string[] = []

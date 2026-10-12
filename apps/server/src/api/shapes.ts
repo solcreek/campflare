@@ -1,4 +1,4 @@
-import { all, placeholders } from "../db/query"
+import { all } from "../db/query"
 import type { AppRow, ConversationRow, FileRow, MessageRow, ReactionRow, TeamRow, UserRow } from "../db/rows"
 import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
@@ -230,21 +230,12 @@ const key = (channelId: string, ts: string) => `${channelId}/${ts}`
 export async function loadExtras(env: Env, messages: MessageRow[]): Promise<MessageExtras> {
   const extras: MessageExtras = { reactions: new Map(), files: new Map(), apps: new Map() }
   if (messages.length === 0) return extras
-  const channelId = messages[0]!.channel_id
-  const sameChannel = messages.every((m) => m.channel_id === channelId)
-  // One query per batch: by channel when they share one (the common case), else by pairs.
-  const reactionRows = sameChannel
-    ? await all<ReactionRow>(
-        env.DB,
-        `SELECT * FROM reactions WHERE channel_id = ? AND ts IN (${placeholders(messages.length)}) ORDER BY created`,
-        channelId,
-        ...messages.map((m) => m.ts),
-      )
-    : await all<ReactionRow>(
-        env.DB,
-        `SELECT * FROM reactions WHERE (channel_id || '/' || ts) IN (${placeholders(messages.length)}) ORDER BY created`,
-        ...messages.map((m) => key(m.channel_id, m.ts)),
-      )
+  // Ids go in as one JSON argument: D1 binds at most 100 parameters, and a page can hold 1000 messages.
+  const reactionRows = await all<ReactionRow>(
+    env.DB,
+    `SELECT * FROM reactions WHERE (channel_id, ts) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?)) ORDER BY created`,
+    JSON.stringify(messages.map((m) => [m.channel_id, m.ts])),
+  )
   for (const r of reactionRows) {
     const k = key(r.channel_id, r.ts)
     const list = extras.reactions.get(k) ?? []
@@ -255,8 +246,8 @@ export async function loadExtras(env: Env, messages: MessageRow[]): Promise<Mess
   if (fileIds.length > 0) {
     const rows = await all<FileRow>(
       env.DB,
-      `SELECT * FROM files WHERE id IN (${placeholders(fileIds.length)})`,
-      ...fileIds,
+      "SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))",
+      JSON.stringify(fileIds),
     )
     for (const f of rows) extras.files.set(f.id, f)
   }
@@ -264,8 +255,8 @@ export async function loadExtras(env: Env, messages: MessageRow[]): Promise<Mess
   if (botIds.length > 0) {
     const rows = await all<AppRow>(
       env.DB,
-      `SELECT * FROM apps WHERE bot_id IN (${placeholders(botIds.length)})`,
-      ...botIds,
+      "SELECT * FROM apps WHERE bot_id IN (SELECT value FROM json_each(?))",
+      JSON.stringify(botIds),
     )
     for (const a of rows) extras.apps.set(a.bot_id, a)
   }
