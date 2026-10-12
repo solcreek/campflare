@@ -290,3 +290,47 @@ describe("listen", () => {
     expect(cli.err).toContain("Socket Mode needs an app token")
   })
 })
+
+describe("events", () => {
+  it("polls the event log from a cursor and prints where to resume", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("events")).toBe(0)
+    const start = cli.err.match(/^cursor (\d+)$/m)![1]!
+    expect(cli.out).toBe("")
+    await cli.run("send", "#general", "logged event")
+    cli.clear()
+    expect(await cli.run("events", "--cursor", start, "--wait", "5")).toBe(0)
+    expect(cli.out).toMatch(/^\d+ {2}C[A-Z0-9]+ {2}.*owner: logged event$/m)
+    expect(cli.err).toMatch(/^cursor \d+/)
+    cli.clear()
+    expect(await cli.run("events", "--cursor", start, "--json")).toBe(0)
+    const first = JSON.parse(cli.out.trim().split("\n")[0]!) as { cursor: string; event: { text: string } }
+    expect(first.event.text).toBe("logged event")
+    cli.clear()
+    expect(await cli.run("events", "--cursor", "nope")).toBe(1)
+    expect(cli.err).toContain("invalid_cursor")
+  })
+
+  it("follows until interrupted", async () => {
+    const cli = await loggedIn()
+    const done = cli.run("events", "--follow", "--wait", "2")
+    await new Promise((r) => setTimeout(r, 300))
+    await memoryIo({ env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: cli.config!.profiles.default!.token! } }).run(
+      "send",
+      "#general",
+      "followed event",
+    )
+    await until(() => cli.out.includes("followed event"))
+    cli.interrupt()
+    expect(await done).toBe(0)
+    expect(cli.out).toContain("owner: followed event")
+  })
+
+  it("reports gaps and errors while following", async () => {
+    const cli = await loggedIn()
+    const done = cli.run("events", "--follow", "--cursor", "999999", "--wait", "1")
+    await until(() => cli.err.includes("[error: invalid_cursor"))
+    cli.interrupt()
+    expect(await done).toBe(0)
+  })
+})

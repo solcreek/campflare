@@ -1,4 +1,12 @@
-import { ApiError, createClient, listen, type ApiArgs, type Client } from "@campflare/client"
+import {
+  ApiError,
+  createClient,
+  follow,
+  listen,
+  type ApiArgs,
+  type Client,
+  type RealtimeEvent,
+} from "@campflare/client"
 import { basename } from "node:path"
 import { parseArgs, type ParseArgsConfig } from "node:util"
 import { activeProfile, loadConfig, saveConfig, type Profile } from "./config"
@@ -28,6 +36,8 @@ Workspace
   create-channel <name> [--private]   join <#channel>   leave <#channel>
   invite <#channel> <@person>…
   listen [--json] [--socket]       stream live events (RTM, or Socket Mode with an app token)
+  events [--cursor N] [--wait S] [--follow] [--json]
+                                   the event log (Campflare): what came since a cursor, by polling
   api <method> [key=value]…        call any Web API method, print the JSON
 
 Admin (Campflare only)
@@ -399,6 +409,46 @@ const commands: Record<string, Command> = {
     })
     await io.interrupted()
     listener.close()
+  },
+
+  async events(argv, io) {
+    const { values } = parse(argv, {
+      cursor: { type: "string" },
+      wait: { type: "string" },
+      follow: { type: "boolean" },
+    })
+    const s = await session(io, values)
+    const names = values.json ? new Map<string, string>() : await s.names()
+    const print = (event: RealtimeEvent, cursor: string) => {
+      if (values.json) return io.stdout(`${JSON.stringify({ cursor, event })}\n`)
+      const line =
+        event.type === "message" && !event.subtype
+          ? messageLine(event as unknown as MessageRecord, names, `${String(event.channel)}  `)
+          : `${event.type}${event.subtype ? `/${String(event.subtype)}` : ""}`
+      io.stdout(`${cursor}  ${line}\n`)
+    }
+    if (values.follow) {
+      const follower = follow({
+        client: s.client,
+        cursor: str(values.cursor),
+        waitSeconds: Number(str(values.wait) ?? "30"),
+        onEvent: print,
+        onGap: () => io.stderr("[gap: events were missed; following from now]\n"),
+        onError: (error) => io.stderr(`[error: ${error instanceof ApiError ? error.code : String(error)}; retrying]\n`),
+      })
+      await io.interrupted()
+      follower.close()
+      return
+    }
+    const page = await s.client.call<{
+      ok: boolean
+      events: { cursor: string; event: RealtimeEvent }[]
+      cursor: string
+      has_more: boolean
+    }>("campflare.events.poll", { cursor: str(values.cursor), wait: str(values.wait) })
+    for (const { cursor, event } of page.events) print(event, cursor)
+    // The cursor to resume from goes to stderr, so stdout stays one event per line.
+    io.stderr(`cursor ${page.cursor}${page.has_more ? " (more)" : ""}\n`)
   },
 
   async api(argv, io) {
