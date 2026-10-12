@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { relative, resolve } from "node:path"
 
 const root = resolve(import.meta.dirname, "../..")
-const FORMATTED = /\.(ts|tsx|mts|js|mjs|json|jsonc|md)$/
+const FORMATTED = /\.(ts|tsx|mts|js|mjs|json|jsonc|md|css)$/
 const LINTED = /\.(ts|tsx|mts|js|mjs)$/
 
 const input = JSON.parse(readFileSync(0, "utf8") || "{}") as { tool_input?: { file_path?: string } }

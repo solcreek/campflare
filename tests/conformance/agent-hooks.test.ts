@@ -15,7 +15,11 @@ const hook = (script: string, input: unknown) =>
   })
 
 const probe = join(root, "tests/conformance/.hook-probe.ts")
-afterEach(() => rmSync(probe, { force: true }))
+const cssProbe = join(root, "tests/conformance/.hook-probe.css")
+const tsxProbe = join(root, "tests/conformance/.hook-probe.tsx")
+afterEach(() => {
+  for (const p of [probe, cssProbe, tsxProbe]) rmSync(p, { force: true })
+})
 
 describe("after-edit", () => {
   it("formats the file it's told about", () => {
@@ -23,6 +27,22 @@ describe("after-edit", () => {
     const res = hook("after-edit.ts", { tool_input: { file_path: probe } })
     expect(res.status).toBe(0)
     expect(readFileSync(probe, "utf8")).toBe("export const x = { a: 1 }\n")
+  })
+
+  it("formats stylesheets too", () => {
+    writeFileSync(cssProbe, ".a{color:red}\n")
+    expect(hook("after-edit.ts", { tool_input: { file_path: cssProbe } }).status).toBe(0)
+    expect(readFileSync(cssProbe, "utf8")).toBe(".a {\n  color: red;\n}\n")
+  })
+
+  it("catches React hook mistakes in components", () => {
+    writeFileSync(
+      tsxProbe,
+      'import { useEffect } from "react"\nexport function A({ n }: { n: number }) {\n  useEffect(() => console.log(n), [])\n  return null\n}\n',
+    )
+    const res = hook("after-edit.ts", { tool_input: { file_path: tsxProbe } })
+    expect(res.status).toBe(2)
+    expect(res.stderr).toContain("exhaustive-deps")
   })
 
   it("hands lint errors back to the agent with exit 2", () => {
