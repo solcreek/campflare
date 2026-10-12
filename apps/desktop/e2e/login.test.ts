@@ -10,7 +10,7 @@ import { after, before, test as nodeTest } from "node:test"
 const base = process.env.WEBDRIVER_URL ?? "http://127.0.0.1:4444"
 const application = process.env.CAMPFLARE_DESKTOP_APP
 // W3C WebDriver's key for an element reference.
-const ELEMENT = "element-6066-11e4-a52e-4f735466ecbf"
+const ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
 
 /** A WebDriver command: POST with a JSON body, GET and DELETE without. */
 async function call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
@@ -81,5 +81,7 @@ test("with no session, the app opens on the sign-in screen", async () => {
   const token = await find("//label[span[normalize-space()='Token']]//input")
   assert.equal(await call("GET", `/session/${session}/element/${token}/attribute/type`), "password")
   assert.ok(server)
-  assert.equal(await text(await find("//button[@type='submit']")), "Sign in")
+  // Both ways in: the browser (OAuth through the loopback listener) and a pasted token.
+  assert.ok(await find("//button[normalize-space()='Sign in with your browser']"))
+  assert.ok(await find("//button[normalize-space()='Sign in with a token']"))
 })
