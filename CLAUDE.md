@@ -61,8 +61,10 @@ labelled and the jsx-a11y lint passing so they stay selectable.
 
 GitHub Actions, every action pinned by commit SHA (Dependabot bumps them weekly).
 `.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu:
-`pnpm install --frozen-lockfile`, `pnpm build`, `pnpm check`, then `pnpm e2e`
-(Playwright traces and screenshots are uploaded when it fails). A lockfile out
+`pnpm install --frozen-lockfile`, `pnpm build`, Chromium, `pnpm check`, then `pnpm e2e`
+(Playwright traces and screenshots are uploaded when it fails). Chromium comes before
+the check because `tests/conformance/shot.test.ts` drives `pnpm shot` in it; locally
+that test skips, saying so, when `pnpm ready` would report no browsers. A lockfile out
 of step with `package.json` fails the install. `.github/workflows/desktop.yml`
 builds the Tauri installers (macOS universal, Windows, Linux; unsigned so far)
 as run artifacts and runs the desktop end-to-end tests on Linux
