@@ -14,12 +14,16 @@ export function LoginScreen({
   onSignIn,
   signIn,
   fetch,
+  server = "",
 }: {
   onSignIn: (session: Session) => void
   signIn: BrowserSignIn
   fetch?: Fetch
+  /** The Server field's first value: the dev server, or the last one signed in to. */
+  server?: string
 }) {
-  const [url, setUrl] = useState(() => (typeof location === "undefined" ? "" : location.origin))
+  const [url, setUrl] = useState(server)
+  // Never pre-filled: a token is only ever typed or pasted.
   const [token, setToken] = useState("")
   const [error, setError] = useState<string>()
   // Read once: finishing cleans the query out of the address bar, and StrictMode runs the effect twice.

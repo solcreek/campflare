@@ -54,7 +54,12 @@ describe("App", () => {
 
     // An unreachable server.
     cleanupAndRender(<App store={store} connect={server.connect} fetch={failing} />)
-    await user.type(await screen.findByLabelText("Token"), "xoxp-1")
+    // A server that wasn't signed in to isn't remembered: the field starts empty.
+    expect(((await screen.findByLabelText("Server")) as HTMLInputElement).value).toBe("")
+    await user.type(screen.getByLabelText("Token"), "xoxp-1")
+    await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
+    expect((await screen.findByRole("alert")).textContent).toBe("Enter the server's address")
+    await user.type(screen.getByLabelText("Server"), "https://x.test")
     await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     expect((await screen.findByRole("alert")).textContent).toBe("Couldn't reach the server")
 
@@ -78,7 +83,8 @@ describe("App", () => {
     }
     const user = userEvent.setup()
     render(<App store={broken} connect={server.connect} fetch={server.api.fetch} />)
-    await user.type(await screen.findByLabelText("Token"), "xoxp-1")
+    await user.type(await screen.findByLabelText("Server"), "https://x.test")
+    await user.type(screen.getByLabelText("Token"), "xoxp-1")
     await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     // Signed in for now, but it won't last past a restart.
     await screen.findByRole("heading", { name: "general", level: 1 })

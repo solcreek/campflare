@@ -223,7 +223,9 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   const page = await (await browser.newContext()).newPage()
   // ?as=none: the dev server's auto sign-in steps aside for the login screen.
   await page.goto(`${stack.appUrl}/?as=none`)
-  await page.getByLabel("Server").fill(stack.apiUrl)
+  // The dev server is filled in; the token isn't.
+  await expect(page.getByLabel("Server")).toHaveValue(stack.apiUrl)
+  await expect(page.getByLabel("Token")).toHaveValue("")
   await page.getByRole("button", { name: "Sign in with your browser" }).click()
 
   // The server's own pages: email and password, then consent for the app.
