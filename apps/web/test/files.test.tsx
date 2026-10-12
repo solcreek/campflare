@@ -164,6 +164,50 @@ describe("uploads from the composer", () => {
     expect(within(log()).queryByText("Uploading…")).toBeNull()
   })
 
+  it("attaches images pasted into the composer, and leaves text pastes alone", async () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 2, 9, 5, 7), toFake: ["Date"] })
+    const { server } = await signedIn([])
+    const box = screen.getByRole("textbox", { name: "Message #general" })
+    const paste = (fill: (data: DataTransfer) => void) => {
+      const clipboardData = new DataTransfer()
+      fill(clipboardData)
+      const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData })
+      fireEvent(box, event)
+      return event
+    }
+
+    // Text, even with the picture an office app puts beside it, pastes as text.
+    const text = paste((data) => {
+      data.setData("text/plain", "Größe ¿qué? 大きさ")
+      data.items.add(new File([new Uint8Array(4)], "image.png", { type: "image/png" }))
+    })
+    expect(text.defaultPrevented).toBe(false)
+    expect(screen.queryByRole("list", { name: "Attachments" })).toBeNull()
+
+    // A screenshot comes as "image.png": it gets a name of its own; a named file keeps its name.
+    const image = paste((data) => {
+      data.items.add(new File([new Uint8Array(4)], "image.png", { type: "image/png" }))
+      data.items.add(new File([new Uint8Array(8)], "서울-야경.jpg", { type: "image/jpeg" }))
+    })
+    expect(image.defaultPrevented).toBe(true)
+    const attachments = screen.getByRole("list", { name: "Attachments" })
+    expect(within(attachments).getByText("Pasted image 2026-10-02 at 09.05.07.png")).toBeTruthy()
+    expect(within(attachments).getByText("서울-야경.jpg")).toBeTruthy()
+    vi.useRealTimers()
+
+    const sent: NewFile[][] = []
+    server.api.client.upload = async (files) => {
+      sent.push(files as NewFile[])
+      return []
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]!.map((f) => [f.name, f.bytes.byteLength])).toEqual([
+      ["Pasted image 2026-10-02 at 09.05.07.png", 4],
+      ["서울-야경.jpg", 8],
+    ])
+  })
+
   it("takes files dropped on the conversation, and keeps a failed upload for retry", async () => {
     const { server } = await signedIn([])
     server.api.handlers["files.getUploadURLExternal"] = () => new Error("file_too_large")
