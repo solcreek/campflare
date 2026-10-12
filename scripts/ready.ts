@@ -8,6 +8,7 @@ import { homedir } from "node:os"
 import { resolve } from "node:path"
 import { parseArgs } from "node:util"
 import {
+  browsers,
   bundles,
   dependencies,
   devPort,
@@ -49,6 +50,7 @@ async function run(): Promise<Check[]> {
     ...(values.quick ? [] : [migrations(root)]),
     await devPort(),
     opentuiSlack(homedir(), process.env),
+    browsers(root),
     toolchainSource(),
   ]
 }

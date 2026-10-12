@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+  browsers,
   bundles,
   dependencies,
   devPort,
@@ -10,6 +11,7 @@ import {
   migrations,
   nodeVersion,
   opentuiSlack,
+  playwrightCache,
   pnpmVersion,
   toolchainSource,
 } from "../../scripts/ready-checks.ts"
@@ -111,6 +113,27 @@ describe("pnpm ready checks", () => {
     })
     expect(await devPort(8787, theirs)).toMatchObject({ ok: false, advisory: true })
     expect(await devPort(8787, nobody)).toMatchObject({ ok: true, detail: ":8787 is free (pnpm dev:all starts one)" })
+  })
+
+  it("looks for the headless Chromium that the installed Playwright pins", () => {
+    scratch()
+    // apps/web → @playwright/test → playwright → playwright-core, as node resolves them.
+    write("apps/web/package.json", "{}")
+    write("apps/web/node_modules/@playwright/test/package.json", JSON.stringify({ name: "@playwright/test" }))
+    write("node_modules/playwright/package.json", JSON.stringify({ name: "playwright" }))
+    write("node_modules/playwright-core/package.json", JSON.stringify({ name: "playwright-core" }))
+    write(
+      "node_modules/playwright-core/browsers.json",
+      JSON.stringify({ browsers: [{ name: "chromium-headless-shell", revision: "1243" }] }),
+    )
+    expect(browsers(root, join(root, "cache"))).toMatchObject({
+      ok: false,
+      fix: "pnpm --filter @campflare/web exec playwright install chromium",
+    })
+    mkdirSync(join(root, "cache/chromium_headless_shell-1243"), { recursive: true })
+    expect(browsers(root, join(root, "cache"))).toMatchObject({ ok: true, detail: expect.stringContaining("1243") })
+    expect(playwrightCache({ PLAYWRIGHT_BROWSERS_PATH: "/x" })).toBe("/x")
+    expect(playwrightCache({}, "/home/me")).toContain("ms-playwright")
   })
 
   it("finds opentui-slack by its declared entry, and notes where Node comes from", () => {

@@ -4,7 +4,9 @@
 
 import { execFileSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { createRequire } from "node:module"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
 
 export interface Check {
   name: string
@@ -175,6 +177,47 @@ export function opentuiSlack(home: string, env: Record<string, string | undefine
     ok,
     advisory: true,
     detail: ok ? `${repo} (for pnpm otui)` : `not at ${repo}: pnpm otui needs it (or OPENTUI_SLACK_REPO)`,
+  }
+}
+
+/** Where Playwright keeps browsers on this machine. */
+export function playwrightCache(env: Record<string, string | undefined> = process.env, home = homedir()): string {
+  if (env.PLAYWRIGHT_BROWSERS_PATH) return env.PLAYWRIGHT_BROWSERS_PATH
+  if (process.platform === "darwin") return join(home, "Library/Caches/ms-playwright")
+  if (process.platform === "win32") return join(env.LOCALAPPDATA ?? join(home, "AppData/Local"), "ms-playwright")
+  return join(home, ".cache/ms-playwright")
+}
+
+/**
+ * The headless Chromium that the app's browser tests and `shot` launch, at the
+ * revision the installed Playwright pins. Advisory: only UI work needs it.
+ */
+export function browsers(root: string, cache = playwrightCache()): Check {
+  const fix = "pnpm --filter @campflare/web exec playwright install chromium"
+  let revision: string | undefined
+  try {
+    // @playwright/test → playwright → playwright-core, whose browsers.json pins the revisions.
+    const test = createRequire(join(root, "apps/web/package.json")).resolve("@playwright/test/package.json")
+    const playwright = createRequire(test).resolve("playwright/package.json")
+    const core = createRequire(playwright).resolve("playwright-core/package.json")
+    const pinned = JSON.parse(read(join(dirname(core), "browsers.json")) ?? "{}") as {
+      browsers?: { name: string; revision: string }[]
+    }
+    revision = pinned.browsers?.find((b) => b.name === "chromium-headless-shell")?.revision
+  } catch {
+    // not installed: dependencies says so
+  }
+  if (!revision)
+    return { name: "browsers", ok: false, advisory: true, detail: "Playwright isn't installed", fix: "pnpm install" }
+  const ok = existsSync(join(cache, `chromium_headless_shell-${revision}`))
+  return {
+    name: "browsers",
+    ok,
+    advisory: true,
+    detail: ok
+      ? `Chromium ${revision} for the app's browser tests`
+      : `no Chromium ${revision}: the app's e2e and shot need it`,
+    fix: ok ? undefined : fix,
   }
 }
 
