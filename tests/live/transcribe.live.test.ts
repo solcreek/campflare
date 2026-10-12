@@ -129,6 +129,19 @@ describe.skipIf(!configured)("huddle transcription (live)", () => {
     expect(payloads.some((p) => p.user === who.user_id && p.language === "es" && es.expect.test(p.text))).toBe(true)
     expect(payloads.some((p) => p.user !== who.user_id && p.language === "ja" && ja.expect.test(p.text))).toBe(true)
 
+    // Stopping it: the Scribe summarises the call in the thread, and every page shows the summary.
+    await alex.click("#transcribe")
+    await vincent.waitForFunction(() => document.querySelector("#transcript li.summary") !== null, undefined, {
+      timeout: 60_000,
+    })
+    const summaryText = await vincent.locator("#transcript li.summary").textContent()
+    console.log(`summary:\n  ${summaryText}`)
+    const after = await api<{
+      messages: { metadata?: { event_type: string; event_payload: { lines: number; language?: string } } }[]
+    }>("conversations.replies", { channel: team.channels.general!, ts: parent.ts })
+    const summary = after.messages.find((m) => m.metadata?.event_type === "huddle_summary")
+    expect(summary?.metadata?.event_payload.lines).toBeGreaterThanOrEqual(2)
+
     if (env.RECORD_FIXTURES) {
       // The adapter API's real answers: a stream to our endpoint, one to an endpoint that refuses the handshake, closing.
       const info = await api<{ participants: { user: string; session_id: string }[] }>("campflare.huddles.info", {

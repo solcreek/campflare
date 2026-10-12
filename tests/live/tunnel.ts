@@ -7,7 +7,21 @@ import { existsSync } from "node:fs"
 
 export const CLOUDFLARED = ["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared"].find(existsSync)
 
-export async function openTunnel(target: string): Promise<{ url: string; close: () => void }> {
+/** Opens a quick tunnel; one whose name never comes up (it happens) is replaced by a fresh one. */
+export async function openTunnel(target: string, attempts = 3): Promise<{ url: string; close: () => void }> {
+  for (let i = 1; ; i++) {
+    try {
+      return await openOnce(target)
+    } catch (error) {
+      if (i >= attempts) throw error
+      console.warn(
+        `quick tunnel attempt ${i} failed, trying another: ${error instanceof Error ? error.message : error}`,
+      )
+    }
+  }
+}
+
+async function openOnce(target: string): Promise<{ url: string; close: () => void }> {
   if (!CLOUDFLARED) throw new Error("cloudflared isn't installed")
   const child: ChildProcess = spawn(CLOUDFLARED, ["tunnel", "--no-autoupdate", "--url", target], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -43,6 +57,7 @@ export async function openTunnel(target: string): Promise<{ url: string; close: 
       }
       await new Promise((r) => setTimeout(r, 1000))
     }
+    child.kill("SIGTERM")
     throw new Error(`${host} never resolved`)
   }
   await ready()
