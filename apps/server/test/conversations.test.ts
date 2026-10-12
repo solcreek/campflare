@@ -11,7 +11,14 @@ type Channel = {
   user?: string
 }
 type Messages = {
-  messages: { ts: string; text: string; subtype?: string; thread_ts?: string; reply_count?: number }[]
+  messages: {
+    ts: string
+    text: string
+    subtype?: string
+    thread_ts?: string
+    reply_count?: number
+    reactions?: { name: string }[]
+  }[]
   has_more: boolean
   response_metadata: { next_cursor: string }
 }
@@ -367,6 +374,9 @@ describe("history and threads", () => {
       bob.token,
     )
 
+    await ok("reactions.add", { channel: w.general, timestamp: parent.ts, name: "eyes" }, bob.token)
+    await ok("reactions.add", { channel: w.general, timestamp: r1.ts, name: "tada" }, w.owner.token)
+
     const history = await ok<Messages>("conversations.history", { channel: w.general }, w.owner.token)
     expect(history.messages.map((m) => m.text)).toEqual(["loud", "parent"])
     expect(history.messages[1]).toMatchObject({
@@ -377,6 +387,12 @@ describe("history and threads", () => {
 
     const thread = await ok<Messages>("conversations.replies", { channel: w.general, ts: parent.ts }, w.owner.token)
     expect(thread.messages.map((m) => m.text)).toEqual(["parent", "reply", "nested", "loud"])
+    expect(thread.messages.map((m) => m.reactions?.map((r) => r.name))).toEqual([
+      ["eyes"],
+      ["tada"],
+      undefined,
+      undefined,
+    ])
     const paged = await ok<Messages>(
       "conversations.replies",
       { channel: w.general, ts: parent.ts, limit: 2 },
@@ -391,6 +407,7 @@ describe("history and threads", () => {
       w.owner.token,
     )
     expect(rest.messages.map((m) => m.text)).toEqual(["parent", "nested", "loud"])
+    expect(rest.messages[0]!.reactions).toMatchObject([{ name: "eyes" }]) // the parent, outside the page proper
     const windowed = await ok<Messages>(
       "conversations.replies",
       { channel: w.general, ts: parent.ts, oldest: r1.ts, latest: r1.ts, inclusive: true },
@@ -400,6 +417,7 @@ describe("history and threads", () => {
 
     const single = await ok<Messages>("conversations.replies", { channel: w.general, ts: r1.ts }, w.owner.token)
     expect(single.messages.map((m) => m.text)).toEqual(["reply"])
+    expect(single.messages[0]!.reactions).toMatchObject([{ name: "tada" }])
     await expectError("conversations.replies", { channel: w.general }, w.owner.token, "thread_not_found")
     await expectError(
       "conversations.replies",

@@ -77,17 +77,53 @@ What changed, one commit each:
   of 100 or more people.
 - **MCP tools** run their Web API call and the user directory in parallel.
 
-## Still open
+## Follow-ups
 
-- **FTS searches sorted by score** still read every match: bm25 ranks them
-  all. A one-word search over 50k messages reads about 43k rows.
-- **Two-character CJK terms** (`部署`) can't use the trigram index and fall
-  back to LIKE. They are fast now when sorted by time, but still scan for
-  the count. A bigram index for CJK would let them use FTS.
-- **users.list with no limit** returns everyone, about 1.1 KB a person
-  (565 KB for 500). That is Slack's behaviour; `userJson` is the cost.
-- **chat.update / chat.delete** are not in the bench yet. They still read the
-  message back and run `loadExtras` twice for `message_changed`.
-- **conversations.history and replies** take 4 and 5 round trips: auth, the
-  conversation, the messages, then their reactions. The reactions could join
-  the messages query.
+Then the items left open, compared against `results/0a5ea45-*`; after is
+`results/4696762-*`. The seed gained `#scratch` for chat.update and
+chat.delete in between (fixed text, no reactions, so no other result moves),
+which adds one channel to conversations.list and users.conversations.
+
+| scenario                    | round trips |       rows read |
+| --------------------------- | ----------: | --------------: |
+| chat.update                 |       9 → 4 |             213 |
+| chat.delete                 |       6 → 4 |             212 |
+| conversations.history 100   |       4 → 3 |       741 → 968 |
+| conversations.replies (200) |       5 → 3 |       967 → 968 |
+| search: one word (FTS)      |           3 | 42,659 → 25,095 |
+| search: no accents (FTS)    |           3 | 72,625 → 43,072 |
+| search: short term (LIKE)   |           3 | 18,917 → 15,347 |
+
+chat.update and chat.delete before are from a `--quick` run, the commit that
+added them to the bench. With 5 ms per query they take 30 ms now.
+
+- **chat.update / chat.delete**: the change, the changed row, the audience and
+  the reactions are one batch, and one set of extras serves the event's
+  before and after and the answer. A deleted reply's thread is recounted in
+  SQL in the same batch, instead of reading every reply first.
+- **History and replies**: the reactions query takes the page as a subquery
+  and goes in the page's batch; replies batches the thread head too. The page
+  is read twice, so history reads about 30% more rows for one fewer round trip.
+  `loadExtras` loads a page's files and bot apps in parallel.
+- **Search** works out the conversations the caller can read once, as a CTE,
+  instead of joining every match to its conversation and membership. The page's
+  conversations load afterwards, in parallel with its authors and reactions.
+
+Looked into and left as they are:
+
+- **bm25 ranks every match.** A search sorted by score has to score every
+  matching message before it can return the best twenty, so its rows read grow
+  with the matches. Ranking inside the FTS index first and filtering after
+  would return short or wrong pages whenever the top matches are in
+  conversations the caller can't read.
+- **A bigram index for two-character CJK terms.** Those searches use LIKE,
+  which now walks the time index and stops at the page, with a bounded count:
+  about 15k rows over 50k messages. Through FTS, a search sorted by score
+  would rank every match instead, so it would read more, not less, and every
+  write would have to maintain a second index. What a bigram index would add
+  is ranking by relevance for those terms: a feature, not a speed-up.
+- **users.list with no limit.** Building 500 users' JSON takes 0.2 ms in V8 and
+  stringifying it 0.6 ms (measured 2026-10-12). The time in the bench is
+  reading 1,000 rows and moving 565 KB, which is the size of Slack's user
+  object, and Cloudflare compresses JSON responses on the way out. The earlier
+  note here that blamed `userJson` was wrong.

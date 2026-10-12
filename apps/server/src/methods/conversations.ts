@@ -10,15 +10,15 @@ import {
   requireReadable,
   validChannelName,
 } from "../db/conversations"
-import { postMessage, requireMessage } from "../db/messages"
+import { postMessage } from "../db/messages"
 import { all, first, isUniqueViolation, run, stmt } from "../db/query"
-import type { ConversationRow, MessageRow, UserRow } from "../db/rows"
+import type { ConversationRow, MessageRow, ReactionRow, UserRow } from "../db/rows"
 import { audienceOf, publish } from "../events"
 import { decodeCursor, encodeCursor } from "../api/args"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { ids, nowSeconds } from "../api/ids"
-import { conversationJson, loadExtras, messageJson } from "../api/shapes"
+import { conversationJson, loadExtras, messageJson, reactionsOfQuery } from "../api/shapes"
 import { typesFilter } from "./users"
 
 /** Top-level messages: thread replies stay in their thread unless broadcast. */
@@ -89,8 +89,8 @@ method("conversations.list", "actor", async (ctx) => {
   }
 })
 
-async function messagesOut(ctx: Ctx<Actor>, rows: MessageRow[]) {
-  const extras = await loadExtras(ctx.env, rows)
+async function messagesOut(ctx: Ctx<Actor>, rows: MessageRow[], reactions: D1Result) {
+  const extras = await loadExtras(ctx.env, rows, reactions.results as ReactionRow[])
   return rows.map((m) => messageJson(m, extras, ctx.origin))
 }
 
@@ -115,17 +115,19 @@ method("conversations.history", "actor", async (ctx) => {
   }
   // With only `oldest`, Slack pages forward from it; otherwise back from now/latest.
   const forward = Boolean(oldest && !latest)
-  const rows = await all<MessageRow>(
-    ctx.env.DB,
-    `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ${forward ? "ASC" : "DESC"} LIMIT ?`,
-    ...params,
-    limit + 1,
-  )
+  const db = ctx.env.DB
+  const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ${forward ? "ASC" : "DESC"} LIMIT ?`
+  // The page and its reactions in one round trip.
+  const [found, reactions] = await db.batch([
+    stmt(db, pageSql, ...params, limit + 1),
+    reactionsOfQuery(db, pageSql, ...params, limit + 1),
+  ])
+  const rows = found!.results as MessageRow[]
   const hasMore = rows.length > limit
   const page = rows.slice(0, limit)
   if (forward) page.reverse()
   return {
-    messages: await messagesOut(ctx, page),
+    messages: await messagesOut(ctx, page, reactions!),
     has_more: hasMore,
     pin_count: 0,
     channel_actions_ts: null,
@@ -139,11 +141,6 @@ method("conversations.replies", "actor", async (ctx) => {
   await requireReadable(ctx, c)
   const ts = ctx.args.ts("ts")
   if (!ts) throw new CampflareError("thread_not_found")
-  const message = await requireMessage(ctx, c.id, ts)
-  // A reply's ts gives just that reply, as Slack does; a parent's gives the thread.
-  if (!message.thread_ts || message.thread_ts !== message.ts) {
-    return { messages: await messagesOut(ctx, [message]), has_more: false, response_metadata: { next_cursor: "" } }
-  }
   const limit = ctx.args.int("limit", 1000, { min: 1, max: 1000 })
   const after = decodeCursor(ctx.args.str("cursor"))
   const oldest = ctx.args.ts("oldest")
@@ -163,18 +160,40 @@ method("conversations.replies", "actor", async (ctx) => {
     conditions.push(inclusive ? "ts <= ?" : "ts < ?")
     params.push(latest)
   }
-  const rows = await all<MessageRow>(
-    ctx.env.DB,
-    `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ASC LIMIT ?`,
-    ...params,
-    limit + 1,
-  )
+  // The message, the page of its thread, and the reactions of both: one round trip. If the message
+  // turns out to be a reply, its thread_ts isn't its own ts and the page comes back empty.
+  const db = ctx.env.DB
+  const messageSql = "SELECT * FROM messages WHERE channel_id = ? AND ts = ? AND deleted = 0"
+  const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ASC LIMIT ?`
+  const [head, found, reactions] = await db.batch([
+    stmt(db, messageSql, c.id, ts),
+    stmt(db, pageSql, ...params, limit + 1),
+    reactionsOfQuery(
+      db,
+      `SELECT channel_id, ts FROM (${messageSql}) UNION ALL SELECT channel_id, ts FROM (${pageSql})`,
+      c.id,
+      ts,
+      ...params,
+      limit + 1,
+    ),
+  ])
+  const message = head!.results[0] as MessageRow | undefined
+  if (!message) throw new CampflareError("message_not_found")
+  // A reply's ts gives just that reply, as Slack does; a parent's gives the thread.
+  if (!message.thread_ts || message.thread_ts !== message.ts) {
+    return {
+      messages: await messagesOut(ctx, [message], reactions!),
+      has_more: false,
+      response_metadata: { next_cursor: "" },
+    }
+  }
+  const rows = found!.results as MessageRow[]
   const hasMore = rows.length > limit
   const page = rows.slice(0, limit)
   // The parent leads every page, as Slack returns it.
   if (page[0]?.ts !== ts) page.unshift(message)
   return {
-    messages: await messagesOut(ctx, page),
+    messages: await messagesOut(ctx, page, reactions!),
     has_more: hasMore,
     response_metadata: { next_cursor: hasMore ? encodeCursor(page.at(-1)!.ts) : "" },
   }

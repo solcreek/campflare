@@ -1,12 +1,19 @@
 import { requireNotArchived, requireReadable, requireWritable, resolveConversation } from "../db/conversations"
-import { announceChanged, messageOut, postMessage, requireMessage, MAX_TEXT, type NewMessage } from "../db/messages"
-import { all, run } from "../db/query"
-import type { MessageRow } from "../db/rows"
-import { audienceOf, channelType, publish } from "../events"
+import {
+  announceChanged,
+  postMessage,
+  reactionsStatement,
+  requireMessage,
+  MAX_TEXT,
+  type NewMessage,
+} from "../db/messages"
+import { stmt } from "../db/query"
+import type { MessageRow, ReactionRow } from "../db/rows"
+import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
-import { permalink } from "../api/shapes"
+import { loadExtras, messageJson, permalink } from "../api/shapes"
 
 /** Who a message is from: the person, or the bot with its app. */
 function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
@@ -104,48 +111,74 @@ method("chat.update", "actor", async (ctx) => {
   const { c, message } = await ownMessage(ctx, "update")
   requireNotArchived(c)
   const next = content(ctx, !message.files)
-  const ts = nextTs()
-  await run(
-    ctx.env.DB,
-    `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments), edited_ts = ?, edited_user = ?
-     WHERE channel_id = ? AND ts = ?`,
-    next.text,
-    next.blocks,
-    next.attachments,
-    ts,
-    ctx.auth.user.id,
-    c.id,
-    message.ts,
-  )
-  const updated = await requireMessage(ctx, c.id, message.ts)
-  await announceChanged(ctx, c, message, updated)
-  return { channel: c.id, ts: message.ts, text: updated.text, message: await messageOut(ctx, updated) }
+  const db = ctx.env.DB
+  // The edit, the edited row, the audience and the reactions: one round trip.
+  const [, edited, audience, reactions] = await db.batch([
+    stmt(
+      db,
+      `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments), edited_ts = ?, edited_user = ?
+       WHERE channel_id = ? AND ts = ?`,
+      next.text,
+      next.blocks,
+      next.attachments,
+      nextTs(),
+      ctx.auth.user.id,
+      c.id,
+      message.ts,
+    ),
+    stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+    audienceStatement(db, c.id),
+    reactionsStatement(db, c.id, message.ts),
+  ])
+  const updated = edited!.results[0] as MessageRow
+  const json = announceChanged(ctx, c, {
+    before: message,
+    after: updated,
+    audience: audienceFrom(audience!),
+    extras: await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]),
+  })
+  return { channel: c.id, ts: message.ts, text: updated.text, message: json }
 })
 
 method("chat.delete", "actor", async (ctx) => {
   const { c, message } = await ownMessage(ctx, "delete")
-  const audience = await audienceOf(ctx, c.id)
+  const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
-    await run(
-      ctx.env.DB,
-      `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
-         bot_id = NULL, app_id = NULL, blocks = NULL, attachments = NULL, files = NULL, edited_ts = NULL
-       WHERE channel_id = ? AND ts = ?`,
-      c.id,
-      message.ts,
-    )
-    await announceChanged(ctx, c, message, await requireMessage(ctx, c.id, message.ts))
-  } else {
-    await ctx.env.DB.batch([
-      ctx.env.DB.prepare("UPDATE messages SET deleted = 1 WHERE channel_id = ? AND ts = ?").bind(c.id, message.ts),
-      ctx.env.DB.prepare("DELETE FROM reactions WHERE channel_id = ? AND ts = ?").bind(c.id, message.ts),
+    const [, tombstone, audience, reactions] = await db.batch([
+      stmt(
+        db,
+        `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
+           bot_id = NULL, app_id = NULL, blocks = NULL, attachments = NULL, files = NULL, edited_ts = NULL
+         WHERE channel_id = ? AND ts = ?`,
+        c.id,
+        message.ts,
+      ),
+      stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+      audienceStatement(db, c.id),
+      reactionsStatement(db, c.id, message.ts),
     ])
-    if (message.thread_ts && message.thread_ts !== message.ts) await recountThread(ctx, c.id, message.thread_ts)
+    announceChanged(ctx, c, {
+      before: message,
+      after: tombstone!.results[0] as MessageRow,
+      audience: audienceFrom(audience!),
+      extras: await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]),
+    })
+  } else {
+    // Its reactions are read for the event before they go; a reply's thread is recounted in the same batch.
+    const isReply = Boolean(message.thread_ts && message.thread_ts !== message.ts)
+    const [reactions, audience] = await db.batch([
+      reactionsStatement(db, c.id, message.ts),
+      audienceStatement(db, c.id),
+      stmt(db, "UPDATE messages SET deleted = 1 WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+      stmt(db, "DELETE FROM reactions WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+      ...(isReply ? [recountThread(db, c.id, message.thread_ts!)] : []),
+    ])
+    const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
     const now = `${(Date.now() / 1000).toFixed(6)}`
     publish(ctx, {
       teamId: c.team_id,
-      audience,
+      audience: audienceFrom(audience!),
       event: {
         type: "message",
         subtype: "message_deleted",
@@ -155,29 +188,28 @@ method("chat.delete", "actor", async (ctx) => {
         ts: now,
         event_ts: now,
         deleted_ts: message.ts,
-        previous_message: await messageOut(ctx, message),
+        previous_message: messageJson(message, extras, ctx.origin),
       },
     })
   }
   return { channel: c.id, ts: message.ts }
 })
 
-/** After a reply goes, the parent's reply count, latest reply and repliers follow. */
-async function recountThread(ctx: Ctx<Actor>, channelId: string, threadTs: string) {
-  const replies = await all<Pick<MessageRow, "ts" | "user_id" | "bot_id">>(
-    ctx.env.DB,
-    "SELECT ts, user_id, bot_id FROM messages WHERE channel_id = ? AND thread_ts = ? AND ts != ? AND deleted = 0 ORDER BY ts",
-    channelId,
-    threadTs,
-    threadTs,
-  )
-  const users = [...new Set(replies.flatMap((r) => ((r.user_id ?? r.bot_id) ? [(r.user_id ?? r.bot_id)!] : [])))]
-  await run(
-    ctx.env.DB,
-    "UPDATE messages SET reply_count = ?, latest_reply = ?, reply_users = ? WHERE channel_id = ? AND ts = ?",
-    replies.length,
-    replies.at(-1)?.ts ?? null,
-    JSON.stringify(users.slice(0, 50)),
+/**
+ * After a reply goes, the parent's reply count, latest reply and repliers
+ * (the first 50, in order of their first reply) follow: a statement, to batch
+ * after the delete.
+ */
+function recountThread(db: D1Database, channelId: string, threadTs: string) {
+  const replies = "FROM messages r WHERE r.channel_id = ?1 AND r.thread_ts = ?2 AND r.ts != ?2 AND r.deleted = 0"
+  return stmt(
+    db,
+    `UPDATE messages SET
+       reply_count = (SELECT COUNT(*) ${replies}),
+       latest_reply = (SELECT MAX(r.ts) ${replies}),
+       reply_users = (SELECT json_group_array(u) FROM (
+         SELECT COALESCE(r.user_id, r.bot_id) AS u ${replies} AND u IS NOT NULL GROUP BY u ORDER BY MIN(r.ts) LIMIT 50))
+     WHERE channel_id = ?1 AND ts = ?2`,
     channelId,
     threadTs,
   )

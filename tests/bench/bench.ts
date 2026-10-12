@@ -177,7 +177,9 @@ async function measure(make: (i: number) => Call, { throughput = true } = {}): P
 
 // ── scenarios ───────────────────────────────────────────────────────────────
 
-function scenarios(d: Dataset): [string, (i: number) => Call][] {
+type Scenario = [name: string, make: (i: number) => Call, options?: { throughput?: boolean }]
+
+function scenarios(d: Dataset): Scenario[] {
   const owner = d.owner.token
   const user = (i: number) => d.users[1 + (i % Math.min(199, d.users.length - 1))]!.token
   return [
@@ -235,6 +237,24 @@ function scenarios(d: Dataset): [string, (i: number) => Call][] {
     [
       "chat.postMessage by #name",
       (i) => ({ method: "chat.postMessage", token: owner, args: { channel: "#busy", text: `by name ${i}` } }),
+    ],
+    [
+      "chat.update",
+      (i) => ({
+        method: "chat.update",
+        token: owner,
+        args: { channel: d.scratch, ts: d.scratchTs[0]!, text: `edit ${i}` },
+      }),
+    ],
+    [
+      "chat.delete",
+      (i) => {
+        // Each request deletes another of the owner's seeded messages; there are only so many, so no throughput run.
+        const ts = d.scratchTs[1 + i]
+        if (!ts) throw new Error(`chat.delete: only ${d.scratchTs.length - 1} messages seeded to delete`)
+        return { method: "chat.delete", token: owner, args: { channel: d.scratch, ts } }
+      },
+      { throughput: false },
     ],
   ]
 }
@@ -356,9 +376,9 @@ try {
   )
 
   const results: Record<string, Result> = {}
-  for (const [name, make] of scenarios(dataset)) {
+  for (const [name, make, options] of scenarios(dataset)) {
     if (opts.only && !name.includes(opts.only)) continue
-    results[name] = await measure(make)
+    results[name] = await measure(make, options)
     process.stderr.write(`  ${name}: p50 ${results[name].p50} ms\n`)
   }
   if (!opts.only || "fan-out".includes(opts.only)) Object.assign(results, await fanout(dataset))
