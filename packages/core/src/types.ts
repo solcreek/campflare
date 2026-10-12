@@ -45,6 +45,24 @@ export interface Reaction {
   count: number
 }
 
+/** A file in a message (Slack's file object), or `mode: "tombstone"` where one was deleted. */
+export interface MessageFile {
+  id: string
+  name?: string
+  title?: string
+  mimetype?: string
+  filetype?: string
+  pretty_type?: string
+  size?: number
+  mode?: string
+  url_private?: string
+  url_private_download?: string
+  original_w?: number
+  original_h?: number
+  alt_txt?: string
+  [key: string]: unknown
+}
+
 export interface Message {
   ts: string
   /** Not in Slack's message JSON (the channel is implied); the store always sets it. */
@@ -60,7 +78,7 @@ export interface Message {
   latest_reply?: string
   reactions?: Reaction[]
   edited?: { user: string; ts: string }
-  files?: { id: string; name?: string; mimetype?: string; url_private?: string; [key: string]: unknown }[]
+  files?: MessageFile[]
   is_ephemeral?: boolean
   /** Local only: sent, not yet confirmed by the server. Its ts is a placeholder. */
   pending?: boolean

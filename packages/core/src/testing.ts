@@ -11,11 +11,19 @@ export interface FakeApi {
   fetch: Fetch
   calls: { method: string; args: Record<string, string> }[]
   handlers: Record<string, Handler>
+  /**
+   * Everything outside the Web API, by URL: GET serves the body (404 if absent; an
+   * Error fails the request), POST (an upload URL) stores its body here.
+   */
+  files: Record<string, BodyInit | Error>
+  /** Each request outside the Web API, in order. */
+  fileRequests: { url: string; method: string; headers: Record<string, string> }[]
 }
 
 export function fakeApi(handlers: Record<string, Handler>): FakeApi {
   const calls: FakeApi["calls"] = []
   const fetch: Fetch = async (input, init) => {
+    if (!String(input).includes("/api/")) return serveFile(String(input), init)
     const method = String(input).split("/api/")[1]!
     const args = Object.fromEntries(new URLSearchParams(String(init?.body ?? "")))
     calls.push({ method, args })
@@ -25,9 +33,22 @@ export function fakeApi(handlers: Record<string, Handler>): FakeApi {
     if (result instanceof Error) return Response.json({ ok: false, error: result.message })
     return Response.json({ ok: true, ...result })
   }
+  async function serveFile(url: string, init?: RequestInit) {
+    const method = init?.method ?? "GET"
+    api.fileRequests.push({ url, method, headers: { ...(init?.headers as Record<string, string>) } })
+    if (method === "POST") {
+      api.files[url] = await new Response(init?.body).arrayBuffer()
+      return new Response("OK")
+    }
+    const body = api.files[url]
+    if (body instanceof Error) throw body
+    return body === undefined ? new Response("not found", { status: 404 }) : new Response(body)
+  }
   const api: FakeApi = {
     calls,
     handlers,
+    files: {},
+    fileRequests: [],
     fetch,
     client: createClient({ url: "https://x.test", token: "xoxp-1", fetch }),
   }

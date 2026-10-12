@@ -1,5 +1,6 @@
+import { SELF } from "cloudflare:test"
 import { describe, expect, it } from "vitest"
-import { expectError, ok, workspace } from "./helpers"
+import { ORIGIN, expectError, ok, workspace } from "./helpers"
 
 type User = {
   id: string
@@ -101,5 +102,22 @@ describe("dnd", () => {
     await expectError("dnd.setSnooze", {}, w.owner.token, "invalid_num_minutes")
     await expectError("dnd.info", { user: "UNOPE" }, w.owner.token, "user_not_found")
     await ok("dnd.endDnd", {}, w.owner.token)
+  })
+})
+
+describe("avatars", () => {
+  it("draws a person's initials, cacheably, and a plain square for anyone unknown", async () => {
+    const w = await workspace()
+    const mei = await w.addUser("mei", { real_name: "陳美玲" })
+    const get = async (id: string) => {
+      const res = await SELF.fetch(`${ORIGIN}/avatars/${id}?s=72`)
+      expect(res.status).toBe(200)
+      expect(res.headers.get("content-type")).toBe("image/svg+xml")
+      expect(res.headers.get("cache-control")).toMatch(/^public, max-age=\d+$/)
+      return res.text()
+    }
+    expect(await get(w.owner.id)).toMatch(/>OO<\/text><\/svg>$/)
+    expect(await get(mei.id)).toMatch(/>陳<\/text>/)
+    expect(await get("UNOPE")).not.toContain("<text")
   })
 })

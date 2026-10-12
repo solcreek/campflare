@@ -178,6 +178,72 @@ describe("createWorkspace", () => {
     expect(timeline(ws.getState(), "C1")).toHaveLength(1)
   })
 
+  it("uploads files with a pending message, then shows the stored one", async () => {
+    const stored = { ts: "0000000300.000000", user: "U1", text: "photos", files: [{ id: "F1", name: "café.png" }] }
+    const { api, ws } = await started({
+      "files.getUploadURLExternal": (args) => ({
+        upload_url: `https://x.test/upload/v1/${args.filename}`,
+        file_id: "F1",
+      }),
+      "files.completeUploadExternal": () => ({ files: [{ id: "F1", title: "café.png" }] }),
+    })
+    await ws.loadHistory("C1")
+    api.handlers["conversations.history"] = () => ({ messages: [stored] })
+    let pending: unknown
+    ws.subscribe(() => (pending ??= timeline(ws.getState(), "C1").find((m) => m.pending)))
+    const bytes = new Uint8Array([1, 2, 3])
+    await ws.upload("C1", [{ name: "café.png", bytes, type: "image/png" }], { text: "photos" })
+    expect(pending).toMatchObject({
+      text: "photos",
+      user: "U1",
+      files: [{ name: "café.png", mimetype: "image/png", size: 3 }],
+    })
+    expect(new Uint8Array(api.files["https://x.test/upload/v1/café.png"] as ArrayBuffer)).toEqual(bytes)
+    const complete = api.calls.find((c) => c.method === "files.completeUploadExternal")!
+    expect(complete.args).toMatchObject({ channel_id: "C1", initial_comment: "photos" })
+    expect(timeline(ws.getState(), "C1").map((m) => [m.ts, m.pending])).toEqual([
+      ["0000000100.000000", undefined],
+      ["0000000200.000000", undefined],
+      ["0000000300.000000", undefined],
+    ])
+
+    // Into a thread, with no text: the thread is reloaded instead.
+    api.handlers["conversations.replies"] = () => ({ messages: [{ ts: "0000000100.000000" }, stored] })
+    await ws.upload("C1", [{ name: "notes.txt", bytes }], { threadTs: "0000000100.000000" })
+    expect(api.calls.at(-2)!.args.initial_comment).toBeUndefined()
+    expect(api.calls.at(-1)!.method).toBe("conversations.replies")
+    await ws.upload("C1", [])
+    expect(api.calls.at(-1)!.method).toBe("conversations.replies")
+  })
+
+  it("keeps a failed upload's files for retry", async () => {
+    const { api, ws } = await started({ "files.getUploadURLExternal": () => new Error("file_too_large") })
+    await ws.upload("C1", [{ name: "big.zip", bytes: new Uint8Array(4) }])
+    const failed = timeline(ws.getState(), "C1")[0]!
+    expect(failed).toMatchObject({ failed: "file_too_large", files: [{ name: "big.zip", size: 4 }] })
+    api.handlers["files.getUploadURLExternal"] = () => ({ upload_url: "https://x.test/upload/v1/u", file_id: "F2" })
+    api.handlers["files.completeUploadExternal"] = () => ({ files: [] })
+    api.handlers["conversations.history"] = () => new Error("ratelimited")
+    await ws.retry("C1", failed.ts)
+    // The history reload failed, but the upload went through: the pending copy goes.
+    expect(api.files["https://x.test/upload/v1/u"]).toBeDefined()
+    expect(timeline(ws.getState(), "C1")).toEqual([])
+
+    api.handlers["files.getUploadURLExternal"] = () => new Error("invalid_auth")
+    await ws.upload("C1", [{ name: "a.txt", bytes: new Uint8Array(1) }])
+    ws.discard("C1", timeline(ws.getState(), "C1")[0]!.ts)
+    expect(timeline(ws.getState(), "C1")).toEqual([])
+  })
+
+  it("serves files' bytes with the session's token", async () => {
+    const { api, ws } = await started()
+    api.files["https://x.test/files-pri/T1-F1/a.png"] = "png"
+    const blob = await ws.files.blob("https://x.test/files-pri/T1-F1/a.png")
+    expect(await blob.text()).toBe("png")
+    expect(api.fileRequests[0]!.headers.authorization).toBe("Bearer xoxp-1")
+    await expect(ws.files.blob("https://elsewhere.test/x")).rejects.toThrow("not a file")
+  })
+
   it("edits and deletes", async () => {
     const { ws } = await started({
       "chat.update": (args) => ({ message: { ts: args.ts, text: args.text, edited: { user: "U1", ts: "1" } } }),

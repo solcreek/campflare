@@ -110,6 +110,58 @@ describe("files", () => {
     await expectError("files.info", { file: fileId }, carol.token, "file_not_found")
   })
 
+  it("lets a browser app on another origin upload and fetch files with its token, never cookies", async () => {
+    const w = await workspace()
+    const app = "https://app.example"
+    const preflight = (url: string, method: string, headers: string) =>
+      SELF.fetch(url, {
+        method: "OPTIONS",
+        headers: { origin: app, "access-control-request-method": method, "access-control-request-headers": headers },
+      })
+
+    const reserved = await ok<{ upload_url: string; file_id: string }>(
+      "files.getUploadURLExternal",
+      { filename: "photo.png", length: PNG.length },
+      w.owner.token,
+    )
+    const up = await preflight(reserved.upload_url, "POST", "authorization")
+    expect(up.status).toBe(204)
+    expect(up.headers.get("access-control-allow-origin")).toBe("*")
+    expect(up.headers.get("access-control-allow-headers")?.toLowerCase()).toContain("authorization")
+    const put = await SELF.fetch(reserved.upload_url, {
+      method: "POST",
+      headers: { origin: app, authorization: `Bearer ${w.owner.token}` },
+      body: PNG,
+    })
+    expect(put.headers.get("access-control-allow-origin")).toBe("*")
+    await ok(
+      "files.completeUploadExternal",
+      { files: [{ id: reserved.file_id }], channel_id: w.general },
+      w.owner.token,
+    )
+    const { file } = await ok<{ file: FileJson }>("files.info", { file: reserved.file_id }, w.owner.token)
+
+    const pre = await preflight(file.url_private, "GET", "authorization,range")
+    expect(pre.status).toBe(204)
+    expect(pre.headers.get("access-control-allow-origin")).toBe("*")
+    expect(pre.headers.get("access-control-allow-headers")?.toLowerCase()).toMatch(/authorization.*range/)
+    expect(pre.headers.get("access-control-allow-credentials")).toBeNull()
+
+    const get = await SELF.fetch(file.url_private, {
+      headers: { origin: app, authorization: `Bearer ${w.owner.token}`, range: "bytes=0-7" },
+    })
+    expect(get.status).toBe(206)
+    expect(get.headers.get("access-control-allow-origin")).toBe("*")
+    expect(get.headers.get("access-control-allow-credentials")).toBeNull()
+    expect(get.headers.get("access-control-expose-headers")?.toLowerCase()).toContain("content-range")
+    // CORS changes who may read the bytes, not how they're served.
+    expect(get.headers.get("content-security-policy")).toBe("sandbox")
+    expect(get.headers.get("x-content-type-options")).toBe("nosniff")
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(PNG.slice(0, 8))
+    // Without the token, the origin gets nothing.
+    expect((await SELF.fetch(file.url_private, { headers: { origin: app } })).status).toBe(401)
+  })
+
   it("accepts multipart uploads and keeps unshared files private", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")

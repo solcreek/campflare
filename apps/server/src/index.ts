@@ -18,12 +18,30 @@ import { authenticate, tokenOf, touch } from "./api/auth"
 import { methods, type Auth, type Ctx } from "./api/context"
 import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
+import { avatarSvg } from "./api/avatar"
+import { first } from "./db/query"
+import type { UserRow } from "./db/rows"
 
 export { TeamHub } from "./hub"
 
 const app = new Hono<{ Bindings: Env }>()
 
 app.use("/api/*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type"], maxAge: 86_400 }))
+// Browser apps fetch url_private with their Bearer token (as Slack clients do) and
+// show the bytes as a blob: URL, since <img src> can't send a header. Credentials
+// are never cookies, so any origin may ask; it still needs the token.
+app.use(
+  "/files-pri/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "HEAD"],
+    allowHeaders: ["Authorization", "Range", "If-None-Match", "If-Modified-Since"],
+    exposeHeaders: ["Content-Disposition", "Content-Length", "Content-Range", "ETag"],
+    maxAge: 86_400,
+  }),
+)
+// client.upload() POSTs the bytes with its Authorization header too; the URL itself is the capability.
+app.use("/upload/v1/*", cors({ origin: "*", allowMethods: ["POST"], allowHeaders: ["Authorization", "Content-Type"] }))
 
 app.get("/", (c) => c.json({ name: "campflare", api: `${new URL(c.req.url).origin}/api/` }))
 
@@ -89,11 +107,17 @@ app.get("/link/", async (c) => {
 })
 
 /** Placeholder avatars: initials on a colour, as an SVG. */
-app.get("/avatars/:id", (c) => {
+app.get("/avatars/:id", async (c) => {
   const id = c.req.param("id")
-  const hue = [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 0)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="hsl(${hue} 55% 45%)"/></svg>`
-  return c.body(svg, 200, { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" })
+  const user = await first<Pick<UserRow, "name" | "real_name" | "display_name">>(
+    c.env.DB,
+    "SELECT name, real_name, display_name FROM users WHERE id = ?",
+    id,
+  )
+  // The name the apps show (core's displayName), so the initials match it.
+  const svg = avatarSvg(id, user ? user.display_name || user.real_name || user.name : "")
+  // An hour: a renamed person's initials catch up soon enough, and lists of avatars stay cached.
+  return c.body(svg, 200, { "content-type": "image/svg+xml", "cache-control": "public, max-age=3600" })
 })
 
 export default app
