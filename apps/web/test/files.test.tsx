@@ -253,6 +253,51 @@ describe("the image viewer", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   })
 
+  it("wraps a long title instead of widening the dialog past the window, keeping the full name", async () => {
+    const title =
+      "夏の終わりの花火大会で撮った写真、そしてヴェルサイユ宮殿での閉会のソワレ — la soirée de clôture au château"
+    const name = "花火大会_et_la_soirée_de_clôture_au_château_de_Versailles.png"
+    const small: Message = {
+      ...withFiles,
+      files: [
+        {
+          id: "F8",
+          name,
+          title,
+          mimetype: "image/png",
+          size: 320,
+          original_w: 48,
+          original_h: 32,
+          url_private: `${FILES}F8/small.png`,
+        },
+      ],
+    }
+    const { server, user } = await signedIn([small], (s) => {
+      s.api.files[`${FILES}F8/small.png`] = new Uint8Array([3])
+    })
+    await user.click(await within(log()).findByRole("button", { name: `Open ${title}` }))
+    const viewer = screen.getByRole("dialog", { name: title })
+    await waitFor(() => expect(document.activeElement).toBe(viewer))
+    // Enter on the dialog itself downloads nothing.
+    await user.keyboard("{Enter}")
+    expect(server.api.fileRequests.filter((r) => r.url.includes("F8"))).toHaveLength(1)
+
+    // Bounded by the window, and at least a reading width (no wider than the window either).
+    expect(viewer.className).toContain("max-w-[calc(100vw-2rem)]")
+    expect(viewer.className).toContain("min-w-[min(24rem,calc(100vw-2rem))]")
+    // The header adds no width of its own: the title wraps (anywhere, for CJK and long names)
+    // up to three lines, and its full text stays in the title attribute and the dialog's name.
+    const heading = within(viewer).getByRole("heading", { name: title })
+    expect(heading.parentElement!.className).toContain("contain-inline-size")
+    expect(heading.className).toContain("wrap-anywhere")
+    expect(heading.className).toContain("line-clamp-3")
+    expect(heading.className).not.toContain("truncate")
+    expect(heading.getAttribute("title")).toBe(title)
+    const details = within(viewer).getByText(`${name} · 320 B`)
+    expect(details.className).toContain("truncate")
+    expect(details.getAttribute("title")).toBe(`${name} · 320 B`)
+  })
+
   it("shows a lone image without stepping, and says when its bytes don't come", async () => {
     const lone: Message = {
       ...withFiles,

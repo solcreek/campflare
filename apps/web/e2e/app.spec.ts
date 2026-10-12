@@ -137,6 +137,31 @@ test("an image opens full size, and Escape closes it", async ({ browser }) => {
   await expect(viewer).toHaveCount(0)
 })
 
+test("a small image with a long title opens inside a phone's window", async ({ browser }) => {
+  const alex = await open(browser)
+  await alex.setViewportSize({ width: 390, height: 844 })
+  const title = `夏の終わりの花火大会で撮った写真_et_la_soirée_de_clôture_au_château_de_Versailles_${Date.now().toString(36)}.png`
+  await alex
+    .getByLabel("Files to attach")
+    .setInputFiles([{ name: title, mimeType: "image/png", buffer: Buffer.from(await sunsetPng(48, 32)) }])
+  await alex.getByRole("button", { name: "Send" }).click()
+  await messages(alex)
+    .getByRole("button", { name: `Open ${title}` })
+    .click()
+  const viewer = alex.getByRole("dialog", { name: title })
+  await expectLoaded(viewer.getByRole("img", { name: title }))
+  // The dialog stays in the window; the title wraps inside it rather than running off the edge.
+  const box = (await viewer.boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(390)
+  const heading = viewer.getByRole("heading", { name: title })
+  await expect(heading).toHaveAttribute("title", title)
+  const fits = await heading.evaluate((el) => el.scrollWidth <= el.clientWidth)
+  expect(fits).toBe(true)
+  const lines = await heading.evaluate((el) => el.clientHeight / parseFloat(getComputedStyle(el).lineHeight))
+  expect(lines).toBeGreaterThan(1.5)
+})
+
 test("a pasted image is attached under a name of its own", async ({ browser }) => {
   const alex = await open(browser)
   const box = alex.getByRole("textbox", { name: "Message #general" })
