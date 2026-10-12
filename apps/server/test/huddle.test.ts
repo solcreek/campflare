@@ -367,7 +367,9 @@ describe("the /huddle page", () => {
       expect(js).toContain(used)
     }
     expect(js).toContain("not_found_track_error") // retried: a newcomer may not be connected yet
-    expect(await (await SELF.fetch("https://campflare.test/huddle")).text()).toMatch(/id="camera"[\s\S]*id="mute"/)
+    const html = await (await SELF.fetch("https://campflare.test/huddle")).text()
+    for (const control of ['id="mute"', 'id="camera"', 'id="with-camera"', 'id="tiles"'])
+      expect(html).toContain(control)
   })
 })
 
