@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers"
 import { Args } from "../api/args"
 import type { Actor, Ctx } from "../api/context"
-import { sign, verify } from "../api/crypto"
 import { first } from "../db/query"
 import { postMessage } from "../db/messages"
 import type { ConversationRow, TeamRow, UserRow } from "../db/rows"
@@ -34,32 +33,6 @@ export interface ScribeConfig {
 
 interface Speaker {
   user: string
-}
-
-/** The adapter endpoint's ticket: which call and speaker a connection carries. Reusable until it expires (the SFU reconnects with it). */
-export interface ScribeTicket {
-  teamId: string
-  channelId: string
-  user: string
-  expires: number
-}
-
-const TICKET_TTL_MS = 6 * 60 * 60 * 1000
-const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-
-export async function scribeTicket(key: string, t: Omit<ScribeTicket, "expires">): Promise<string> {
-  return sign(key, b64url(JSON.stringify({ ...t, expires: Date.now() + TICKET_TTL_MS })))
-}
-
-export async function readScribeTicket(key: string, signed: string): Promise<ScribeTicket | undefined> {
-  const payload = await verify(key, signed)
-  if (!payload) return undefined
-  try {
-    const t = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as ScribeTicket
-    return t.expires > Date.now() ? t : undefined
-  } catch {
-    return undefined
-  }
 }
 
 export class HuddleScribe extends DurableObject<Env> {

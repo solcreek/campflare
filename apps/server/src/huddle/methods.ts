@@ -5,7 +5,7 @@ import type { ConversationRow } from "../db/rows"
 import { audienceOf, publish } from "../events"
 import type { HuddleSeat, HuddleTrack } from "../hub"
 import { postMessage } from "../db/messages"
-import { scribeTicket } from "./scribe"
+import { scribeTicket } from "./ticket"
 import { scribeActor, seatScribe } from "./scribe-bot"
 import { createSfu, iceServers, SfuError, type Publication, type SessionDescription, type Sfu } from "./sfu"
 
