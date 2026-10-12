@@ -70,6 +70,29 @@ describe("conversations", () => {
     await expectError("conversations.list", { cursor: "!!!" }, w.owner.token, "invalid_cursor")
   })
 
+  it("invites more people at once than D1 binds parameters", async () => {
+    const w = await workspace()
+    const { channel } = await ok<{ channel: Channel }>("conversations.create", { name: "crowd" }, w.owner.token)
+    // Adding 101 people through the API is slow; write them straight to D1.
+    const ids = Array.from({ length: 101 }, (_, i) => `UCROWD${String(i).padStart(4, "0")}`)
+    await env.DB.batch(
+      ids.map((id) =>
+        env.DB.prepare("INSERT INTO users (id, team_id, name, updated, created) VALUES (?, ?, ?, 0, 0)").bind(
+          id,
+          w.teamId,
+          id.toLowerCase(),
+        ),
+      ),
+    )
+    await ok("conversations.invite", { channel: channel.id, users: ids.join(",") }, w.owner.token)
+    const members = await ok<{ members: string[] }>(
+      "conversations.members",
+      { channel: channel.id, limit: 200 },
+      w.owner.token,
+    )
+    expect(members.members).toHaveLength(102)
+  })
+
   it("joins, invites, kicks and leaves, posting system messages", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")

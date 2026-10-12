@@ -1,6 +1,6 @@
 import { requireWritable, resolveConversation } from "../db/conversations"
 import { postMessage } from "../db/messages"
-import { all, first, placeholders, run } from "../db/query"
+import { all, first, run } from "../db/query"
 import type { ConversationRow, FileRow } from "../db/rows"
 import type { Env } from "../env"
 import { publish } from "../events"
@@ -24,21 +24,22 @@ async function getFile(ctx: Ctx<Actor>, id: string) {
   return f
 }
 
+/**
+ * SQL that is true when the user (the first parameter) can read one of the
+ * conversations in `channels`, a JSON array of ids: they're a member, or it's
+ * a public channel.
+ */
+const readsOneOf = (channels: string) => `EXISTS (
+  SELECT 1 FROM json_each(${channels}) j JOIN conversations c ON c.id = j.value
+  LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?
+  WHERE m.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))`
+
 /** A file is visible to its uploader, and to anyone who can read a conversation it's shared in. */
 async function canSee(env: Env, auth: Auth & { user: NonNullable<Auth["user"]> }, f: FileRow) {
   if (f.team_id !== auth.team.id) return false
   if (f.user_id === auth.user.id) return true
-  const channels = JSON.parse(f.channels) as string[]
-  if (channels.length === 0) return false
-  const row = await first<{ ok: number }>(
-    env.DB,
-    `SELECT 1 AS ok FROM conversations c LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?
-     WHERE c.id IN (${placeholders(channels.length)}) AND (m.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))
-     LIMIT 1`,
-    auth.user.id,
-    ...channels,
-  )
-  return Boolean(row)
+  const row = await first<{ ok: number }>(env.DB, `SELECT ${readsOneOf("?")} AS ok`, f.channels, auth.user.id)
+  return Boolean(row?.ok)
 }
 
 method("files.getUploadURLExternal", "actor", async (ctx) => {
@@ -167,8 +168,9 @@ method("files.info", "actor", async (ctx) => {
 method("files.list", "actor", async (ctx) => {
   const count = ctx.args.int("count", 100, { min: 1, max: 1000 })
   const page = ctx.args.int("page", 1, { min: 1 })
-  const conditions = ["team_id = ?", "status = 'complete'"]
-  const params: unknown[] = [ctx.auth.team.id]
+  // Visibility is part of the query, as canSee() decides it for one file.
+  const conditions = ["team_id = ?", "status = 'complete'", `(user_id = ? OR ${readsOneOf("files.channels")})`]
+  const params: unknown[] = [ctx.auth.team.id, ctx.auth.user.id, ctx.auth.user.id]
   const user = ctx.args.str("user")
   if (user) {
     conditions.push("user_id = ?")
@@ -183,13 +185,11 @@ method("files.list", "actor", async (ctx) => {
   const to = ctx.args.int("ts_to", 0)
   if (from) conditions.push(`created >= ${from}`)
   if (to) conditions.push(`created <= ${to}`)
-  const rows = await all<FileRow>(
+  const visible = await all<FileRow>(
     ctx.env.DB,
     `SELECT * FROM files WHERE ${conditions.join(" AND ")} ORDER BY created DESC LIMIT 1000`,
     ...params,
   )
-  const visible: FileRow[] = []
-  for (const f of rows) if (await canSee(ctx.env, ctx.auth, f)) visible.push(f)
   const pages = Math.max(1, Math.ceil(visible.length / count))
   return {
     files: visible.slice((page - 1) * count, page * count).map((f) => fileJson(f, ctx.origin)),
@@ -204,16 +204,12 @@ method("files.delete", "actor", async (ctx) => {
   await ctx.env.FILES.delete(r2Key(f))
   await run(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id)
   const channels = JSON.parse(f.channels) as string[]
-  const audience = new Set<string>([f.user_id])
-  for (const id of channels) {
-    for (const r of await all<{ user_id: string }>(
-      ctx.env.DB,
-      "SELECT user_id FROM members WHERE conversation_id = ?",
-      id,
-    )) {
-      audience.add(r.user_id)
-    }
-  }
+  const members = await all<{ user_id: string }>(
+    ctx.env.DB,
+    "SELECT DISTINCT user_id FROM members WHERE conversation_id IN (SELECT value FROM json_each(?))",
+    f.channels,
+  )
+  const audience = new Set<string>([f.user_id, ...members.map((r) => r.user_id)])
   publish(ctx, {
     teamId: f.team_id,
     audience: [...audience],

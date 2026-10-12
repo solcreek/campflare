@@ -27,8 +27,7 @@ export async function run(db: D1Database, sql: string, ...params: unknown[]): Pr
 
 export const stmt = (db: D1Database, sql: string, ...params: unknown[]) => db.prepare(sql).bind(...params)
 
-/** "?, ?, ?" for an IN list. */
-export const placeholders = (n: number) => Array.from({ length: n }, () => "?").join(", ")
+// Lists go in as one JSON argument, `IN (SELECT value FROM json_each(?))`: D1 binds at most 100 parameters.
 
 export const isUniqueViolation = (error: unknown) =>
   error instanceof Error && /UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(error.message)

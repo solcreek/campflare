@@ -38,6 +38,10 @@ async function upload(token: string, name: string, bytes: Uint8Array, opts: { mu
   return reserved.file_id
 }
 
+async function listedIds(token: string) {
+  return (await ok<{ files: FileJson[] }>("files.list", {}, token)).files.map((f) => f.id).toSorted()
+}
+
 describe("files", () => {
   it("uploads, shares into a conversation, and serves to its members", async () => {
     const w = await workspace()
@@ -116,6 +120,22 @@ describe("files", () => {
     expect(mine.file).toMatchObject({ name: "notes.txt", mimetype: "text/plain", size: 11 })
     expect(mine.file.original_w).toBeUndefined()
     await expectError("files.info", { file: fileId }, bob.token, "file_not_found")
+  })
+
+  it("lists only the files you can see", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const { channel } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "secret", is_private: true },
+      w.owner.token,
+    )
+    const hidden = await upload(w.owner.token, "hidden.txt", new Uint8Array([1]))
+    const shown = await upload(w.owner.token, "shown.txt", new Uint8Array([2]))
+    await ok("files.completeUploadExternal", { files: [{ id: hidden }], channel_id: channel.id }, w.owner.token)
+    await ok("files.completeUploadExternal", { files: [{ id: shown }], channel_id: w.general }, w.owner.token)
+    expect(await listedIds(bob.token)).toEqual([shown])
+    expect(await listedIds(w.owner.token)).toEqual([hidden, shown].toSorted())
   })
 
   it("lists and deletes files", async () => {

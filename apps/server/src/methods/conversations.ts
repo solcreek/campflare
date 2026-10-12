@@ -11,7 +11,7 @@ import {
   validChannelName,
 } from "../db/conversations"
 import { postMessage, requireMessage } from "../db/messages"
-import { all, first, isUniqueViolation, placeholders, run, stmt } from "../db/query"
+import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { ConversationRow, MessageRow, UserRow } from "../db/rows"
 import { audienceOf, publish } from "../events"
 import { decodeCursor, encodeCursor } from "../api/args"
@@ -306,9 +306,9 @@ method("conversations.invite", "actor", async (ctx) => {
   if (users.includes(ctx.auth.user.id)) throw new CampflareError("cant_invite_self")
   const found = await all<UserRow>(
     ctx.env.DB,
-    `SELECT * FROM users WHERE team_id = ? AND deleted = 0 AND id IN (${placeholders(users.length)})`,
+    "SELECT * FROM users WHERE team_id = ? AND deleted = 0 AND id IN (SELECT value FROM json_each(?))",
     ctx.auth.team.id,
-    ...users,
+    JSON.stringify(users),
   )
   if (found.length !== users.length) throw new CampflareError("user_not_found")
   let added = 0
