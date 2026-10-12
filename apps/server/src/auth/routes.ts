@@ -3,6 +3,7 @@ import { publicOrigin } from "../api/origin"
 import { first } from "../db/query"
 import type { Env } from "../env"
 import { AUTH_BASE_PATH, createAuth, type AuthOverrides } from "./index"
+import { mountOAuthV2 } from "./oauth-v2"
 import { consentPage, loginPage } from "./pages"
 
 let overrides: AuthOverrides = {}
@@ -21,6 +22,8 @@ export function mountAuth(app: Hono<{ Bindings: Env }>) {
   // Discovery at the origin root: RFC 9728 protected resource metadata for /mcp,
   // and RFC 8414 authorization server metadata for the /auth issuer.
   app.get("/.well-known/*", (c) => authFor(c.env, c.req.raw).handler(c.req.raw))
+
+  mountOAuthV2(app)
 
   app.get("/login", (c) => loginPage(new URL(c.req.url)))
 

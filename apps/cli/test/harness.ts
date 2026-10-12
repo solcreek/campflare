@@ -11,7 +11,14 @@ declare module "vitest" {
 export const baseUrl = inject("baseUrl")
 
 /** An Io over memory: captured output, an in-memory config file, optional stdin and files. */
-export function memoryIo(opts: { stdin?: string; files?: Record<string, string>; env?: Record<string, string> } = {}) {
+export function memoryIo(
+  opts: {
+    stdin?: string
+    files?: Record<string, string>
+    env?: Record<string, string>
+    openUrl?: (url: string) => Promise<void>
+  } = {},
+) {
   let config: string | undefined
   const out: string[] = []
   const err: string[] = []
@@ -30,6 +37,7 @@ export function memoryIo(opts: { stdin?: string; files?: Record<string, string>;
     writeConfig: async (text) => void (config = text),
     configPath: "/memory/config.json",
     interrupted: () => new Promise((resolve) => (interrupt = resolve)),
+    openUrl: opts.openUrl,
   }
   return {
     io,

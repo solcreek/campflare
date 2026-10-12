@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Args, decodeCursor, encodeCursor } from "../src/api/args"
+import { avatarSvg, initials } from "../src/api/avatar"
 import { sign, verify } from "../src/api/crypto"
 import { CampflareError } from "../src/api/errors"
 import { microsToTs, nextTs, normalizeTs, randomId, tsToMicros } from "../src/api/ids"
@@ -188,6 +189,28 @@ describe("signing and tickets", () => {
     expect(await readTicket("k", await sign("k", btoa("not json")))).toBeUndefined()
     const expired = await sign("k", btoa(JSON.stringify({ expires: 1 })).replace(/=+$/, ""))
     expect(await readTicket("k", expired)).toBeUndefined()
+  })
+})
+
+describe("avatar initials", () => {
+  it("takes the first and last word's first letter, or one CJK character", () => {
+    expect(initials("Olive Owner")).toBe("OO")
+    expect(initials("  émile  ")).toBe("É")
+    expect(initials("José María García")).toBe("JG")
+    expect(initials("Jürgen Groß")).toBe("JG")
+    expect(initials("王小明")).toBe("王")
+    expect(initials("山田 太郎")).toBe("山")
+    expect(initials("김민준")).toBe("김")
+    // A letter with a combining accent stays one letter.
+    expect(initials("e\u0301lodie")).toBe("E\u0301")
+    expect(initials("")).toBe("")
+  })
+
+  it("escapes the initials in the SVG and leaves them out for no name", () => {
+    expect(avatarSvg("U1", "<b> &x")).toContain(">&lt;&amp;</text>")
+    expect(avatarSvg("U1", "")).not.toContain("<text")
+    expect(avatarSvg("U1", "a")).toBe(avatarSvg("U1", "a"))
+    expect(avatarSvg("U1", "a")).not.toBe(avatarSvg("U2", "a"))
   })
 })
 

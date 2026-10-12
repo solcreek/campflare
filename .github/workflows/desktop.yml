@@ -1,0 +1,160 @@
+# The desktop app: installers for macOS (universal), Windows and Linux, and
+# the desktop end-to-end tests on Linux. By hand (Actions → Desktop → Run
+# workflow) or on a version tag (v*): macOS and Windows minutes cost 10× and
+# 2× Linux's on private repos, so this doesn't run on every push.
+name: Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Tauri 2 Linux prerequisites (https://v2.tauri.app/start/prerequisites/#linux).
+  LINUX_PACKAGES: >-
+    libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev
+    libayatana-appindicator3-dev librsvg2-dev
+
+jobs:
+  bundle:
+    name: Bundle (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            runner: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
+          - name: Windows x64
+            runner: windows-latest
+            args: ""
+            rust-targets: ""
+          - name: Linux x64
+            runner: ubuntu-24.04
+            args: ""
+            rust-targets: ""
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      # rustup is on every hosted runner; stable meets the crate's rust-version.
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          for target in ${{ matrix.rust-targets }}; do rustup target add "$target"; done
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: ${{ matrix.args }}
+
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086 # one word per package
+          sudo apt-get install -y $LINUX_PACKAGES
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Without tagName/releaseId the action makes no GitHub release: it builds
+      # and uploads the bundles as this run's artifacts.
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TODO(signing, macOS): sign and notarize. Add these repository
+          # secrets and uncomment; tauri build signs and notarizes when they're set.
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}                     # base64 .p12 (Developer ID Application)
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}                       # App Store Connect API key, for notarytool
+          # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # APPLE_API_KEY_PATH: (write secrets.APPLE_API_KEY_P8 to a file in a step before this one)
+          # TODO(signing, Windows): sign the .msi and NSIS installer, e.g. with
+          # Azure Trusted Signing via bundle.windows.signCommand in tauri.conf.json,
+          # and its credentials as secrets (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID).
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: campflare-[version]-[platform]-[arch]-[bundle]
+
+  e2e:
+    # tauri-driver drives the real app over WebDriver on Linux (WebKitWebDriver)
+    # and Windows (msedgedriver); macOS has no driver for its webview.
+    name: End-to-end (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: e2e
+          # tauri-driver is installed into ~/.cargo/bin: keep it between runs.
+          cache-bin: true
+
+      # The Tauri prerequisites, plus WebKitWebDriver (webkit2gtk-driver)
+      # for tauri-driver to drive, and a virtual display.
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086 # one word per package
+          sudo apt-get install -y $LINUX_PACKAGES webkit2gtk-driver xvfb
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A debug build with the web app embedded (tauri build, not cargo build,
+      # which would point the window at the Vite dev server).
+      - name: Build the debug app
+        working-directory: apps/desktop
+        run: pnpm tauri build --debug --no-bundle
+
+      - name: Desktop end-to-end tests
+        run: xvfb-run --auto-servernum pnpm --filter @campflare/desktop e2e --no-build

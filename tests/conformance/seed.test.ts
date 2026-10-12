@@ -15,6 +15,18 @@ it("seeds a workspace a Slack client can read", async () => {
   const world = await web.conversations.history({ channel: seeded.channels.world! })
   // One greeting in each of seven languages (joins and the purpose change carry a subtype).
   expect(world.messages?.filter((m) => !m.subtype)).toHaveLength(7)
+  // A message with an image, whose bytes are a real PNG of the size the server measured.
+  const general = await web.conversations.history({ channel: seeded.channels.general! })
+  const file = general.messages?.flatMap((m) => m.files ?? []).find((f) => f.name === "sunset.png")
+  expect(file).toMatchObject({
+    mimetype: "image/png",
+    title: "Sunset from the campsite",
+    original_w: 192,
+    original_h: 128,
+  })
+  const png = await fetch(file!.url_private!, { headers: { authorization: `Bearer ${seeded.owner}` } })
+  expect(png.headers.get("content-type")).toBe("image/png")
+  expect([...new Uint8Array(await png.arrayBuffer()).subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47])
   const ims = await web.users.conversations({ types: "im,mpim" })
   expect(ims.channels).toHaveLength(2)
 })

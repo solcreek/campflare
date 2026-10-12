@@ -2,6 +2,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { SELF } from "cloudflare:test"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { setAuthOverrides } from "../src/auth/routes"
+import { browser, next, pkce } from "./browser"
 import { ok, workspace } from "./helpers"
 
 const ORIGIN = "https://campflare.test"
@@ -29,48 +30,6 @@ beforeEach(() => {
   })
 })
 afterEach(() => setAuthOverrides({}))
-
-const b64url = (bytes: Uint8Array) =>
-  btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "")
-
-async function pkce() {
-  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)))
-  const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))
-  return { verifier, challenge }
-}
-
-/** A browser of sorts: follows nothing on its own, but keeps cookies. */
-function browser() {
-  const jar = new Map<string, string>()
-  return {
-    async go(url: string, init: RequestInit = {}) {
-      const headers = new Headers(init.headers)
-      if (jar.size) headers.set("cookie", [...jar].map(([k, v]) => `${k}=${v}`).join("; "))
-      headers.set("origin", ORIGIN)
-      headers.set("sec-fetch-mode", "navigate")
-      headers.set("accept", "text/html")
-      const res = await SELF.fetch(new URL(url, ORIGIN).toString(), { ...init, headers, redirect: "manual" })
-      for (const cookie of res.headers.getSetCookie()) {
-        const [pair] = cookie.split(";")
-        const eq = pair!.indexOf("=")
-        jar.set(pair!.slice(0, eq), pair!.slice(eq + 1))
-      }
-      return res
-    },
-  }
-}
-
-/** Where a response sends the browser next: a redirect, or Better Auth's { url } JSON. */
-async function next(res: Response): Promise<string> {
-  const location = res.headers.get("location")
-  if (location) return location
-  const body = (await res.json().catch(() => ({}))) as { url?: string; redirect?: boolean }
-  if (!body.url) throw new Error(`no next step from ${res.status}: ${JSON.stringify(body)}`)
-  return body.url
-}
 
 type Tokens = { access_token: string; refresh_token?: string; token_type: string }
 
@@ -160,6 +119,10 @@ async function mcpAs(accessToken: string) {
   )
   return client
 }
+
+/** The CSP of the sign-in page shown for this OAuth query. */
+const csp = async (query: string) =>
+  (await browser().go(`/login?${query}`)).headers.get("content-security-policy") ?? ""
 
 describe("OAuth for MCP clients", () => {
   it("advertises its authorization server from a 401 (RFC 9728, RFC 8414)", async () => {
@@ -289,6 +252,19 @@ describe("OAuth for MCP clients", () => {
     expect(html).toContain("That token didn&#39;t work")
     expect(html).toContain('value="client_id=x"') // the flow can carry on from the same page
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+    expect(res.headers.get("content-security-policy")).toContain("form-action 'self';")
+  })
+
+  it("lets the pages' forms lead back to the app, as browsers check form-action on redirects too", async () => {
+    expect(await csp("redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2Fcallback&client_id=x")).toContain(
+      "form-action 'self' http://127.0.0.1:51234;",
+    )
+    expect(await csp("redirect_uri=https%3A%2F%2Fapp.example.com%2F")).toContain(
+      "form-action 'self' https://app.example.com;",
+    )
+    // Only http(s) origins, never a scheme or text that would widen the policy.
+    expect(await csp("redirect_uri=javascript%3Aalert(1)")).toContain("form-action 'self';")
+    expect(await csp("redirect_uri=not%20a%20url%3B%20script-src%20*")).toContain("form-action 'self';")
   })
 
   it("refreshes access tokens", async () => {
