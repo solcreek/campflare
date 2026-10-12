@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "campflare",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "campflare",
+      // Replace with the id from `wrangler d1 create campflare` before deploying.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "campflare-files" }],
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "TeamHub" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TeamHub"] }],
+  // Secrets (`wrangler secret put`, or .dev.vars locally):
+  //   SIGNING_KEY       signs upload URLs and WebSocket tickets
+  //   BOOTSTRAP_SECRET  allows campflare.bootstrap to create a workspace (unset it to close sign-up)
+}

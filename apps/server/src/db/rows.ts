@@ -1,0 +1,131 @@
+// Row shapes, as D1 returns them (0/1 for booleans).
+
+export interface TeamRow {
+  id: string
+  name: string
+  domain: string
+  created: number
+}
+
+export interface UserRow {
+  id: string
+  team_id: string
+  name: string
+  real_name: string
+  display_name: string
+  email: string | null
+  title: string
+  status_text: string
+  status_emoji: string
+  status_expiration: number
+  tz: string
+  is_admin: number
+  is_owner: number
+  is_bot: number
+  bot_id: string | null
+  deleted: number
+  manual_presence: string
+  last_activity: number
+  snooze_until: number
+  updated: number
+  created: number
+}
+
+export interface AppRow {
+  id: string
+  team_id: string
+  name: string
+  bot_id: string
+  bot_user_id: string
+  installer_user_id: string
+  created: number
+}
+
+export interface TokenRow {
+  hash: string
+  team_id: string
+  kind: "user" | "bot" | "app"
+  user_id: string | null
+  app_id: string | null
+  scopes: string
+  label: string
+  created: number
+  revoked: number
+}
+
+export interface ConversationRow {
+  id: string
+  team_id: string
+  kind: "channel" | "im" | "mpim"
+  name: string
+  is_private: number
+  is_general: number
+  is_archived: number
+  creator: string
+  topic: string
+  topic_creator: string
+  topic_last_set: number
+  purpose: string
+  purpose_creator: string
+  purpose_last_set: number
+  previous_names: string
+  member_key: string | null
+  created: number
+  updated: number
+}
+
+export interface MemberRow {
+  conversation_id: string
+  user_id: string
+  last_read: string
+  joined: number
+}
+
+export interface MessageRow {
+  channel_id: string
+  ts: string
+  team_id: string
+  user_id: string | null
+  bot_id: string | null
+  app_id: string | null
+  username: string | null
+  subtype: string | null
+  text: string
+  blocks: string | null
+  attachments: string | null
+  metadata: string | null
+  files: string | null
+  thread_ts: string | null
+  parent_user_id: string | null
+  reply_count: number
+  reply_users: string
+  latest_reply: string | null
+  edited_ts: string | null
+  edited_user: string | null
+  client_msg_id: string | null
+  deleted: number
+}
+
+export interface ReactionRow {
+  channel_id: string
+  ts: string
+  name: string
+  user_id: string
+  created: number
+}
+
+export interface FileRow {
+  id: string
+  team_id: string
+  user_id: string
+  name: string
+  title: string
+  mimetype: string
+  size: number
+  width: number | null
+  height: number | null
+  alt_txt: string | null
+  status: "reserved" | "uploaded" | "complete"
+  channels: string
+  created: number
+}

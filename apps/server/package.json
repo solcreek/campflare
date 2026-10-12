@@ -1,0 +1,21 @@
+{
+  "name": "@campflare/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply campflare --local",
+    "db:migrate:remote": "wrangler d1 migrations apply campflare --remote",
+    "types": "wrangler types --include-runtime=false src/worker-configuration.d.ts",
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hono": "4.13.9"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260926.1",
+    "wrangler": "4.141.0"
+  }
+}
