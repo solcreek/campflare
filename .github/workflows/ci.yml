@@ -1,7 +1,7 @@
 # Every push and pull request: format, lint, typecheck, every test suite with
-# coverage (pnpm check), then the app's browser tests (pnpm e2e). The same
-# commands as on a laptop, on the versions the repo pins: Node from
-# .node-version, pnpm from package.json#packageManager.
+# coverage (pnpm check, which drives pnpm shot in Chromium), then the app's
+# browser tests (pnpm e2e). The same commands as on a laptop, on the versions
+# the repo pins: Node from .node-version, pnpm from package.json#packageManager.
 name: CI
 
 on:
@@ -50,11 +50,13 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Check (format, lint, typecheck, tests with coverage)
-        run: pnpm check
-
+      # Before the check: tests/conformance/shot.test.ts drives pnpm shot in it
+      # (skipped on a laptop without Chromium, but never in CI).
       - name: Install Chromium for the browser tests
         run: pnpm --filter @campflare/web exec playwright install --with-deps chromium
+
+      - name: Check (format, lint, typecheck, tests with coverage)
+        run: pnpm check
 
       - name: Browser tests
         run: pnpm e2e
