@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/server"
 import { createLocalJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { actorFor, authenticate } from "../api/auth"
+import { publicOrigin } from "../api/origin"
 import { CAMPFLARE_PROVIDER } from "../auth/campflare-token"
 import { authFor } from "../auth/routes"
 import { first } from "../db/query"
@@ -30,7 +31,7 @@ const VOUCH_SECONDS = 300
 
 /** An OAuth access token: a JWT from our issuer, for this resource, naming a person linked to a Campflare user. */
 async function verifyJwt(env: Env, request: Request, token: string): Promise<AuthInfo> {
-  const origin = new URL(request.url).origin
+  const origin = publicOrigin(request)
   const auth = authFor(env, request)
   const jwks = createLocalJWKSet((await auth.api.getJwks()) as Parameters<typeof createLocalJWKSet>[0])
   let claims: JWTPayload
@@ -87,7 +88,7 @@ export async function handleMcp(
   request: Request,
   waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<Response> {
-  const origin = new URL(request.url)
+  const origin = new URL(publicOrigin(request))
   // Browsers may only call from this origin: guards against DNS rebinding, as the spec asks.
   const rejected = originValidationResponse(request, [origin.hostname])
   if (rejected) return rejected

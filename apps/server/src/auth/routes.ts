@@ -1,4 +1,5 @@
 import type { Hono } from "hono"
+import { publicOrigin } from "../api/origin"
 import { first } from "../db/query"
 import type { Env } from "../env"
 import { AUTH_BASE_PATH, createAuth, type AuthOverrides } from "./index"
@@ -11,7 +12,7 @@ export function setAuthOverrides(next: AuthOverrides) {
   overrides = next
 }
 
-export const authFor = (env: Env, request: Request) => createAuth(env, new URL(request.url).origin, overrides)
+export const authFor = (env: Env, request: Request) => createAuth(env, publicOrigin(request), overrides)
 
 export function mountAuth(app: Hono<{ Bindings: Env }>) {
   // Better Auth's own endpoints: sign-in, OAuth authorize/token/consent, JWKS.

@@ -190,3 +190,20 @@ describe("signing and tickets", () => {
     expect(await readTicket("k", expired)).toBeUndefined()
   })
 })
+
+describe("publicOrigin", () => {
+  it("keeps the request's origin, unless a TLS-terminating proxy says the client used https", async () => {
+    const { publicOrigin } = await import("../src/api/origin")
+    const at = (headers: Record<string, string> = {}, url = "http://chat.example.com/api/x") =>
+      publicOrigin(new Request(url, { headers }))
+    expect(at()).toBe("http://chat.example.com")
+    expect(at({ "x-forwarded-proto": "https" })).toBe("https://chat.example.com")
+    expect(at({ "x-forwarded-proto": "https, http" })).toBe("https://chat.example.com")
+    expect(at({ "cf-visitor": '{"scheme":"https"}' })).toBe("https://chat.example.com")
+    expect(at({ "cf-visitor": "not json" })).toBe("http://chat.example.com")
+    expect(at({ "x-forwarded-proto": "http" })).toBe("http://chat.example.com")
+    // Never downgraded: an https request stays https.
+    expect(at({ "x-forwarded-proto": "http" }, "https://chat.example.com/")).toBe("https://chat.example.com")
+    expect(at({ "x-forwarded-proto": "https" }, "http://localhost:8787/")).toBe("https://localhost:8787")
+  })
+})
