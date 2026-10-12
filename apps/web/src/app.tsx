@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { LoginScreen } from "./components/login-screen"
 import { Shell } from "./components/shell"
+import { lastServer, rememberServer } from "./server-address"
 import type { Session, SessionStore } from "./session"
 import { type BrowserSignIn, platformSignIn } from "./sign-in"
 import { WorkspaceProvider } from "./workspace"
@@ -20,6 +21,10 @@ export interface AppProps {
   fetch?: Fetch
   /** Sign-in through the browser; the platform's own (a redirect on the web, loopback on the desktop) by default. */
   signIn?: BrowserSignIn
+  /** The dev server's address: the login screen starts with it. */
+  devServer?: string
+  /** The page's own origin on the web: the login screen offers it when it answers api.test. */
+  origin?: string
 }
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
@@ -28,7 +33,7 @@ const connectTo = (session: Session) => createWorkspace({ client: createClient(s
 const reportStoreError = (what: string) => (error: unknown) =>
   toast.error(`Couldn't ${what} the sign-in: ${error instanceof Error ? error.message : String(error)}`)
 
-export function App({ store, autoSession, connect = connectTo, fetch, signIn: given }: AppProps) {
+export function App({ store, autoSession, connect = connectTo, fetch, signIn: given, devServer, origin }: AppProps) {
   const [own] = useState(() => given ?? platformSignIn(globalThis as never, fetch))
   const signIn = given ?? own
   // The browser coming back from a sign-in wins over a kept session: the person just chose whom to sign in as.
@@ -51,6 +56,8 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
   const onSignIn = useCallback(
     (s: Session) => {
       store.save(s).catch(reportStoreError("keep"))
+      // Outlives the session: signing out forgets the token, not where to sign in again.
+      rememberServer(s.url)
       setSession(s)
     },
     [store],
@@ -73,7 +80,13 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
           />
         </WorkspaceProvider>
       ) : (
-        <LoginScreen fetch={fetch} signIn={signIn} onSignIn={onSignIn} />
+        <LoginScreen
+          fetch={fetch}
+          signIn={signIn}
+          onSignIn={onSignIn}
+          server={devServer || lastServer()}
+          probeOrigin={origin}
+        />
       )}
       <Toaster />
     </TooltipProvider>
