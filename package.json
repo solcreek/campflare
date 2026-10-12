@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @campflare/server dev",
+    "dev:all": "node scripts/dev.ts",
+    "otui": "scripts/otui.sh",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p scripts",
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
