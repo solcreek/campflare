@@ -5,9 +5,18 @@
 // the same SessionStore. In development, the `pnpm dev:all`
 // server's people sign in by themselves: `?as=vincent` picks one.
 
+import { createClient, type Fetch } from "@campflare/client"
+
 export interface Session {
   url: string
   token: string
+  /**
+   * How the token was obtained: "oauth" from signing in through the browser,
+   * so signing out revokes it; "token" (or absent, as in sessions kept by
+   * older builds) pasted by the person, who may share it with scripts, so the
+   * app never revokes it.
+   */
+  via?: "oauth" | "token"
 }
 
 /** Where the session is kept. Async because the desktop keychain is behind IPC. */
@@ -19,10 +28,50 @@ export interface SessionStore {
 
 const KEY = "campflare.session"
 
-/** A session from untrusted JSON, or null unless it has both fields as strings. */
+/** A session from untrusted JSON, or null unless it has url and token as strings. */
 function asSession(value: unknown): Session | null {
-  const { url, token } = (value ?? {}) as Partial<Record<keyof Session, unknown>>
-  return typeof url === "string" && url && typeof token === "string" && token ? { url, token } : null
+  const { url, token, via } = (value ?? {}) as Partial<Record<keyof Session, unknown>>
+  if (!(typeof url === "string" && url && typeof token === "string" && token)) return null
+  return via === "oauth" || via === "token" ? { url, token, via } : { url, token }
+}
+
+/** How long signing out waits for the server to revoke the token. */
+export const REVOKE_TIMEOUT_MS = 5000
+
+/**
+ * Ends a session on its server before the app forgets it: auth.revoke for a
+ * token from the browser sign-in, nothing for a pasted one. Best effort: it
+ * never throws and gives up after `timeoutMs`, so a server that's down or
+ * answers an error never keeps anyone signed in. Resolves whether the token was revoked.
+ */
+export async function revokeSession(
+  session: Session,
+  { fetch = globalThis.fetch, timeoutMs = REVOKE_TIMEOUT_MS }: { fetch?: Fetch; timeoutMs?: number } = {},
+): Promise<boolean> {
+  if (session.via !== "oauth") return false
+  const abort = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => {
+      abort.abort()
+      resolve(false)
+    }, timeoutMs)
+  })
+  const client = createClient({
+    url: session.url,
+    token: session.token,
+    maxRetries: 0,
+    fetch: (input, init) => fetch(input, { ...init, signal: abort.signal }),
+  })
+  const revoked = client.call("auth.revoke").then(
+    () => true,
+    () => false,
+  )
+  try {
+    return await Promise.race([revoked, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export function browserStore(

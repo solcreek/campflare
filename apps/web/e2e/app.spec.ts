@@ -131,8 +131,35 @@ test("an image opens full size, and Escape closes it", async ({ browser }) => {
   const viewer = alex.getByRole("dialog")
   await expectLoaded(viewer.getByRole("img", { name }))
   await expect(viewer.getByRole("button", { name: /^Download / })).toBeVisible()
+  // Focus is on the dialog, not Download.
+  await expect(viewer).toBeFocused()
   await alex.keyboard.press("Escape")
   await expect(viewer).toHaveCount(0)
+})
+
+test("a small image with a long title opens inside a phone's window", async ({ browser }) => {
+  const alex = await open(browser)
+  await alex.setViewportSize({ width: 390, height: 844 })
+  const title = `夏の終わりの花火大会で撮った写真_et_la_soirée_de_clôture_au_château_de_Versailles_${Date.now().toString(36)}.png`
+  await alex
+    .getByLabel("Files to attach")
+    .setInputFiles([{ name: title, mimeType: "image/png", buffer: Buffer.from(await sunsetPng(48, 32)) }])
+  await alex.getByRole("button", { name: "Send" }).click()
+  await messages(alex)
+    .getByRole("button", { name: `Open ${title}` })
+    .click()
+  const viewer = alex.getByRole("dialog", { name: title })
+  await expectLoaded(viewer.getByRole("img", { name: title }))
+  // The dialog stays in the window; the title wraps inside it rather than running off the edge.
+  const box = (await viewer.boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(390)
+  const heading = viewer.getByRole("heading", { name: title })
+  await expect(heading).toHaveAttribute("title", title)
+  const fits = await heading.evaluate((el) => el.scrollWidth <= el.clientWidth)
+  expect(fits).toBe(true)
+  const lines = await heading.evaluate((el) => el.clientHeight / parseFloat(getComputedStyle(el).lineHeight))
+  expect(lines).toBeGreaterThan(1.5)
 })
 
 test("a pasted image is attached under a name of its own", async ({ browser }) => {
@@ -196,7 +223,9 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   const page = await (await browser.newContext()).newPage()
   // ?as=none: the dev server's auto sign-in steps aside for the login screen.
   await page.goto(`${stack.appUrl}/?as=none`)
-  await page.getByLabel("Server").fill(stack.apiUrl)
+  // The dev server is filled in; the token isn't.
+  await expect(page.getByLabel("Server")).toHaveValue(stack.apiUrl)
+  await expect(page.getByLabel("Token")).toHaveValue("")
   await page.getByRole("button", { name: "Sign in with your browser" }).click()
 
   // The server's own pages: email and password, then consent for the app.
@@ -220,4 +249,23 @@ test("signs in through the browser: the server's sign-in and consent, then back 
       .getByRole("article", { name: new RegExp(`^Zoé Hayashi ${run} `) })
       .filter({ hasText: text }),
   ).toBeVisible()
+
+  // Signing out revokes the token the sign-in gave the app, not just forgets it.
+  const kept = JSON.parse((await page.evaluate(() => localStorage.getItem("campflare.session")))!) as {
+    token: string
+    via: string
+  }
+  expect(kept.via).toBe("oauth")
+  const authTest = async (token: string) =>
+    (await (
+      await fetch(`${stack.apiUrl}/api/auth.test`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
+    ).json()) as { ok: boolean; error?: string }
+  expect((await authTest(kept.token)).ok).toBe(true)
+  await page.getByRole("button", { name: / menu$/ }).click()
+  await page.getByRole("menuitem", { name: "Sign out" }).click()
+  await expect(page.getByRole("heading", { name: "Sign in to Campflare" })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("campflare.session"))).toBeNull()
+  expect(await authTest(kept.token)).toMatchObject({ ok: false, error: "token_revoked" })
+  // The person's own token, from before the browser sign-in, still works.
+  expect((await authTest(created.token)).ok).toBe(true)
 })

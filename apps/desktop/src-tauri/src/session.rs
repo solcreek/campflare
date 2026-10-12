@@ -330,12 +330,25 @@ mod tests {
     #[test]
     fn carries_unknown_fields_through() {
         // Field order doesn't matter; fields the shell doesn't know come back as they were.
-        let json = r#"{"token":"xoxp-1","via":"password","url":"https://campflare.example","n":{"a":[1]}}"#;
+        let json =
+            r#"{"token":"xoxp-1","via":"token","url":"https://campflare.example","n":{"a":[1]}}"#;
         let decoded = decode(json).unwrap();
         assert_eq!(decoded.url, "https://campflare.example");
-        assert_eq!(decoded.extra.get("via"), Some(&Value::from("password")));
+        assert_eq!(decoded.extra.get("via"), Some(&Value::from("token")));
         let again: Value = serde_json::from_str(&encode(&decoded)).unwrap();
         assert_eq!(again, serde_json::from_str::<Value>(json).unwrap());
+    }
+
+    #[test]
+    fn keeps_how_the_session_was_obtained() {
+        let mut oauth = session();
+        oauth.extra.insert("via".into(), Value::from("oauth"));
+        let json = encode(&oauth);
+        assert_eq!(
+            json,
+            r#"{"url":"https://campflare.example","token":"xoxp-1","via":"oauth"}"#
+        );
+        assert_eq!(decode(&json), Some(oauth));
     }
 
     #[test]
@@ -464,6 +477,8 @@ mod tests {
             "name".into(),
             Value::from("陳大文 · 山田花子 · 김민준 · José Müller-Façon"),
         );
+        // How the token was obtained, which the app keeps with the session (it revokes only "oauth" ones).
+        extra.insert("via".into(), Value::from("oauth"));
         Session {
             url: "http://127.0.0.1:4100".into(),
             token: "xoxp-2-ünïcödé".into(),

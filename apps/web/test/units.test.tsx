@@ -1,3 +1,4 @@
+import type { Fetch } from "@campflare/client"
 import { render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { isGrouped } from "@/components/message-list"
@@ -11,6 +12,7 @@ import {
   type Invoke,
   noticeFileSession,
   platformStore,
+  revokeSession,
 } from "@/session"
 import { followSystemTheme } from "@/theme"
 import { WorkspaceProvider, useWorkspace } from "@/workspace"
@@ -58,8 +60,62 @@ describe("session", () => {
     expect(await store.load()).toBeNull()
   })
 
+  it("keeps how the session was obtained, and treats older sessions as pasted tokens", async () => {
+    const store = browserStore()
+    await store.save({ url: "https://x.test", token: "xoxp-1", via: "oauth" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1", via: "oauth" })
+    // Kept by a build before `via`: no field, so never revoked on sign-out.
+    localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test", token: "xoxp-1" }))
+    const old = await store.load()
+    expect(old).toEqual({ url: "https://x.test", token: "xoxp-1" })
+    expect(await revokeSession(old!)).toBe(false)
+    // Anything else in it is dropped, not trusted.
+    localStorage.setItem("campflare.session", JSON.stringify({ url: "https://x.test", token: "xoxp-1", via: "magic" }))
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+  })
+
+  it("revokes an OAuth session's token on its server, and only that, at best effort", async () => {
+    const seen: { url: string; auth: string | null }[] = []
+    const answer =
+      (body: unknown): Fetch =>
+      async (input, init) => {
+        seen.push({ url: String(input), auth: new Headers(init?.headers).get("authorization") })
+        return Response.json(body)
+      }
+    const oauth = { url: "https://x.test", token: "xoxp-1", via: "oauth" } as const
+    expect(await revokeSession(oauth, { fetch: answer({ ok: true, revoked: true }) })).toBe(true)
+    expect(seen).toEqual([{ url: "https://x.test/api/auth.revoke", auth: "Bearer xoxp-1" }])
+
+    // A pasted token is the person's: not even asked about.
+    seen.length = 0
+    const pasted = { ...oauth, via: "token" } as const
+    expect(await revokeSession(pasted, { fetch: answer({ ok: true, revoked: true }) })).toBe(false)
+    expect(seen).toEqual([])
+
+    // An error answer or an unreachable server: false, never a throw.
+    expect(await revokeSession(oauth, { fetch: answer({ ok: false, error: "invalid_auth" }) })).toBe(false)
+    expect(await revokeSession(oauth, { fetch: () => Promise.reject(new TypeError("Failed to fetch")) })).toBe(false)
+
+    // A server that never answers: given up on after the timeout, and the request aborted.
+    let aborted: AbortSignal | undefined
+    const hanging: Fetch = (_input, init) => {
+      aborted = init?.signal ?? undefined
+      return new Promise(() => {})
+    }
+    expect(await revokeSession(oauth, { fetch: hanging, timeoutMs: 20 })).toBe(false)
+    expect(aborted?.aborted).toBe(true)
+  })
+
   const one = { url: "https://x.test", token: "xoxp-1" }
   const two = { url: "https://y.test", token: "xoxp-2" }
+
+  it("carries how the session was obtained through the keychain", async () => {
+    const shell = fakeShell()
+    const store = desktopStore(shell.invoke)
+    await store.save({ ...one, via: "oauth" })
+    expect(shell.kept).toEqual({ ...one, via: "oauth" })
+    expect(await store.load()).toEqual({ ...one, via: "oauth" })
+  })
 
   it("uses the keychain in the desktop shell and localStorage in a browser", async () => {
     const shell = fakeShell()

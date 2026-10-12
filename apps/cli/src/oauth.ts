@@ -1,4 +1,13 @@
-import { authorizeUrl, callbackCode, createPkce, exchangeCode, OAuthError, randomState } from "@campflare/client"
+import {
+  ApiError,
+  authorizeUrl,
+  callbackCode,
+  createClient,
+  createPkce,
+  exchangeCode,
+  OAuthError,
+  randomState,
+} from "@campflare/client"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { Io } from "./io"
@@ -55,6 +64,52 @@ function callback(server: Server): Promise<URLSearchParams> {
       resolve(url.searchParams)
     })
   })
+}
+
+/** How long revoking waits for the server before the CLI forgets the token anyway. */
+export const REVOKE_TIMEOUT_MS = 5000
+
+/**
+ * auth.revoke for a token the CLI is about to forget. Best effort: never
+ * throws; says why it didn't revoke (unreachable, timed out, or the server's
+ * error code). A token the server already rejects counts as revoked.
+ */
+export async function revokeToken(
+  io: Io,
+  url: string,
+  token: string,
+  timeoutMs = REVOKE_TIMEOUT_MS,
+): Promise<{ revoked: true } | { revoked: false; reason: string }> {
+  const fetch = io.fetch ?? globalThis.fetch
+  const abort = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<{ revoked: false; reason: string }>((resolve) => {
+    timer = setTimeout(() => {
+      abort.abort()
+      resolve({ revoked: false, reason: `no answer in ${timeoutMs / 1000} s` })
+    }, timeoutMs)
+  })
+  const client = createClient({
+    url,
+    token,
+    maxRetries: 0,
+    fetch: (input, init) => fetch(input, { ...init, signal: abort.signal }),
+  })
+  const call = client.call("auth.revoke").then(
+    () => ({ revoked: true }) as const,
+    (err: unknown) => {
+      if (err instanceof ApiError) {
+        if (err.code === "invalid_auth" || err.code === "token_revoked") return { revoked: true } as const
+        return { revoked: false, reason: err.code } as const
+      }
+      return { revoked: false, reason: err instanceof Error ? err.message : String(err) } as const
+    },
+  )
+  try {
+    return await Promise.race([call, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Runs the browser sign-in against a server and returns the new user token. */

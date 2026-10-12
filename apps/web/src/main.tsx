@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { toast } from "sonner"
 import "./index.css"
 import { App } from "./app"
+import { webOrigin } from "./server-address"
 import { devSession, noticeFileSession, platformStore } from "./session"
 import { followSystemTheme } from "./theme"
 
@@ -14,6 +15,11 @@ const store = platformStore(
 )
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App store={store} autoSession={devSession(__CAMPFLARE_DEV__, location.search)} />
+    <App
+      store={store}
+      autoSession={devSession(__CAMPFLARE_DEV__, location.search)}
+      devServer={__CAMPFLARE_DEV__?.url}
+      origin={webOrigin()}
+    />
   </StrictMode>,
 )

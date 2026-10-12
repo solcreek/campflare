@@ -1,6 +1,6 @@
 import { fileKind, fileLabel, fitImage, formatBytes, type MessageFile } from "@campflare/core"
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, FileIcon, LoaderCircleIcon } from "lucide-react"
-import { type KeyboardEvent, useEffect, useState } from "react"
+import { type KeyboardEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -152,12 +152,26 @@ function ViewerContent({
     file.size !== undefined ? formatBytes(file.size) : undefined,
   ].filter(Boolean)
 
+  const title = file.title || name
+  const description = details.length > 0 ? details.join(" · ") : undefined
+  // The dialog itself takes focus when it opens, not Download: Enter mustn't save a file by accident.
+  const popup = useRef<HTMLDivElement>(null)
+
   return (
-    <DialogContent className="w-max max-w-[calc(100vw-2rem)] gap-3 sm:max-w-[calc(100vw-4rem)]" onKeyDown={onKeyDown}>
-      <DialogHeader className="min-w-0 pr-16">
-        <DialogTitle className="truncate leading-normal">{file.title || name}</DialogTitle>
-        <DialogDescription className={details.length > 0 ? "truncate" : "sr-only"}>
-          {details.length > 0 ? details.join(" · ") : label}
+    <DialogContent
+      ref={popup}
+      initialFocus={popup}
+      // w-max: as wide as the image, at least a comfortable reading width, never wider than the window.
+      className="w-max min-w-[min(24rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] gap-3 sm:max-w-[calc(100vw-4rem)]"
+      onKeyDown={onKeyDown}
+    >
+      {/* contain-inline-size: the header takes the dialog's width and adds none, so a long title wraps instead of widening it. */}
+      <DialogHeader className="min-w-0 pr-16 contain-inline-size">
+        <DialogTitle className="line-clamp-3 leading-normal wrap-anywhere" title={title}>
+          {title}
+        </DialogTitle>
+        <DialogDescription className={description ? "truncate" : "sr-only"} title={description}>
+          {description ?? label}
         </DialogDescription>
       </DialogHeader>
       {url && (

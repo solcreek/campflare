@@ -225,7 +225,10 @@ web app in development); a web app at its own https origin, or anyone else's
 app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
 `campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it;
 the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
-is `@campflare/client`'s (`src/oauth.ts`), shared with the app. The `/login` and
+is `@campflare/client`'s (`src/oauth.ts`), shared with the app. Clients revoke
+only the tokens they got this way (`via: "oauth"` in the CLI's profile and the
+app's session), never a pasted one: `campflare logout`, and a login over such a
+profile, call `auth.revoke` (best effort, 5 s) before forgetting it. The `/login` and
 `/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
 check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 
@@ -264,7 +267,7 @@ only), revoked after a grace period; `workspace.upload` is optimistic like `send
 **Web.** `useWorkspaceState(select)` is `useSyncExternalStore` over the store;
 select slices as they are (`s.messages`, `s.timelines[id]`) and derive in
 `useMemo`. Core's selectors take only the slices they read for that reason.
-`session.ts` keeps `{url, token}` behind an async `SessionStore`: localStorage in
+`session.ts` keeps `{url, token, via}` behind an async `SessionStore`: localStorage in
 a browser, the OS keychain in the desktop shell. `platformStore()` tells them apart
 at runtime by `window.__TAURI__` (`withGlobalTauri`), so the web build never
 imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
@@ -272,7 +275,11 @@ imports `@tauri-apps/*`. "Sign in with your browser" (`sign-in.ts`,
 `/oauth/v2/authorize` and comes back to `<origin>/?code&state` (verifier in
 sessionStorage under the state; `campflare-web` on loopback, else the CIMD URL
 `<origin>/oauth-client.json`, which a build with `CAMPFLARE_WEB_ORIGIN` emits);
-on the desktop, see below. A pasted token is the second way in. In dev,
+on the desktop, see below. A pasted token is the second way in. `via` says
+which (`"oauth"` or `"token"`; absent in older sessions, which count as
+`"token"`): Sign out calls `auth.revoke` first (`revokeSession`, best effort,
+5 s at most, then signs out regardless) only for `"oauth"`, since a pasted
+token may be shared with scripts, and never for the dev accounts. In dev,
 `?as=none` shows the login screen, and a return from the browser is never
 auto-signed-in. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
