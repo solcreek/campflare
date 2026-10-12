@@ -147,6 +147,15 @@ a bot user + xoxb + xapp).
 - **Adding a Slack method:** a handler in `src/methods/`, shapes in `shapes.ts`
   if new, events via `publish()` if Slack emits any, a server test in
   `apps/server/test/`, and a conformance case when an official SDK method covers it.
+- **D1 round trips:** deployed, every awaited query is a network round trip, and
+  they dominate latency. Put independent statements in one `DB.batch` (one trip,
+  and atomic for writes) or `Promise.all`; `authenticate()` and
+  `getConversation()`/`resolveConversation()` already bring the token's team,
+  user and app, and the actor's membership. Pass id lists as one JSON argument,
+  `IN (SELECT value FROM json_each(?))`: D1 binds at most 100 parameters.
+  `pnpm --filter @campflare/bench bench` (`tests/bench/README.md`) shows
+  queries, round trips and rows read per method; use `--compare` against
+  `tests/bench/results/`.
 - **Commits:** atomic and frequent, one topic each, with the tests for that change.
   Keep the coverage thresholds passing.
 - Style is set by oxfmt: no semicolons, double quotes, width 120. Code,
