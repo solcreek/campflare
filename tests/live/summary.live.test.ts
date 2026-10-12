@@ -61,11 +61,16 @@ describe.skipIf(!configured)("call summaries (live)", () => {
       record.at(-1)!.name = call.name
       console.log(`--- ${call.name}\n${summary}`)
       expect(summary).toMatch(call.expect)
-      // Where a script is named, it outweighs Latin letters: written in that language, not around it.
+      // Where a script is named, it outweighs the Latin words the model wrote itself: written in
+      // that language, not around it. Names and words said in the call ("staging") don't count.
       const mostly = (call as { mostly?: RegExp }).mostly
-      const inScript = mostly ? (summary.match(mostly)?.length ?? 0) : 1
-      const latin = mostly ? (summary.match(/\p{Script=Latin}/gu)?.length ?? 0) : 0
-      expect(inScript).toBeGreaterThan(latin)
+      if (mostly) {
+        const said = new Set(
+          call.lines.flatMap((l) => `${l.name} ${l.text}`.toLowerCase().match(/\p{Script=Latin}+/gu) ?? []),
+        )
+        const own = (summary.toLowerCase().match(/\p{Script=Latin}+/gu) ?? []).filter((w) => !said.has(w))
+        expect(summary.match(mostly)?.length ?? 0).toBeGreaterThan(own.join("").length)
+      }
     }
     if (env.RECORD_FIXTURES) {
       mkdirSync(FIXTURES, { recursive: true })
