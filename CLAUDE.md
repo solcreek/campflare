@@ -55,6 +55,20 @@ so any state you need has a URL. Two people at once: `?as=vincent` in a second w
 UI tests select by role and accessible name, as a person would; keep controls
 labelled and the jsx-a11y lint passing so they stay selectable.
 
+## CI
+
+GitHub Actions, every action pinned by commit SHA (Dependabot bumps them weekly).
+`.github/workflows/ci.yml` runs on every push and pull request, on Ubuntu:
+`pnpm install --frozen-lockfile`, `pnpm build`, `pnpm check`, then `pnpm e2e`
+(Playwright traces and screenshots are uploaded when it fails). A lockfile out
+of step with `package.json` fails the install. `.github/workflows/desktop.yml`
+builds the Tauri installers (macOS universal, Windows, Linux; unsigned so far)
+as run artifacts and runs the desktop end-to-end tests on Linux
+(`apps/desktop/e2e/`, tauri-driver under xvfb). It runs only by hand (Actions →
+Desktop → Run workflow, or `gh workflow run desktop.yml`) and on `v*` tags,
+because macOS and Windows minutes are expensive. `pnpm --filter
+@campflare/desktop e2e` can't run on macOS (no WebDriver for WKWebView).
+
 ## Layout
 
 - `apps/server`: the Worker (Hono). Migrations in `migrations/`, tests in `test/`.
