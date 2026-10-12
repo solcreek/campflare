@@ -225,7 +225,10 @@ web app in development); a web app at its own https origin, or anyone else's
 app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
 `campflare login --oauth` (`apps/cli/src/oauth.ts`) is the CLI's side of it;
 the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
-is `@campflare/client`'s (`src/oauth.ts`), shared with the app. The `/login` and
+is `@campflare/client`'s (`src/oauth.ts`), shared with the app. Clients revoke
+only the tokens they got this way (`via: "oauth"` in the CLI's profile and the
+app's session), never a pasted one: `campflare logout`, and a login over such a
+profile, call `auth.revoke` (best effort, 5 s) before forgetting it. The `/login` and
 `/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
 check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 

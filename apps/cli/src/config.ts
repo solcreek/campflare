@@ -2,13 +2,19 @@ import type { Io } from "./io"
 import { UsageError } from "./io"
 
 // Profiles in ~/.config/campflare/config.json, one per server and identity:
-// { "current": "work", "profiles": { "work": { "url": …, "token": …, "appToken": … } } }
+// { "current": "work", "profiles": { "work": { "url": …, "token": …, "appToken": …, "via": "oauth" } } }
 // CAMPFLARE_URL / CAMPFLARE_TOKEN / CAMPFLARE_APP_TOKEN override the profile.
 
 export interface Profile {
   url: string
   token?: string
   appToken?: string
+  /**
+   * How `token` was obtained: "oauth" from `login --oauth`, so the CLI revokes
+   * it when it forgets it (logout, or a login over it); "token" (or absent, in
+   * older configs) given by hand, perhaps shared with scripts, so never revoked.
+   */
+  via?: "oauth" | "token"
 }
 
 export interface Config {
