@@ -41,7 +41,7 @@ method("chat.postMessage", "actor", async (ctx) => {
   await requireWritable(ctx, c)
   const threadTs = ctx.args.ts("thread_ts")
   const metadata = ctx.args.json<unknown>("metadata", "invalid_metadata_format")
-  const row = await postMessage(ctx, c, {
+  const { row, message } = await postMessage(ctx, c, {
     ...authorOf(ctx),
     ...content(ctx),
     thread_ts: threadTs ?? null,
@@ -49,14 +49,14 @@ method("chat.postMessage", "actor", async (ctx) => {
     metadata: metadata ? JSON.stringify(metadata) : null,
     client_msg_id: ctx.args.str("client_msg_id") ?? null,
   })
-  return { channel: c.id, ts: row.ts, message: await messageOut(ctx, row) }
+  return { channel: c.id, ts: row.ts, message }
 })
 
 method("chat.meMessage", "user", async (ctx) => {
   const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   await requireWritable(ctx, c)
   const text = ctx.args.req("text", "no_text")
-  const row = await postMessage(ctx, c, { user_id: ctx.auth.user.id, subtype: "me_message", text })
+  const { row } = await postMessage(ctx, c, { user_id: ctx.auth.user.id, subtype: "me_message", text })
   return { channel: c.id, ts: row.ts }
 })
 
