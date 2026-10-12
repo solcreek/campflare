@@ -18,6 +18,9 @@ export default defineConfig(async () => {
     ],
     test: {
       setupFiles: ["./test/setup.ts"],
+      // The bulk tests (a full history page, search across pages) take ~1 s alone but
+      // passed 5 s when other worktrees ran workerd on the same machine. A hang still fails.
+      testTimeout: 20_000,
       coverage: {
         provider: "istanbul" as const,
         include: ["src/**/*.ts"],
