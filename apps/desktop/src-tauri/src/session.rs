@@ -17,6 +17,10 @@ const ACCOUNT: &str = "session";
 pub struct Session {
     pub url: String,
     pub token: String,
+    /// How the token was obtained ("oauth" or "token"), as the app says; the
+    /// app revokes only "oauth" ones on sign-out. Absent from older sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// Never prints the token, so a stray `{:?}` can't leak it into a log.
@@ -80,7 +84,22 @@ mod tests {
         Session {
             url: "https://campflare.example".into(),
             token: "xoxp-1".into(),
+            via: None,
         }
+    }
+
+    #[test]
+    fn keeps_how_the_session_was_obtained() {
+        let oauth = Session {
+            via: Some("oauth".into()),
+            ..session()
+        };
+        let json = encode(&oauth);
+        assert_eq!(
+            json,
+            r#"{"url":"https://campflare.example","token":"xoxp-1","via":"oauth"}"#
+        );
+        assert_eq!(decode(&json), Some(oauth));
     }
 
     #[test]

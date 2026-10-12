@@ -114,7 +114,7 @@ describe("signing in through the browser", () => {
     expect(createHash("sha256").update(seen.code_verifier!).digest("base64url")).toBe(
       authorize.searchParams.get("code_challenge"),
     )
-    expect(await app.store.load()).toEqual({ url: "https://x.test", token: "xoxp-new" })
+    expect(await app.store.load()).toEqual({ url: "https://x.test", token: "xoxp-new", via: "oauth" })
     expect(app.replaced).toEqual(["/#/CDEV"])
     // Spent: the same state can't be used twice.
     expect(sessionStorage.getItem(`campflare.oauth.${state}`)).toBeNull()
@@ -216,7 +216,7 @@ describe("signing in through the browser on the desktop", () => {
     desk.back({ code: "code-1", error: null })
     await screen.findByRole("heading", { name: "general", level: 1 })
     expect(seen).toMatchObject({ client_id: "campflare-desktop", redirect_uri: "http://127.0.0.1:51234/callback" })
-    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-desk" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-desk", via: "oauth" })
     expect(desk.commands).toEqual(["oauth_listen", "oauth_wait"])
   })
 
