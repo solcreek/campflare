@@ -56,6 +56,16 @@ export interface PollResult {
   error?: "invalid_cursor" | "cursor_expired"
 }
 
+export interface HuddleParticipant {
+  channel_id: string
+  user_id: string
+  /** The SFU session that publishes their audio. */
+  session_id: string
+  track_name: string
+  mid: string
+  joined: number
+}
+
 export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 /** Socket Mode: how long an envelope waits for its ack before it's sent again, and how often. */
 export const ACK_TIMEOUT_MS = 3000
@@ -77,6 +87,23 @@ export class TeamHub extends DurableObject<Env> {
       body TEXT NOT NULL
     )`)
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS events_at ON events (at)")
+    // Huddles (experiment): who is in each conversation's call, publishing what,
+    // and which SFU sessions belong to whom.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS huddle_participants (
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      track_name TEXT NOT NULL,
+      mid TEXT NOT NULL,
+      joined INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, user_id)
+    )`)
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS huddle_sessions (
+      session_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      kind TEXT NOT NULL
+    )`)
     // Socket Mode envelopes sent and not yet acknowledged.
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS unacked (
       envelope_id TEXT PRIMARY KEY,
@@ -326,6 +353,70 @@ export class TeamHub extends DurableObject<Env> {
       delivered += await this.deliver(ws, appId, envelope)
     }
     return delivered
+  }
+
+  /** Huddles: someone starts publishing in a conversation's call (replacing their earlier seat, if any). */
+  async huddleJoin(p: HuddleParticipant): Promise<{ previous?: HuddleParticipant; others: HuddleParticipant[] }> {
+    const previous = this.huddleSeat(p.channel_id, p.user_id)
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO huddle_participants (channel_id, user_id, session_id, track_name, mid, joined)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      p.channel_id,
+      p.user_id,
+      p.session_id,
+      p.track_name,
+      p.mid,
+      p.joined,
+    )
+    this.huddleOwn(p.session_id, p.user_id, p.channel_id, "publish")
+    const others = (await this.huddleList(p.channel_id)).filter((o) => o.user_id !== p.user_id)
+    return { ...(previous ? { previous } : {}), others }
+  }
+
+  async huddleLeave(channelId: string, userId: string): Promise<HuddleParticipant | undefined> {
+    const seat = this.huddleSeat(channelId, userId)
+    this.ctx.storage.sql.exec("DELETE FROM huddle_participants WHERE channel_id = ? AND user_id = ?", channelId, userId)
+    this.ctx.storage.sql.exec("DELETE FROM huddle_sessions WHERE channel_id = ? AND user_id = ?", channelId, userId)
+    return seat
+  }
+
+  async huddleList(channelId: string): Promise<HuddleParticipant[]> {
+    return this.ctx.storage.sql
+      .exec<HuddleParticipant & Record<string, SqlStorageValue>>(
+        "SELECT * FROM huddle_participants WHERE channel_id = ? ORDER BY joined",
+        channelId,
+      )
+      .toArray()
+  }
+
+  /** Records which user may act on an SFU session. */
+  async huddleOwn(sessionId: string, userId: string, channelId: string, kind: "publish" | "receive"): Promise<void> {
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO huddle_sessions (session_id, user_id, channel_id, kind) VALUES (?, ?, ?, ?)",
+      sessionId,
+      userId,
+      channelId,
+      kind,
+    )
+  }
+
+  async huddleSession(sessionId: string): Promise<{ user_id: string; channel_id: string; kind: string } | undefined> {
+    return this.ctx.storage.sql
+      .exec<{ user_id: string; channel_id: string; kind: string }>(
+        "SELECT user_id, channel_id, kind FROM huddle_sessions WHERE session_id = ?",
+        sessionId,
+      )
+      .toArray()[0]
+  }
+
+  private huddleSeat(channelId: string, userId: string): HuddleParticipant | undefined {
+    return this.ctx.storage.sql
+      .exec<HuddleParticipant & Record<string, SqlStorageValue>>(
+        "SELECT * FROM huddle_participants WHERE channel_id = ? AND user_id = ?",
+        channelId,
+        userId,
+      )
+      .toArray()[0]
   }
 
   /** Connections live now, for users.getPresence. */
