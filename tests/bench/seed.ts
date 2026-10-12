@@ -15,11 +15,29 @@ export interface Size {
   threadReplies: number
   /** Users in #fanout, each with a live RTM link in the fan-out benchmark. */
   fanout: number
+  /** The owner's messages in #scratch for chat.delete: one per timed request, plus warm-up. */
+  deletable: number
 }
 
 export const SIZES: Record<"quick" | "standard", Size> = {
-  quick: { users: 100, busyMessages: 2_000, channels: 5, channelMessages: 200, threadReplies: 50, fanout: 20 },
-  standard: { users: 500, busyMessages: 20_000, channels: 30, channelMessages: 1_000, threadReplies: 200, fanout: 100 },
+  quick: {
+    users: 100,
+    busyMessages: 2_000,
+    channels: 5,
+    channelMessages: 200,
+    threadReplies: 50,
+    fanout: 20,
+    deletable: 100,
+  },
+  standard: {
+    users: 500,
+    busyMessages: 20_000,
+    channels: 30,
+    channelMessages: 1_000,
+    threadReplies: 200,
+    fanout: 100,
+    deletable: 250,
+  },
 }
 
 export interface Dataset {
@@ -34,6 +52,9 @@ export interface Dataset {
   threadTs: string
   /** A message in #busy for reactions.add/remove. */
   reactTs: string
+  /** #scratch: the owner's messages there, for chat.update (the first) and chat.delete (the rest). */
+  scratch: string
+  scratchTs: string[]
   messages: number
 }
 
@@ -145,6 +166,12 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     "fanout",
     users.slice(0, size.fanout + 1).map((u) => u.id),
   )
+  const scratch = id("C", 999)
+  channel(
+    scratch,
+    "scratch",
+    users.slice(0, Math.min(200, size.users)).map((u) => u.id),
+  )
   const others: string[] = []
   for (let i = 0; i < size.channels; i++) {
     const cid = id("C", 3 + i)
@@ -234,6 +261,14 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     }
   }
   const threadTs = thread(busy, size.threadReplies, busyAuthors)
+  // The owner's messages in #scratch, with #busy's members, to edit and delete. Fixed text and no
+  // reactions, so they change no search result and no other benchmark.
+  const scratchTs: string[] = []
+  for (let i = 0; i < size.deletable + 1; i++) {
+    const ts = tsOf((clock += 1), seq++)
+    scratchTs.push(ts)
+    messages.push([scratch, ts, teamId, users[0]!.id, `scratch ${i}`, null, null, 0, "[]", null])
+  }
   insert(
     "messages",
     [
@@ -269,6 +304,8 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
       fanout,
       threadTs,
       reactTs,
+      scratch,
+      scratchTs,
       messages: messages.length,
     },
   }
