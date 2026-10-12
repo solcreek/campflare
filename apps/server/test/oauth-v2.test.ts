@@ -43,12 +43,12 @@ async function start(opts: { clientId?: string; redirect?: string; userScope?: s
 async function authorize(userToken: string, opts: Parameters<typeof start>[0] = {}) {
   const { b, verifier, redirect, step } = await start(opts)
   expect(new URL(step, ORIGIN).pathname).toBe("/login")
-  const signIn = await b.go("/login", {
+  const loginPage = await b.go("/login", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ token: userToken, oauth_query: new URL(step, ORIGIN).search.slice(1) }),
   })
-  const afterSignIn = await next(signIn)
+  const afterSignIn = await next(loginPage)
   let callback: URL
   if (new URL(afterSignIn, ORIGIN).pathname === "/consent") {
     const page = await (await b.go(afterSignIn)).text()

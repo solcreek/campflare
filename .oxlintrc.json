@@ -28,5 +28,13 @@
     ],
     "unicorn/require-post-message-target-origin": "off"
   },
+  "overrides": [
+    {
+      "files": ["**/test/**", "**/e2e/**"],
+      "rules": {
+        "unicorn/consistent-function-scoping": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["dist/**", ".wrangler/**", "**/worker-configuration.d.ts"]
 }

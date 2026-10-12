@@ -42,7 +42,8 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
 `.claude/settings.json` wires hooks from `scripts/agent/`: SessionStart puts the
 Nix flake's toolchain (`.dev/dev-tools/bin`) on PATH via `CLAUDE_ENV_FILE` and
 prints what `pnpm ready --quick` finds wrong (nothing when all is well);
-PostToolUse formats and lints each edited file, returning lint errors (exit 2);
+PostToolUse formats and lints each edited file, returning lint errors and warnings (exit 2;
+warnings fail `pnpm lint` too, so they never pile up);
 Stop runs format, lint and typecheck when tracked or untracked code changed.
 So: don't run oxfmt by hand after edits, and expect the Stop check. Tests are
 not in the hooks: run the affected suite yourself. In a fresh worktree, run

@@ -21,7 +21,7 @@ if (rel.startsWith("..") || /(^|\/)(node_modules|dist|\.wrangler|coverage)\//.te
 const bin = (name: string) => resolve(root, "node_modules/.bin", name)
 spawnSync(bin("oxfmt"), [rel], { cwd: root, stdio: "ignore" })
 if (LINTED.test(rel)) {
-  const lint = spawnSync(bin("oxlint"), [rel], { cwd: root, encoding: "utf8" })
+  const lint = spawnSync(bin("oxlint"), ["--deny-warnings", rel], { cwd: root, encoding: "utf8" })
   if (lint.status !== 0) {
     process.stderr.write(`oxlint found problems in ${rel}:\n${lint.stdout}${lint.stderr}`)
     process.exit(2)
