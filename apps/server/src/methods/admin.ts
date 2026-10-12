@@ -144,7 +144,7 @@ method("campflare.users.create", "user", async (ctx) => {
       scopes: DEFAULT_USER_SCOPES,
       label: "created by admin",
     }),
-    password === undefined ? undefined : setPassword(ctx.env, user.id, password),
+    password === undefined ? undefined : setPassword(ctx.env, user, password),
   ])
   return { user: userJson(user, ctx.origin), token }
 })
@@ -156,7 +156,7 @@ method("campflare.users.create", "user", async (ctx) => {
 method("campflare.users.setPassword", "user", async (ctx) => {
   const password = ctx.args.req("password")
   if (!ctx.auth.user.email) throw new CampflareError("email_required")
-  await setPassword(ctx.env, ctx.auth.user.id, password)
+  await setPassword(ctx.env, ctx.auth.user, password)
   return {}
 })
 

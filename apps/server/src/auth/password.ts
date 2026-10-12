@@ -1,7 +1,20 @@
 import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
-import { all, run } from "../db/query"
+import { run, stmt } from "../db/query"
 import type { Env } from "../env"
+import { CAMPFLARE_PROVIDER } from "./sign-in"
+import {
+  addressChecks,
+  counter,
+  countFailure,
+  EMAIL_CEILING,
+  forgetEmail,
+  IP_FREE_FAILURES,
+  keys,
+  PAIR_FREE_FAILURES,
+  readCounter,
+  waitFor,
+} from "./throttle"
 
 // Passwords: PBKDF2-SHA256 through WebCrypto, which runs natively in Workers
 // (a JavaScript scrypt would spend the request's CPU budget). 100,000
@@ -11,9 +24,6 @@ import type { Env } from "../env"
 const ITERATIONS = 100_000
 export const MIN_PASSWORD_LENGTH = 10
 const MAX_PASSWORD_LENGTH = 1024
-/** Wrong passwords in a row before the user is locked for LOCK_SECONDS. */
-export const MAX_FAILURES = 5
-export const LOCK_SECONDS = 60
 
 const encoder = new TextEncoder()
 const toBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
@@ -60,80 +70,108 @@ export function checkPassword(password: string): string {
   return password
 }
 
-/** Sets (or replaces) a user's password; it clears any lock from wrong guesses. */
-export async function setPassword(env: Env, userId: string, password: string): Promise<void> {
+/**
+ * Sets (or replaces) a user's password. It ends the person's sign-ins in the
+ * browser (their Better Auth sessions) and forgets wrong guesses at their
+ * email. Their tokens stay: those are apps they installed, revoked one by one.
+ */
+export async function setPassword(
+  env: Env,
+  user: { id: string; email?: string | null },
+  password: string,
+): Promise<void> {
   const hash = await hashPassword(checkPassword(password))
-  await run(
-    env.DB,
-    `INSERT INTO passwords (user_id, hash, failures, locked_until, updated) VALUES (?, ?, 0, 0, ?)
-     ON CONFLICT (user_id) DO UPDATE SET hash = excluded.hash, failures = 0, locked_until = 0, updated = excluded.updated`,
-    userId,
-    hash,
-    nowSeconds(),
-  )
+  await env.DB.batch([
+    stmt(
+      env.DB,
+      `INSERT INTO passwords (user_id, hash, updated) VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET hash = excluded.hash, updated = excluded.updated`,
+      user.id,
+      hash,
+      nowSeconds(),
+    ),
+    stmt(
+      env.DB,
+      `DELETE FROM "session" WHERE "userId" IN
+         (SELECT "userId" FROM "account" WHERE "providerId" = ? AND "accountId" = ?)`,
+      CAMPFLARE_PROVIDER,
+      user.id,
+    ),
+    ...(user.email ? [forgetEmail(env.DB, normalizeEmail(user.email))] : []),
+  ])
 }
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase()
 
 interface Candidate {
   user_id: string
   hash: string
-  locked_until: number
 }
 
 export type PasswordCheck =
   | { ok: true; userId: string }
-  | { ok: false; error: "invalid_credentials" | "workspace_required" | "too_many_attempts" }
+  | { ok: false; error: "invalid_credentials" | "workspace_required" }
+  | { ok: false; error: "too_many_attempts"; retryAfter: number }
 
 // Checked when no user has the email, so an unknown address takes as long as a wrong password.
 let decoy: Promise<string> | undefined
+
+/** Free failures past which each one makes the next attempt wait; the email counter never blocks. */
+const NEVER = 2 ** 31
 
 /**
  * Finds the user an email and a password sign in. The same email may have a
  * password in several workspaces: each one's password is checked, and only
  * when it fits more than one is the workspace (its domain or name) needed.
+ * `ip` is the client's address: guessing is throttled per address and per
+ * email and address (src/auth/throttle.ts), never for the email alone.
  */
 export async function checkCredentials(
   env: Env,
   email: string,
   password: string,
+  ip: string,
   workspace?: string,
 ): Promise<PasswordCheck> {
   const team = workspace?.trim().toLowerCase()
-  const candidates = await all<Candidate>(
-    env.DB,
-    `SELECT p.user_id, p.hash, p.locked_until
-     FROM users u JOIN passwords p ON p.user_id = u.id JOIN teams t ON t.id = u.team_id
-     WHERE u.email = ? AND u.deleted = 0 AND u.is_bot = 0
-       AND (? IS NULL OR lower(t.domain) = ? OR lower(t.name) = ?)
-     LIMIT 20`,
-    email.trim().toLowerCase(),
-    team || null,
-    team || null,
-    team || null,
-  )
-  if (candidates.length === 0) {
-    await verifyPassword(password, await (decoy ??= hashPassword("not anyone's password")))
-    return { ok: false, error: "invalid_credentials" }
-  }
+  const address = normalizeEmail(email)
   const now = nowSeconds()
-  const open = candidates.filter((c) => c.locked_until <= now)
-  const results = await Promise.all(open.map((c) => verifyPassword(password, c.hash)))
-  const matches = open.filter((_, i) => results[i])
+  const results = await env.DB.batch([
+    ...addressChecks(env.DB, ip, now),
+    readCounter(env.DB, keys.pair(address, ip), now),
+    readCounter(env.DB, keys.email(address), now),
+    stmt(
+      env.DB,
+      `SELECT p.user_id, p.hash
+       FROM users u JOIN passwords p ON p.user_id = u.id JOIN teams t ON t.id = u.team_id
+       WHERE u.email = ? AND u.deleted = 0 AND u.is_bot = 0
+         AND (? IS NULL OR lower(t.domain) = ? OR lower(t.name) = ?)
+       LIMIT 20`,
+      address,
+      team || null,
+      team || null,
+      team || null,
+    ),
+  ])
+  const pair = counter(results[3])
+  const wait = waitFor(results, now, pair)
+  if (wait !== undefined) return { ok: false, error: "too_many_attempts", retryAfter: wait }
+
+  const candidates = results[5]!.results as unknown as Candidate[]
+  if (!candidates.length) await verifyPassword(password, await (decoy ??= hashPassword("not anyone's password")))
+  const verified = await Promise.all(candidates.map((c) => verifyPassword(password, c.hash)))
+  const matches = candidates.filter((_, i) => verified[i])
   if (matches.length === 1) {
-    await run(env.DB, "UPDATE passwords SET failures = 0, locked_until = 0 WHERE user_id = ?", matches[0]!.user_id)
+    // The right password from this address: its wrong ones before don't count any more.
+    if (pair.count) await run(env.DB, "DELETE FROM sign_in_throttle WHERE key = ?", keys.pair(address, ip))
     return { ok: true, userId: matches[0]!.user_id }
   }
   if (matches.length > 1) return { ok: false, error: "workspace_required" }
-  // A wrong password counts against every user it was tried on.
-  if (open.length) {
-    await run(
-      env.DB,
-      `UPDATE passwords SET failures = failures + 1,
-         locked_until = CASE WHEN failures + 1 >= ? THEN ? ELSE locked_until END
-       WHERE user_id IN (SELECT value FROM json_each(?))`,
-      MAX_FAILURES,
-      now + LOCK_SECONDS,
-      JSON.stringify(open.map((c) => c.user_id)),
-    )
-  }
-  return { ok: false, error: open.length < candidates.length ? "too_many_attempts" : "invalid_credentials" }
+  const crowded = counter(results[4]).count >= EMAIL_CEILING
+  await env.DB.batch([
+    countFailure(env.DB, keys.ip(ip), now, IP_FREE_FAILURES),
+    countFailure(env.DB, keys.pair(address, ip), now, crowded ? 1 : PAIR_FREE_FAILURES),
+    countFailure(env.DB, keys.email(address), now, NEVER),
+  ])
+  return { ok: false, error: "invalid_credentials" }
 }

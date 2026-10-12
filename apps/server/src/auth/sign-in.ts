@@ -7,11 +7,17 @@ import { CampflareError } from "../api/errors"
 import { first } from "../db/query"
 import type { UserRow } from "../db/rows"
 import type { Env } from "../env"
+import { nowSeconds } from "../api/ids"
 import { checkCredentials } from "./password"
+import { addressChecks, clientAddress, countFailure, IP_FREE_FAILURES, keys, waitFor } from "./throttle"
 
 export const CAMPFLARE_PROVIDER = "campflare"
 
 type EndpointContext = Parameters<typeof setSessionCookie>[0]
+
+/** 429 with Retry-After: this address has tried too often (src/auth/throttle.ts). */
+const tooManyAttempts = (seconds: number) =>
+  new APIError("TOO_MANY_REQUESTS", { message: "too_many_attempts" }, { "retry-after": String(seconds) })
 
 /**
  * Starts a Better Auth session for a Campflare user. The Better Auth user is
@@ -57,16 +63,23 @@ export function campflareSignIn(env: Env) {
           body: z.object({ token: z.string().min(1), oauth_query: z.string().optional() }),
         },
         async (ctx) => {
+          // A token can't be guessed, but each try still counts against the address.
+          const ip = clientAddress(ctx.headers)
+          const now = nowSeconds()
+          const wait = waitFor(await env.DB.batch(addressChecks(env.DB, ip, now)), now)
+          if (wait !== undefined) throw tooManyAttempts(wait)
+          const refuse = async (message: string) => {
+            await countFailure(env.DB, keys.ip(ip), now, IP_FREE_FAILURES).run()
+            return new APIError("UNAUTHORIZED", { message })
+          }
           let actor
           try {
             actor = await authenticate(env, ctx.body.token.trim())
           } catch (error) {
-            if (error instanceof CampflareError) throw new APIError("UNAUTHORIZED", { message: error.code })
+            if (error instanceof CampflareError) throw await refuse(error.code)
             throw error
           }
-          if (actor.kind !== "user" || !actor.user) {
-            throw new APIError("UNAUTHORIZED", { message: "a user token (xoxp-) is needed" })
-          }
+          if (actor.kind !== "user" || !actor.user) throw await refuse("a user token (xoxp-) is needed")
           const user = await signInAs(ctx, actor.user, "campflare-token")
           return ctx.json({ user, campflare_user: actor.user.id, team: actor.team.id })
         },
@@ -83,15 +96,18 @@ export function campflareSignIn(env: Env) {
           }),
         },
         async (ctx) => {
-          const found = await checkCredentials(env, ctx.body.email, ctx.body.password, ctx.body.workspace || undefined)
+          const found = await checkCredentials(
+            env,
+            ctx.body.email,
+            ctx.body.password,
+            clientAddress(ctx.headers),
+            ctx.body.workspace || undefined,
+          )
           if (!found.ok) {
-            const status =
-              found.error === "too_many_attempts"
-                ? "TOO_MANY_REQUESTS"
-                : found.error === "workspace_required"
-                  ? "BAD_REQUEST"
-                  : "UNAUTHORIZED"
-            throw new APIError(status, { message: found.error })
+            if (found.error === "too_many_attempts") throw tooManyAttempts(found.retryAfter)
+            throw new APIError(found.error === "workspace_required" ? "BAD_REQUEST" : "UNAUTHORIZED", {
+              message: found.error,
+            })
           }
           const person = (await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ?", found.userId))!
           const user = await signInAs(ctx, person, "campflare-password")
