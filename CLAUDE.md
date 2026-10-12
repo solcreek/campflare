@@ -145,6 +145,9 @@ and `content-security-policy: sandbox`. `/files-pri/*` and `/upload/v1/*` answer
 CORS (any origin, Authorization allowed, no credentials) so browser apps fetch
 with the token; there are no signed download URLs. `/avatars/:id` draws the
 user's initials (one query; a CJK name gives its first character).
+Thumbnails are a TODO: uploads record an image's `width`/`height` (sent as
+`original_w`/`original_h`) but no `thumb_*` are made, since resizing in a Worker
+is heavy. Until then the app fetches the whole file for an inline image.
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
@@ -269,6 +272,11 @@ on the desktop, see below. A pasted token is the second way in. In dev,
 `?as=none` shows the login screen, and a return from the browser is never
 auto-signed-in. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
+Inline images (`message-files.tsx`) take their final box from
+`original_w`/`original_h` before the bytes come, and fetch them only when they
+near the viewport (`useInView`, IntersectionObserver; tests replace it with
+`ViewportObserver` in `test/setup.ts`); a click opens the message's images in a
+viewer dialog.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
 Rust side opens other origins' links in the system browser and keeps the session
