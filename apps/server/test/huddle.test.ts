@@ -395,6 +395,7 @@ describe("the /huddle page", () => {
       "campflare.huddles.layer",
       "campflare.huddles.transcribe",
       "huddle_transcript",
+      "huddle_summary",
     ]) {
       expect(js).toContain(used)
     }

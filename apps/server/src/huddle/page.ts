@@ -33,7 +33,8 @@ export const HUDDLE_HTML = `<!doctype html>
   .tile .layer { position: absolute; right: 8px; top: 8px; color: #fff; background: rgb(0 0 0 / .55); padding: 0 6px; border-radius: 6px; font-size: .75rem; }
   pre { font-size: .8rem; color: var(--muted); white-space: pre-wrap; }
   #transcript { padding-left: 1.2rem; max-height: 14rem; overflow-y: auto; }
-  #transcript li { margin: .2rem 0; } #transcript .lang { color: var(--muted); font-size: .8rem; margin-left: .4rem; }
+  #transcript li { margin: .2rem 0; }
+  #transcript li.summary { list-style: none; margin: .8rem 0 0 -1.2rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; } #transcript .lang { color: var(--muted); font-size: .8rem; margin-left: .4rem; }
 </style>
 </head>
 <body><main>
@@ -259,6 +260,7 @@ async function join() {
       if (ev.channel !== state.channel) return
       if (ev.type === "huddle_transcription") return transcribing(ev.active ? ev.thread_ts : null)
       if (ev.type === "message" && ev.metadata?.event_type === "huddle_transcript") return transcriptLine(ev.metadata.event_payload)
+      if (ev.type === "message" && ev.metadata?.event_type === "huddle_summary") return transcriptSummary(ev.metadata.event_payload)
       if (ev.user === state.me) return
       if (ev.type === "huddle_joined" || ev.type === "huddle_tracks") seatChanged(ev)
       else if (ev.type === "huddle_left") {
@@ -342,6 +344,18 @@ function transcriptLine(line) {
   lang.className = "lang"
   lang.textContent = line.language || ""
   li.append(who, document.createTextNode(line.text), lang)
+  $("transcript").append(li)
+  li.scrollIntoView({ block: "nearest" })
+}
+
+function transcriptSummary(summary) {
+  const li = document.createElement("li")
+  li.className = "summary"
+  const title = document.createElement("strong")
+  title.textContent = "Summary"
+  const body = document.createElement("div")
+  body.textContent = summary.text
+  li.append(title, body)
   $("transcript").append(li)
   li.scrollIntoView({ block: "nearest" })
 }
