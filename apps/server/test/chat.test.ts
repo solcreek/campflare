@@ -123,16 +123,26 @@ describe("chat.update and chat.delete", () => {
 
   it("leaves a tombstone for a thread head, and recounts on reply deletion", async () => {
     const w = await workspace()
+    const bob = await w.addUser("bob")
     const parent = await ok<Posted>("chat.postMessage", { channel: w.general, text: "p" }, w.owner.token)
-    const r1 = await ok<Posted>(
+    const r1 = await ok<Posted>("chat.postMessage", { channel: w.general, text: "r1", thread_ts: parent.ts }, bob.token)
+    const r2 = await ok<Posted>(
       "chat.postMessage",
-      { channel: w.general, text: "r1", thread_ts: parent.ts },
+      { channel: w.general, text: "r2", thread_ts: parent.ts },
       w.owner.token,
     )
-    await ok("chat.postMessage", { channel: w.general, text: "r2", thread_ts: parent.ts }, w.owner.token)
-    await ok("chat.delete", { channel: w.general, ts: r1.ts }, w.owner.token)
+    const r3 = await ok<Posted>(
+      "chat.postMessage",
+      { channel: w.general, text: "r3", thread_ts: parent.ts },
+      w.owner.token,
+    )
     let thread = await ok<Messages>("conversations.replies", { channel: w.general, ts: parent.ts }, w.owner.token)
-    expect(thread.messages[0]).toMatchObject({ reply_count: 1 })
+    expect(thread.messages[0]).toMatchObject({ reply_count: 3, reply_users: [bob.id, w.owner.id] })
+    // Bob's only reply goes: he leaves the repliers. The latest reply goes: the one before it is latest.
+    await ok("chat.delete", { channel: w.general, ts: r1.ts }, bob.token)
+    await ok("chat.delete", { channel: w.general, ts: r3.ts }, w.owner.token)
+    thread = await ok<Messages>("conversations.replies", { channel: w.general, ts: parent.ts }, w.owner.token)
+    expect(thread.messages[0]).toMatchObject({ reply_count: 1, reply_users: [w.owner.id], latest_reply: r2.ts })
     await ok("chat.delete", { channel: w.general, ts: parent.ts }, w.owner.token)
     thread = await ok<Messages>("conversations.replies", { channel: w.general, ts: parent.ts }, w.owner.token)
     expect(thread.messages[0]).toMatchObject({ subtype: "tombstone", text: "This message was deleted." })

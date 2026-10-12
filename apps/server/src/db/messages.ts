@@ -1,4 +1,4 @@
-import { audienceOf, channelType, publish } from "../events"
+import { audienceFrom, audienceStatement, channelType, publish } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
@@ -120,7 +120,7 @@ export async function postMessage(
         : []),
       stmt(db, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id),
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, ts),
-      stmt(db, "SELECT user_id FROM members WHERE conversation_id = ?", c.id),
+      audienceStatement(db, c.id),
     ])
 
   let ts = nextTs()
@@ -136,7 +136,7 @@ export async function postMessage(
   }
 
   const row = results.at(-2)!.results[0] as MessageRow
-  const audience = (results.at(-1)!.results as { user_id: string }[]).map((r) => r.user_id)
+  const audience = audienceFrom(results.at(-1)!)
   const message = messageJson(row, await newMessageExtras(ctx, row), ctx.origin)
   publish(ctx, {
     teamId: c.team_id,
@@ -145,12 +145,26 @@ export async function postMessage(
   })
   return { row, message }
 }
-/** A message_changed event for an edited (or tombstoned) message. */
-export async function announceChanged(ctx: Ctx<Actor>, c: ConversationRow, before: MessageRow, after: MessageRow) {
+/** A message's reactions, as a statement to batch with a change to it. */
+export const reactionsStatement = (db: D1Database, channelId: string, ts: string) =>
+  db.prepare("SELECT * FROM reactions WHERE channel_id = ? AND ts = ? ORDER BY created").bind(channelId, ts)
+
+/**
+ * A message_changed event for a message edited (or tombstoned) in place, and
+ * the edited message's JSON. An edit keeps the message's reactions, so the
+ * extras loaded for `before` serve `after` too.
+ */
+export function announceChanged(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  change: { before: MessageRow; after: MessageRow; audience: string[]; extras: MessageExtras },
+) {
+  const { before, after, audience, extras } = change
+  const message = messageJson(after, extras, ctx.origin)
   const now = `${(Date.now() / 1000).toFixed(6)}`
   publish(ctx, {
     teamId: c.team_id,
-    audience: await audienceOf(ctx, c.id),
+    audience,
     event: {
       type: "message",
       subtype: "message_changed",
@@ -159,8 +173,9 @@ export async function announceChanged(ctx: Ctx<Actor>, c: ConversationRow, befor
       channel_type: channelType(c),
       ts: now,
       event_ts: now,
-      message: await messageOut(ctx, after),
-      previous_message: await messageOut(ctx, before),
+      message,
+      previous_message: messageJson(before, extras, ctx.origin),
     },
   })
+  return message
 }

@@ -226,16 +226,21 @@ export interface MessageExtras {
 
 const key = (channelId: string, ts: string) => `${channelId}/${ts}`
 
-/** Loads what a batch of messages needs to serialise: their reactions, files and bot apps. */
-export async function loadExtras(env: Env, messages: MessageRow[]): Promise<MessageExtras> {
+/**
+ * Loads what a batch of messages needs to serialise: their reactions, files and bot apps.
+ * `reactions`, when the caller already has them (read in its own batch), saves that query.
+ */
+export async function loadExtras(env: Env, messages: MessageRow[], reactions?: ReactionRow[]): Promise<MessageExtras> {
   const extras: MessageExtras = { reactions: new Map(), files: new Map(), apps: new Map() }
   if (messages.length === 0) return extras
   // Ids go in as one JSON argument: D1 binds at most 100 parameters, and a page can hold 1000 messages.
-  const reactionRows = await all<ReactionRow>(
-    env.DB,
-    `SELECT * FROM reactions WHERE (channel_id, ts) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?)) ORDER BY created`,
-    JSON.stringify(messages.map((m) => [m.channel_id, m.ts])),
-  )
+  const reactionRows =
+    reactions ??
+    (await all<ReactionRow>(
+      env.DB,
+      `SELECT * FROM reactions WHERE (channel_id, ts) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?)) ORDER BY created`,
+      JSON.stringify(messages.map((m) => [m.channel_id, m.ts])),
+    ))
   for (const r of reactionRows) {
     const k = key(r.channel_id, r.ts)
     const list = extras.reactions.get(k) ?? []

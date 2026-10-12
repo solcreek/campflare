@@ -1,7 +1,7 @@
 import { requireReadable, resolveConversation } from "../db/conversations"
 import { messageOut, requireMessage } from "../db/messages"
 import { isUniqueViolation, stmt } from "../db/query"
-import { publish } from "../events"
+import { audienceFrom, audienceStatement, publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { permalink } from "../api/shapes"
@@ -54,7 +54,7 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
       )
   let results: D1Result[]
   try {
-    results = await db.batch([change, stmt(db, "SELECT user_id FROM members WHERE conversation_id = ?", c.id)])
+    results = await db.batch([change, audienceStatement(db, c.id)])
   } catch (error) {
     if (added && isUniqueViolation(error)) throw new CampflareError("already_reacted")
     throw error
@@ -62,7 +62,7 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
   if (!results[0]!.meta.changes) throw new CampflareError(added ? "too_many_reactions" : "no_reaction")
   publish(ctx, {
     teamId: c.team_id,
-    audience: (results[1]!.results as { user_id: string }[]).map((r) => r.user_id),
+    audience: audienceFrom(results[1]!),
     event: {
       type: added ? "reaction_added" : "reaction_removed",
       user,
