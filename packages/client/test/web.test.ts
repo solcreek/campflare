@@ -127,3 +127,20 @@ describe("upload", () => {
     )
   })
 })
+
+describe("fetchFile", () => {
+  it("sends the token to the server's files and its subdomains only", async () => {
+    const { fetch, seen } = fakeFetch([new Response("png"), new Response("pdf")])
+    const client = createClient({ url: "https://x.test/api", token: "xoxp-1", fetch })
+    const res = await client.fetchFile("https://x.test/files-pri/T1-F1/a.png", { headers: { range: "bytes=0-1" } })
+    expect(await res.text()).toBe("png")
+    expect(seen[0]!.init!.headers).toEqual({ range: "bytes=0-1", authorization: "Bearer xoxp-1" })
+    await client.fetchFile("https://files.x.test/files-pri/T1-F2/b.pdf")
+    expect(seen[1]!.url).toBe("https://files.x.test/files-pri/T1-F2/b.pdf")
+
+    await expect(client.fetchFile("https://evil.test/x")).rejects.toThrow("not a file on https://x.test")
+    await expect(client.fetchFile("http://files.x.test/x")).rejects.toThrow("not a file")
+    await expect(client.fetchFile("https://notx.test/x")).rejects.toThrow("not a file")
+    expect(seen).toHaveLength(2)
+  })
+})

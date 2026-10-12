@@ -51,6 +51,12 @@ export interface Client {
     files: UploadFile[],
     opts?: { channel?: string; text?: string; threadTs?: string },
   ): Promise<{ id: string; title: string }[]>
+  /**
+   * GETs a file the server serves with this client's token: a file's url_private or
+   * url_private_download. Only the server's origin or its subdomains (Slack's files.slack.com)
+   * are sent the token; any other URL throws without a request.
+   */
+  fetchFile(url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response>
 }
 
 export function apiBase(url: string): string {
@@ -118,5 +124,16 @@ export function createClient(options: ClientOptions): Client {
     return done
   }
 
-  return { url: options.url, call, paginate, upload }
+  const server = new URL(base)
+
+  function fetchFile(url: string, init: { headers?: Record<string, string>; signal?: AbortSignal } = {}) {
+    const target = new URL(url, server)
+    const ours =
+      target.origin === server.origin ||
+      (target.protocol === "https:" && target.hostname.endsWith(`.${server.hostname}`))
+    if (!ours) return Promise.reject(new Error(`not a file on ${server.origin}: ${target.origin}`))
+    return fetch(target.href, { headers: { ...init.headers, ...auth }, signal: init.signal })
+  }
+
+  return { url: options.url, call, paginate, upload, fetchFile }
 }
