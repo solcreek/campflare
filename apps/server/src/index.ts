@@ -11,6 +11,7 @@ import { handleDownload, handleUpload } from "./methods/files"
 import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
+import { handleMcp } from "./mcp"
 import { Args } from "./api/args"
 import { authenticate, tokenOf, touch } from "./api/auth"
 import { methods, type Auth, type Ctx } from "./api/context"
@@ -63,6 +64,9 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
     return reply({ ok: false, error: "internal_error" })
   }
 })
+
+/** The remote MCP server (Streamable HTTP). */
+app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUntil(p)))
 
 /** Upload URLs handed out by files.getUploadURLExternal. */
 app.post("/upload/v1/:token", (c) => handleUpload(c.env, c.req.raw, c.req.param("token")))

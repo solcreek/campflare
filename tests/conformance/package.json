@@ -7,6 +7,7 @@
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.1.0",
     "@slack/socket-mode": "3.0.1",
     "@slack/web-api": "8.1.1"
   }
