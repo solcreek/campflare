@@ -7,6 +7,9 @@ and events?
 - Step 1, audio between people: yes (2026-10-12).
 - Step 2, video and several people: yes, four people with cameras tested
   live (2026-10-12).
+- Step 3, transcription and a summary: yes, two people speaking Spanish and
+  Japanese transcribed live, attributed, labelled with their language, and
+  summarised (2026-10-12).
 
 ## Run it
 
@@ -40,13 +43,38 @@ window), type `#general`, join. Each side should hear the other.
 - **Code:** `apps/server/src/huddle/` (`sfu.ts` the Connection API client,
   `methods.ts` the API, `page.ts` the test page).
 
+## Transcription (step 3)
+
+```
+browser mic ─WebRTC→ SFU ─WebSocket adapter (48 kHz stereo PCM, protobuf)→ /huddle/scribe/<ticket>
+  → HuddleScribe (one per call): per speaker, 16 kHz mono, cut into utterances by loudness
+  → Whisper (Workers AI) → "*Name*: text" in the call's thread, by the Huddle Scribe bot
+stop (by request, or the last leaver) → last words → summary (Llama 3.3 70B) in the same thread
+```
+
+- `campflare.huddles.transcribe` turns it on and off. One adapter per
+  microphone, so every line knows its speaker without diarisation; newcomers
+  are added, retried while their connection comes up (the same race as step 2).
+- Each line and the summary carry message `metadata` (`huddle_transcript`:
+  user, text, language; `huddle_summary`: text, line count, language), so an
+  agent reads the call without parsing text.
+- The summary is written in the call's dominant language, decided from what
+  Whisper heard (weighted by text), not guessed by the model: asked to guess, it
+  summarised a mostly Chinese call half in English.
+- The SFU dials out to the endpoint, so it must be public: `HUDDLE_PUBLIC_URL`,
+  or the request's own origin. In development, a quick tunnel
+  (`cloudflared tunnel --url http://localhost:8787`) and opening `/huddle`
+  through it works with no setting at all.
+- Workers AI is called over REST with an account token scoped to Workers AI
+  Read (no `wrangler login` needed), the same way in tests and live.
+
 ## Tests, in three layers
 
-| Layer             | Where                                             | Runs                                           | What it proves                                                                                                                           |
-| ----------------- | ------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Recorded fixtures | `apps/server/test/fixtures/sfu/exchanges.json`    | recorded by `RECORD_FIXTURES=1 pnpm test:live` | the real API's shapes, including its errors (per-track `not_found_track_error` with HTTP 200; `425 session_error`)                       |
-| Offline           | `apps/server/test/huddle.test.ts` + `fake-sfu.ts` | `pnpm check`                                   | the API's behaviour and permissions, against a fake SFU built from the fixtures                                                          |
-| Live              | `tests/live/`                                     | `pnpm test:live` (opt-in)                      | real WebRTC: werift peers in Node carry RTP through the SFU; two real Chrome pages on `/huddle` hear each other and see each other leave |
+| Layer             | Where                                                                     | Runs                                           | What it proves                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Recorded fixtures | `apps/server/test/fixtures/sfu/exchanges*.json`, `fixtures/speech/*.json` | recorded by `RECORD_FIXTURES=1 pnpm test:live` | the real APIs' shapes, including their errors (per-track `not_found_track_error` and `internal_error` with HTTP 200; `425 session_error`; the adapter's `websocket_handshake_failed` and 503), and Whisper's and the summary model's answers in several languages                                                                                                                                                                                                                                    |
+| Offline           | `apps/server/test/huddle.test.ts` + `fake-sfu.ts`                         | `pnpm check`                                   | the API's behaviour and permissions, against a fake SFU built from the fixtures                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Live              | `tests/live/`                                                             | `pnpm test:live` (opt-in)                      | real WebRTC: werift peers in Node carry RTP through the SFU; Chrome simulcast layers switch in place; two Chrome pages hear each other; four see and hear each other at the expected layers, and a camera turned off and on again shows on the others' screens; Whisper transcribes seven languages; the summary model follows the call's language; and end to end, two Chrome browsers whose fake microphones play speech (Spanish, Japanese) are transcribed through a quick tunnel and summarised |
 
 MSW was considered and left out: the server tests run inside workerd, where
 its interceptors don't apply, and the SFU client already takes a `fetch`.
@@ -73,10 +101,24 @@ cf realtime sfu apps create --name campflare-dev     # → REALTIME_APP_ID, REAL
 cf realtime turn keys create --name campflare-dev    # → REALTIME_TURN_KEY_ID, REALTIME_TURN_KEY_TOKEN
 ```
 
+A Workers AI token for transcription, scoped to Workers AI Read and expiring
+2026-11-11, was created the same way (`cf accounts tokens create`) as
+`CF_ACCOUNT_ID` / `WORKERS_AI_TOKEN`.
+
 Their secrets are only in `apps/server/.dev.vars` (gitignored). Delete with
 `cf realtime sfu apps delete` / `cf realtime turn keys delete`.
 
 ## Found along the way
+
+- **Behind a tunnel, every URL we built said http.** The tunnel terminates TLS
+  and forwards plain HTTP, so `rtm.connect` answered `ws://` to an `https`
+  page. `publicOrigin()` now honours `X-Forwarded-Proto` / `CF-Visitor`. This
+  applies beyond the experiment (any reverse proxy).
+- **A quick tunnel's name can be cached as nonexistent.** Asking the system
+  resolver before the name exists makes macOS cache the miss, and Chrome
+  shares it: the tests wait over DNS-over-HTTPS first.
+- Whisper returns Chinese in simplified characters, even for speech read from
+  traditional text.
 
 - **Subscribing can beat the publisher's connection.** `huddle_joined` goes
   out when `join` returns, before the newcomer's PeerConnection is up; the SFU
@@ -95,5 +137,7 @@ Their secrets are only in `apps/server/.dev.vars` (gitignored). Delete with
   picker, no screen sharing, no reconnect after a network change.
 - Layers don't react to the subscriber's bandwidth (`priorityOrdering: none`);
   tiles that are off screen still receive video.
-- Transcription through the WebSocket adapter (step 3).
+- Transcription: overlapping speech isn't separated, the transcript can't be
+  edited or deleted as a whole, and Chinese comes out simplified (an
+  `initial_prompt` in traditional characters may steer it).
 - Slack's `calls.*` metadata API, so Slack clients see that a call is on.
