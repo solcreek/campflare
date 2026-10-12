@@ -11,7 +11,9 @@ Existing Slack clients and SDKs must work against it after a base-URL change.
 ```sh
 pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every test suite with coverage
 pnpm fmt                   # format in place (oxfmt)
-pnpm dev                   # wrangler dev on :8787 (apply migrations first: see below)
+pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
+pnpm otui                  # opentui-slack against the dev:all server (reads .wrangler/campflare-dev.env)
+pnpm dev                   # just wrangler dev on :8787 (apply migrations first: see below)
 pnpm build                 # tsdown bundles for packages/client and apps/cli
 
 cd apps/server
@@ -75,6 +77,15 @@ team). The hub holds hibernating WebSockets of two kinds:
   WebSocket URLs carry a signed, single-use, 60-second ticket (`src/api/tickets.ts`)
   that the hub checks against its own SQLite storage.
 
+The hub's SQLite also holds:
+
+- `events`: every published event for a week, numbered (`seq`), with its
+  audience. `campflare.events.poll` (`src/methods/events.ts` → `TeamHub.poll`)
+  reads it from a cursor and long-polls by parking a waiter that `record()`
+  wakes. RPC return values must be serialisable, so events cross as JSON strings.
+- `unacked`: Socket Mode envelopes until their `envelope_id` is acked; the DO
+  `alarm()` resends overdue ones (3 s, up to 3 retries) on the app's next link.
+
 **Files.** `files.getUploadURLExternal` reserves a row and returns a signed
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;
 `files.completeUploadExternal` shares them and posts the message. `url_private`
@@ -109,8 +120,9 @@ a bot user + xoxb + xapp).
 ## Running a Slack client against it
 
 opentui-slack (`~/Projects/solcreek/opentui-slack`) reads `SLACK_API_URL`.
-`~/.config/campflare-otui/opentui-campflare` launches it against
-`http://localhost:8787` with its own config dir and daemon socket. Its repo
-`.env` holds real Slack tokens, which Bun auto-loads; exported environment
-variables win over it, so the launcher exports the Campflare ones.
+`pnpm otui` (`scripts/otui.sh`) launches it against the `dev:all` server with
+its own config dir and daemon socket under `.wrangler/`. Its repo `.env` holds
+real Slack tokens, which Bun auto-loads; exported environment variables win
+over it, so the script exports the Campflare ones. A daemon started without
+them keeps the wrong tokens: `pnpm otui daemon stop`.
 `~/.local/bin/campflare` wraps the built CLI (`apps/cli/dist/index.mjs`).

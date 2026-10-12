@@ -19,18 +19,21 @@ tests/conformance   the official Slack SDKs against `wrangler dev`
 ## Quick start (local)
 
 ```sh
-pnpm install
-cd apps/server
-cp .dev.vars.example .dev.vars           # SIGNING_KEY, BOOTSTRAP_SECRET
-pnpm db:migrate:local
-pnpm dev                                 # http://localhost:8787
+pnpm install && pnpm build
+pnpm dev:all                             # migrations, wrangler dev on :8787, a seeded workspace
+```
 
-# In another terminal: create a workspace and log the CLI in to it.
-cd apps/cli && pnpm build
-node dist/index.mjs bootstrap --url http://localhost:8787 --secret dev-bootstrap \
-  --team "Acme" --user alice
-node dist/index.mjs send '#general' "hello"
-node dist/index.mjs listen               # live events, in another terminal
+`pnpm dev:all` seeds a workspace on its first run (you are `@alex`; also
+`vincent`, `minjun` and `ada`, with channels, a thread, a bot and a greeting in
+seven languages in `#world`), and writes the tokens to
+`apps/server/.wrangler/campflare-dev.env` on every run. `--port 0` picks a free
+port and `--state <dir>` a separate state, so parallel worktrees each run their
+own stack; `--fresh` starts over and `--no-seed` leaves the server empty.
+
+```sh
+pnpm otui                                       # opentui-slack against it (from ~/Projects/solcreek/opentui-slack)
+set -a; . apps/server/.wrangler/campflare-dev.env; set +a
+node apps/cli/dist/index.mjs send '#dev' "hello"  # the CLI, as @alex
 ```
 
 `wrangler dev` runs everything locally in workerd: D1 is SQLite (with FTS5),
@@ -117,6 +120,21 @@ Measured on local `wrangler dev`: post → Socket Mode event, p50 6.6 ms, p95
 9.5 ms (20 round trips, 2026-10-11; the conformance suite prints this on every
 run). WebSocket URLs carry a signed, 60-second, single-use ticket.
 
+An envelope that isn't acknowledged within 3 seconds is sent again, up to
+three times, on the app's next link, with `retry_attempt` counting up and
+`retry_reason: "timeout"`; its `event_id` stays the same.
+
+### The event log
+
+The hub also keeps every event for a week, numbered in order.
+`campflare.events.poll` returns the events the token's user can see after a
+`cursor`, long-polling up to `wait` seconds (at most 30) when there are none
+yet. Without a cursor it answers the current one, to start from. A cursor whose
+next event has been dropped answers `cursor_expired`, so a client knows it
+missed something. This is live events for clients that can't hold a WebSocket
+open: agents, scripts, scheduled jobs. `follow()` in `@campflare/client` and
+`campflare events --follow` wrap it.
+
 ## CLI
 
 ```sh
@@ -127,6 +145,7 @@ make test 2>&1 | tail -5 | campflare send @me                  # text from stdin
 campflare history '#dev' -n 50
 campflare search 'deploy in:#dev from:@bob after:2026-10-01'
 campflare listen --json                                       # RTM; --socket for Socket Mode
+campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
 ```
 
@@ -157,7 +176,7 @@ client and CLI bundles. The Worker is bundled by wrangler.
 - OAuth v2 (`oauth.v2.access`) and per-scope enforcement (tokens carry scopes,
   but no method checks them yet).
 - Events API over HTTP (request URLs); Socket Mode and RTM only so far.
-- Redelivery of unacknowledged Socket Mode envelopes, and periodic `disconnect` refreshes.
+- Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
   emoji, scheduled DND hours, time zones.
