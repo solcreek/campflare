@@ -357,6 +357,35 @@ describe("throttling sign-in", () => {
   })
 })
 
+describe("changing a password", () => {
+  it("ends the person's browser sign-ins and lifts the waits, but keeps their tokens", async () => {
+    const w = await workspace()
+    const email = uniqueEmail("zhang")
+    const zhang = await w.addUser("zhang", { email })
+    await ok("campflare.users.setPassword", { password: "第一个密码真的很长很长" }, zhang.token)
+    // Two browser sessions, and an address that guessed.
+    expect((await signIn({ email, password: "第一个密码真的很长很长" })).status).toBe(200)
+    expect((await signIn({ email, password: "第一个密码真的很长很长" })).status).toBe(200)
+    const ip = freshIp()
+    for (let i = 0; i < PAIR_FREE_FAILURES; i++) await signIn({ email, password: `错误的密码${i}号` }, ip)
+    const sessions = () =>
+      env.DB.prepare(
+        `SELECT count(*) AS n FROM "session" WHERE "userId" IN
+           (SELECT "userId" FROM "account" WHERE "providerId" = 'campflare' AND "accountId" = ?)`,
+      )
+        .bind(zhang.id)
+        .first<{ n: number }>()
+    expect((await sessions())!.n).toBe(2)
+
+    await ok("campflare.users.setPassword", { password: "第二个密码也真的很长呢" }, zhang.token)
+    expect((await sessions())!.n).toBe(0)
+    expect(await throttleRow(keys.pair(email, ip))).toBeNull()
+    // The token that set it (an app install) still works.
+    await ok("auth.test", {}, zhang.token)
+    expect((await signInAnswer({ email, password: "第二个密码也真的很长呢" }, ip)).status).toBe(200)
+  })
+})
+
 describe("password hashes", () => {
   it("salts each hash, treats composed and decomposed accents alike, and rejects unknown schemes", async () => {
     const composed = "Crème brûlée"

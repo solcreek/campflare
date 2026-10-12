@@ -2,6 +2,7 @@ import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { run, stmt } from "../db/query"
 import type { Env } from "../env"
+import { CAMPFLARE_PROVIDER } from "./sign-in"
 import {
   addressChecks,
   counter,
@@ -69,10 +70,6 @@ export function checkPassword(password: string): string {
   return password
 }
 
-<<<<<<< HEAD
-/** Sets (or replaces) a user's password; it forgets wrong guesses at their email. */
-export async function setPassword(env: Env, user: { id: string; email?: string | null }, password: string): Promise<void> {
-=======
 /**
  * Sets (or replaces) a user's password. It ends the person's sign-ins in the
  * browser (their Better Auth sessions) and forgets wrong guesses at their
@@ -83,7 +80,6 @@ export async function setPassword(
   user: { id: string; email?: string | null },
   password: string,
 ): Promise<void> {
->>>>>>> 8e43f63 (fixup! Throttle sign-in per address and per email and address, not per account)
   const hash = await hashPassword(checkPassword(password))
   await env.DB.batch([
     stmt(
@@ -93,6 +89,13 @@ export async function setPassword(
       user.id,
       hash,
       nowSeconds(),
+    ),
+    stmt(
+      env.DB,
+      `DELETE FROM "session" WHERE "userId" IN
+         (SELECT "userId" FROM "account" WHERE "providerId" = ? AND "accountId" = ?)`,
+      CAMPFLARE_PROVIDER,
+      user.id,
     ),
     ...(user.email ? [forgetEmail(env.DB, normalizeEmail(user.email))] : []),
   ])

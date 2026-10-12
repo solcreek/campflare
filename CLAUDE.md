@@ -185,7 +185,9 @@ the password of every active user with that email: one match signs in; more
 than one answers `workspace_required`, and `/login` then asks for the workspace
 (domain or name). An unknown email still costs one hash. The `/login` page
 shows email and password first and the token form folded in a `<details>`.
-Setting a password clears the throttle counters for the person's email.
+Setting a password deletes the person's Better Auth `session` rows (their
+browser sign-ins, found through `account`) and their throttle counters, but
+not their xoxp tokens or OAuth grants: those are app installs, revoked one by one.
 
 **Throttling sign-in** (`src/auth/throttle.ts`, table `sign_in_throttle`,
 migration 0008). Never per account alone: a lock on the account lets anyone who
