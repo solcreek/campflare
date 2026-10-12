@@ -389,12 +389,21 @@ describe("the /huddle page", () => {
       "campflare.huddles.publish",
       "campflare.huddles.unpublish",
       "campflare.huddles.layer",
+      "campflare.huddles.transcribe",
+      "huddle_transcript",
     ]) {
       expect(js).toContain(used)
     }
     expect(js).toContain("not_found_track_error") // retried: a newcomer may not be connected yet
     const html = await (await SELF.fetch("https://campflare.test/huddle")).text()
-    for (const control of ['id="mute"', 'id="camera"', 'id="with-camera"', 'id="tiles"'])
+    for (const control of [
+      'id="mute"',
+      'id="camera"',
+      'id="with-camera"',
+      'id="tiles"',
+      'id="transcribe"',
+      'id="transcript"',
+    ])
       expect(html).toContain(control)
   })
 })

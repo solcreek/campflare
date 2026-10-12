@@ -32,6 +32,8 @@ export const HUDDLE_HTML = `<!doctype html>
   .tile .name { position: absolute; left: 8px; bottom: 8px; color: #fff; background: rgb(0 0 0 / .55); padding: 1px 8px; border-radius: 6px; font-size: .85rem; }
   .tile .layer { position: absolute; right: 8px; top: 8px; color: #fff; background: rgb(0 0 0 / .55); padding: 0 6px; border-radius: 6px; font-size: .75rem; }
   pre { font-size: .8rem; color: var(--muted); white-space: pre-wrap; }
+  #transcript { padding-left: 1.2rem; max-height: 14rem; overflow-y: auto; }
+  #transcript li { margin: .2rem 0; } #transcript .lang { color: var(--muted); font-size: .8rem; margin-left: .4rem; }
 </style>
 </head>
 <body><main>
@@ -45,10 +47,12 @@ export const HUDDLE_HTML = `<!doctype html>
     <button id="join" class="primary">Join</button>
     <button id="mute" disabled>Mute</button>
     <button id="camera" disabled>Camera off</button>
+    <button id="transcribe" disabled>Transcribe</button>
     <button id="leave" disabled>Leave</button>
     <p id="status">Not in a call.</p>
   </div>
   <div id="tiles"></div>
+  <ol id="transcript" aria-live="polite"></ol>
   <pre id="stats"></pre>
 </main>
 <script src="/huddle.js" type="module"></script>
@@ -66,7 +70,7 @@ const SIMULCAST = [
 const state = {
   token: "", channel: "", me: "", names: new Map(), ice: [],
   pub: null, recv: null, recvSession: null, mic: null, camera: null, cameraTx: null, cameraCount: 0,
-  rtm: null, seats: new Map(), subs: new Map(), speaker: "", queue: Promise.resolve(),
+  rtm: null, seats: new Map(), subs: new Map(), speaker: "", queue: Promise.resolve(), transcriptThread: null,
 }
 try { $("token").value = sessionStorage.getItem("huddle-token") || "" } catch {}
 
@@ -252,7 +256,10 @@ async function join() {
     state.rtm = new WebSocket(url)
     state.rtm.onmessage = (e) => {
       const ev = JSON.parse(e.data)
-      if (ev.channel !== state.channel || ev.user === state.me) return
+      if (ev.channel !== state.channel) return
+      if (ev.type === "huddle_transcription") return transcribing(ev.active ? ev.thread_ts : null)
+      if (ev.type === "message" && ev.metadata?.event_type === "huddle_transcript") return transcriptLine(ev.metadata.event_payload)
+      if (ev.user === state.me) return
       if (ev.type === "huddle_joined" || ev.type === "huddle_tracks") seatChanged(ev)
       else if (ev.type === "huddle_left") {
         state.seats.delete(ev.user)
@@ -280,7 +287,7 @@ async function join() {
     for (const seat of joined.participants) { state.seats.set(seat.user, seat); tile(seat.user) }
     await receive(joined.participants)
     status("In the call.")
-    for (const id of ["leave", "mute", "camera"]) $(id).disabled = false
+    for (const id of ["leave", "mute", "camera", "transcribe"]) $(id).disabled = false
     $("camera").textContent = state.camera ? "Camera off" : "Camera on"
     window.huddle = state // for tests and poking around
   } catch (error) {
@@ -320,6 +327,37 @@ function toggleMute() {
   $("mute").textContent = track.enabled ? "Mute" : "Unmute"
 }
 
+// --- Transcription: the Huddle Scribe posts each line in a thread; we show them as they come. ---
+
+function transcribing(threadTs) {
+  state.transcriptThread = threadTs
+  $("transcribe").textContent = threadTs ? "Stop transcribing" : "Transcribe"
+}
+
+function transcriptLine(line) {
+  const li = document.createElement("li")
+  const who = document.createElement("strong")
+  who.textContent = nameOf(line.user) + ": "
+  const lang = document.createElement("span")
+  lang.className = "lang"
+  lang.textContent = line.language || ""
+  li.append(who, document.createTextNode(line.text), lang)
+  $("transcript").append(li)
+  li.scrollIntoView({ block: "nearest" })
+}
+
+async function toggleTranscription() {
+  $("transcribe").disabled = true
+  try {
+    const res = await api("campflare.huddles.transcribe", { channel: state.channel, enabled: !state.transcriptThread })
+    transcribing(res.active ? res.thread_ts : null)
+  } catch (error) {
+    status(String(error.message || error))
+  } finally {
+    $("transcribe").disabled = false
+  }
+}
+
 async function leave() {
   $("leave").disabled = true
   await api("campflare.huddles.leave", { channel: state.channel }).catch(() => {})
@@ -331,7 +369,9 @@ async function leave() {
   Object.assign(state, { pub: null, recv: null, recvSession: null, mic: null, camera: null, cameraTx: null, rtm: null, speaker: "", queue: Promise.resolve() })
   state.seats.clear(); state.subs.clear()
   status("Not in a call.")
-  for (const id of ["mute", "camera"]) $(id).disabled = true
+  for (const id of ["mute", "camera", "transcribe"]) $(id).disabled = true
+  transcribing(null)
+  $("transcript").replaceChildren()
   $("join").disabled = false
 }
 
@@ -381,6 +421,7 @@ $("join").onclick = join
 $("leave").onclick = leave
 $("mute").onclick = toggleMute
 $("camera").onclick = toggleCamera
+$("transcribe").onclick = toggleTranscription
 `
 
 const SECURITY = {
