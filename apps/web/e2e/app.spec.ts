@@ -26,7 +26,9 @@ test("a message reaches the other person live, in every script", async ({ browse
   const vincent = await open(browser, "vincent")
   await expect(alex.getByRole("heading", { name: "general", level: 1 })).toBeVisible()
 
-  for (const text of ["今日は 🎉 早安", "¿Qué tal? Ça va. Grüße", "회의는 3시에"]) {
+  // Unique per run: the stack is shared, and --repeat-each must not find an earlier run's copies.
+  const run = Date.now().toString(36)
+  for (const text of [`今日は 🎉 早安 ${run}`, `¿Qué tal? Ça va. Grüße ${run}`, `회의는 3시에 ${run}`]) {
     await alex.getByRole("textbox", { name: "Message #general" }).fill(text)
     await alex.keyboard.press("Enter")
     await expect(messages(alex).getByText(text)).toBeVisible()
@@ -36,11 +38,11 @@ test("a message reaches the other person live, in every script", async ({ browse
   // Someone else's message in a conversation you're not looking at shows as unread.
   await sidebarItem(vincent, "random").click()
   await alex.getByRole("button", { name: "Vincent Vega" }).click()
-  await alex.getByRole("textbox", { name: "Message Vincent Vega" }).fill("ping")
+  await alex.getByRole("textbox", { name: "Message Vincent Vega" }).fill(`ping ${run}`)
   await alex.keyboard.press("Enter")
   await expect(vincent.getByLabel("1 unread")).toBeVisible()
   await sidebarItem(vincent, "Alex Rivera").click()
-  await expect(messages(vincent).getByText("ping")).toBeVisible()
+  await expect(messages(vincent).getByText(`ping ${run}`)).toBeVisible()
   await expect(vincent.getByLabel("1 unread")).toHaveCount(0)
 })
 
@@ -105,13 +107,16 @@ test("images show inline, and an upload reaches the other person", async ({ brow
     { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Grüße, 안녕") },
   ])
   await expect(alex.getByRole("list", { name: "Attachments" }).getByText("notes.txt")).toBeVisible()
-  await alex.getByRole("textbox", { name: "Message #random" }).fill("Ce soir 🌅")
+  const caption = `Ce soir 🌅 ${Date.now().toString(36)}`
+  await alex.getByRole("textbox", { name: "Message #random" }).fill(caption)
   await alex.keyboard.press("Enter")
 
   for (const page of [alex, vincent]) {
-    await expect(messages(page).getByText("Ce soir 🌅")).toBeVisible()
-    await expectLoaded(messages(page).getByRole("img", { name: "atardecer-夕焼け.png" }))
-    await expect(messages(page).getByRole("group", { name: "File: notes.txt" })).toBeVisible()
+    // This run's message: earlier runs (--repeat-each) left files with the same names.
+    const upload = messages(page).getByRole("article").filter({ hasText: caption })
+    await expect(upload).toHaveCount(1)
+    await expectLoaded(upload.getByRole("img", { name: "atardecer-夕焼け.png" }))
+    await expect(upload.getByRole("group", { name: "File: notes.txt" })).toBeVisible()
   }
   await expect(messages(alex).getByText("Uploading…")).toHaveCount(0)
 })
@@ -131,6 +136,21 @@ test("every screen has a URL", async ({ browser }) => {
 })
 
 test("signs in through the browser: the server's sign-in and consent, then back to the app", async ({ browser }) => {
+  // Someone new each run: the server remembers consent, and a repeat would skip the Allow page.
+  const run = Date.now().toString(36)
+  const created = (await (
+    await fetch(`${stack.apiUrl}/api/campflare.users.create`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${stack.people.alex}` },
+      body: new URLSearchParams({
+        name: `zoe-${run}`,
+        real_name: `Zoé Hayashi ${run}`,
+        email: `zoe-${run}@campflare.test`,
+      }),
+    })
+  ).json()) as { ok: boolean; token: string }
+  expect(created.ok).toBe(true)
+
   const page = await (await browser.newContext()).newPage()
   // ?as=none: the dev server's auto sign-in steps aside for the login screen.
   await page.goto(`${stack.appUrl}/?as=none`)
@@ -140,7 +160,7 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   // The server's own pages: a token of the person's own, then consent for the app.
   await expect(page.getByLabel("Campflare token")).toBeVisible()
   expect(new URL(page.url()).origin).toBe(stack.apiUrl)
-  await page.getByLabel("Campflare token").fill(stack.people.ada!)
+  await page.getByLabel("Campflare token").fill(created.token)
   await page.getByRole("button", { name: "Continue" }).click()
   await expect(page.getByRole("heading", { name: /^Allow / })).toBeVisible()
   await page.getByRole("button", { name: "Allow" }).click()
@@ -154,7 +174,7 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   // A message is named by its author, even one grouped under the previous.
   await expect(
     messages(page)
-      .getByRole("article", { name: /^Ada Lovelace / })
+      .getByRole("article", { name: new RegExp(`^Zoé Hayashi ${run} `) })
       .filter({ hasText: text }),
   ).toBeVisible()
 })
