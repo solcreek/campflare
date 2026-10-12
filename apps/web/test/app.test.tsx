@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { ReactElement } from "react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import type { Fetch } from "@campflare/client"
 import { App } from "@/app"
-import { browserStore, type Session, type SessionStore } from "@/session"
+import { browserStore, REVOKE_TIMEOUT_MS, type Session, type SessionStore } from "@/session"
 import { ALEX, fakeServer, FakeSocket, hello, VINCENT } from "./server"
 
 afterEach(() => {
@@ -66,7 +67,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Token"), "xoxp-1")
     await user.click(screen.getByRole("button", { name: "Sign in with a token" }))
     await screen.findByRole("heading", { name: "general", level: 1 })
-    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1" })
+    expect(await store.load()).toEqual({ url: "https://x.test", token: "xoxp-1", via: "token" })
   })
 
   it("treats a store it can't read as signed out, and says when one can't keep the session", async () => {
@@ -254,6 +255,60 @@ describe("App", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
     expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
     expect(await store.load()).toBeNull()
+  })
+
+  it("revokes the token on sign-out when it came from the browser sign-in, never a pasted one", async () => {
+    const revokes = (server: ReturnType<typeof fakeServer>) =>
+      server.api.calls.filter((c) => c.method === "auth.revoke").length
+    const signOut = async (via: Session["via"], server = fakeServer({ "auth.revoke": () => ({ revoked: true }) })) => {
+      cleanup()
+      const store = browserStore()
+      await store.save({ ...session, via })
+      const user = userEvent.setup()
+      render(<App store={store} connect={server.connect} fetch={server.api.fetch} />)
+      await screen.findByRole("heading", { name: "general", level: 1 })
+      act(() => hello())
+      await user.click(screen.getByRole("button", { name: /Test Team/ }))
+      await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
+      expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
+      expect(await store.load()).toBeNull()
+      return server
+    }
+    expect(revokes(await signOut("oauth"))).toBe(1)
+    expect(revokes(await signOut("token"))).toBe(0)
+    expect(revokes(await signOut(undefined))).toBe(0)
+    // The server refusing still signs out here.
+    expect(revokes(await signOut("oauth", fakeServer({ "auth.revoke": () => new Error("invalid_auth") })))).toBe(1)
+  })
+
+  it("signs out without waiting forever on a server that doesn't answer", async () => {
+    const server = fakeServer()
+    const store = browserStore()
+    await store.save({ ...session, via: "oauth" })
+    let answer: (() => void) | undefined
+    const hanging: Fetch = (input, init) =>
+      String(input).endsWith("/auth.revoke")
+        ? new Promise((_, fail) => {
+            answer = () => fail(new DOMException("aborted", "AbortError"))
+            init?.signal?.addEventListener("abort", answer)
+          })
+        : server.api.fetch(input, init)
+    const user = userEvent.setup()
+    render(<App store={store} connect={server.connect} fetch={hanging} />)
+    await screen.findByRole("heading", { name: "general", level: 1 })
+    act(() => hello())
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await user.click(screen.getByRole("button", { name: /Test Team/ }))
+      await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
+      expect(await screen.findByText("Signing out…")).toBeTruthy()
+      expect(answer).toBeDefined()
+      await act(() => vi.advanceTimersByTimeAsync(REVOKE_TIMEOUT_MS))
+      expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
+      expect(await store.load()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("offers a retry when the workspace fails to load", async () => {

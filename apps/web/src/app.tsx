@@ -6,7 +6,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { LoginScreen } from "./components/login-screen"
 import { Shell } from "./components/shell"
-import type { Session, SessionStore } from "./session"
+import { revokeSession, type Session, type SessionStore } from "./session"
 import { type BrowserSignIn, platformSignIn } from "./sign-in"
 import { WorkspaceProvider } from "./workspace"
 
@@ -16,7 +16,7 @@ export interface AppProps {
   autoSession?: Session | null
   /** How a session becomes a live workspace; tests pass one on a fake server. */
   connect?: (session: Session) => Workspace
-  /** The fetch the sign-in check uses; tests pass a fake server's. */
+  /** The fetch the sign-in check and sign-out's revoke use; tests pass a fake server's. */
   fetch?: Fetch
   /** Sign-in through the browser; the platform's own (a redirect on the web, loopback on the desktop) by default. */
   signIn?: BrowserSignIn
@@ -55,22 +55,28 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
     },
     [store],
   )
+  // Signing out ends the session on the server first (an OAuth token is revoked; see revokeSession),
+  // then forgets it here, whether or not the server answered.
+  const [signingOut, setSigningOut] = useState(false)
+  const onSignOut = useCallback(async () => {
+    if (!session) return
+    setSigningOut(true)
+    await revokeSession(session, { fetch })
+    await store.clear().catch(reportStoreError("forget"))
+    setSigningOut(false)
+    setSession(null)
+  }, [session, store, fetch])
   const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
 
   return (
     <TooltipProvider>
-      {session === undefined ? (
+      {session === undefined || signingOut ? (
         <main className="flex min-h-svh items-center justify-center text-muted-foreground" aria-busy="true">
-          Loading…
+          {signingOut ? "Signing out…" : "Loading…"}
         </main>
       ) : workspace ? (
         <WorkspaceProvider workspace={workspace}>
-          <Shell
-            onSignOut={() => {
-              store.clear().catch(reportStoreError("forget"))
-              setSession(null)
-            }}
-          />
+          <Shell onSignOut={() => void onSignOut()} />
         </WorkspaceProvider>
       ) : (
         <LoginScreen fetch={fetch} signIn={signIn} onSignIn={onSignIn} />

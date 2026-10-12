@@ -70,7 +70,7 @@ export function LoginScreen({
 
   const withToken = async (e: FormEvent) => {
     e.preventDefault()
-    const session = { url: url.trim(), token: token.trim() }
+    const session: Session = { url: url.trim(), token: token.trim(), via: "token" }
     if (!session.url) {
       setError("Enter the server's address")
       return

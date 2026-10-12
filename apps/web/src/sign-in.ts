@@ -110,7 +110,7 @@ export function webSignIn(opts: WebSignInOptions = {}): BrowserSignIn {
     const pending = JSON.parse(saved) as Pending
     const code = callbackCode(q, state)
     const res = await exchangeCode(pending.server, { ...pending, code, fetch: opts.fetch })
-    return { url: pending.server, token: res.authed_user.access_token }
+    return { url: pending.server, token: res.authed_user.access_token, via: "oauth" }
   }
 
   return {
@@ -166,7 +166,7 @@ export function desktopSignIn({ invoke, openUrl, fetch }: DesktopSignInOptions):
       for (const [k, v] of Object.entries(back)) if (typeof v === "string") q.set(k, v)
       const code = callbackCode(q, state)
       const res = await exchangeCode(server, { clientId, code, redirectUri, verifier, fetch })
-      return { url: serverRoot(server), token: res.authed_user.access_token }
+      return { url: serverRoot(server), token: res.authed_user.access_token, via: "oauth" }
     },
     returning: () => false,
     finish: () => Promise.reject(new OAuthError("state_mismatch")),
