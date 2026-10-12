@@ -19,12 +19,11 @@ async function search(token: string, query: string, extra: Record<string, unknow
 }
 
 describe("search.messages", () => {
-  it("finds words, phrases and CJK substrings", async () => {
+  it("finds words, phrases and exclusions", async () => {
     const w = await workspace()
     const post = (text: string) => ok("chat.postMessage", { channel: w.general, text }, w.owner.token)
     await post("deploy failed on staging")
     await post("the deploy worked")
-    await post("部署失敗了，請檢查")
     await post("release notes are out")
 
     expect((await search(w.owner.token, "deploy")).total).toBe(2)
@@ -32,14 +31,42 @@ describe("search.messages", () => {
       "deploy failed on staging",
     ])
     expect((await search(w.owner.token, "deploy -staging")).matches.map((m) => m.text)).toEqual(["the deploy worked"])
-    expect((await search(w.owner.token, "部署")).matches.map((m) => m.text)).toEqual(["部署失敗了，請檢查"])
-    expect((await search(w.owner.token, "失敗了")).total).toBe(1)
     expect((await search(w.owner.token, "nothing-like-this")).total).toBe(0)
     const first = (await search(w.owner.token, "deploy", { sort: "timestamp", sort_dir: "asc" })).matches
     expect(first.map((m) => m.text)).toEqual(["deploy failed on staging", "the deploy worked"])
     expect(first[0]!.username).toBe("owner")
     expect(first[0]!.permalink).toContain(`/archives/${w.general}/p`)
     await expectError("search.messages", {}, w.owner.token, "no_query")
+  })
+
+  it("matches every script: CJK substrings, and Latin text without case or accents", async () => {
+    const w = await workspace()
+    const corpus = {
+      zh: "部署失敗了，請檢查日誌",
+      ja: "東京オフィスで会議があります",
+      ko: "배포가 실패했습니다",
+      es: "El despliegue falló en producción",
+      fr: "Le café est prêt à la cafétéria",
+      de: "Die Straße nach München ist gesperrt",
+    }
+    for (const text of Object.values(corpus)) await ok("chat.postMessage", { channel: w.general, text }, w.owner.token)
+    const found = async (query: string) => (await search(w.owner.token, query)).matches.map((m) => m.text)
+
+    // CJK has no spaces between words: substrings must match, including
+    // two-character words, which are shorter than a trigram.
+    expect(await found("失敗了")).toEqual([corpus.zh])
+    expect(await found("部署")).toEqual([corpus.zh])
+    expect(await found("オフィス")).toEqual([corpus.ja])
+    expect(await found("東京")).toEqual([corpus.ja])
+    expect(await found("실패했")).toEqual([corpus.ko])
+    expect(await found("배포")).toEqual([corpus.ko])
+    // Latin scripts: either case, with or without diacritics.
+    expect(await found("fallo")).toEqual([corpus.es])
+    expect(await found("PRODUCCION")).toEqual([corpus.es])
+    expect(await found("cafeteria")).toEqual([corpus.fr])
+    expect(await found("prêt")).toEqual([corpus.fr])
+    expect(await found("munchen")).toEqual([corpus.de])
+    expect(await found("Straße")).toEqual([corpus.de])
   })
 
   it("filters with in:, from:, has:, is: and dates", async () => {
