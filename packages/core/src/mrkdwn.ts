@@ -19,6 +19,13 @@ export type Block =
   | { type: "paragraph"; children: Inline[] }
   | { type: "quote"; children: Inline[] }
   | { type: "pre"; text: string }
+  // Markdown only (see markdown.ts): mrkdwn has no headings, lists or rules.
+  | { type: "heading"; level: number; children: Inline[] }
+  | { type: "list"; ordered: boolean; start: number; items: Inline[][] }
+  | { type: "rule" }
+
+/** The blocks mrkdwn has. */
+export type MrkdwnBlock = Extract<Block, { type: "paragraph" | "quote" | "pre" }>
 
 export function unescape(text: string): string {
   return text.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&")
@@ -38,7 +45,8 @@ const INLINE = new RegExp(
   "gu",
 )
 
-function angle(inner: string): Inline {
+/** What a <…> holds: a link, a mention or a broadcast. */
+export function angle(inner: string): Inline {
   const bar = inner.indexOf("|")
   const target = bar < 0 ? inner : inner.slice(0, bar)
   const label = bar < 0 ? undefined : unescape(inner.slice(bar + 1))
@@ -75,8 +83,8 @@ export function parseInline(text: string): Inline[] {
 }
 
 /** Paragraphs, "> " quotes and ``` blocks. Newlines inside a paragraph stay in its text. */
-export function parse(text: string): Block[] {
-  const blocks: Block[] = []
+export function parse(text: string): MrkdwnBlock[] {
+  const blocks: MrkdwnBlock[] = []
   const parts = text.split("```")
   // A fence that never closes is text.
   if (parts.length % 2 === 0) parts.splice(-2, 2, `${parts.at(-2)}\`\`\`${parts.at(-1)}`)
