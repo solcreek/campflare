@@ -184,5 +184,88 @@ describe("signing in again", () => {
     expect(await cli.run("login", "--oauth", "--url", baseUrl)).toBe(0)
     expect(await check(token)).toBe("owner")
     expect(cli.err).not.toContain("Couldn't revoke")
+    expect(cli.err).not.toContain("Didn't revoke")
+  })
+
+  it("counts the same server however its URL was typed", async () => {
+    const token = await ownerToken()
+    const cli = memoryIo({ openUrl: person(token) })
+    expect(await cli.run("login", "--oauth", "--url", `${baseUrl}/api/`)).toBe(0)
+    const first = cli.config!.profiles.default!.token!
+    expect(await cli.run("login", "--oauth", "--url", baseUrl)).toBe(0)
+    expect(await check(first)).toBe("token_revoked")
+    expect(cli.err).not.toContain("Didn't revoke")
+  })
+
+  it("keeps the old token, and says how to end it, when signing in as someone else", async () => {
+    const owner = await loggedIn()
+    const olive = owner.config!.profiles.default!.token!
+    expect(await owner.run("admin", "add-user", "bob", "--json")).toBe(0)
+    const { token: bobToken } = JSON.parse(owner.out) as { token: string }
+
+    const cli = memoryIo({ openUrl: person(olive) })
+    expect(await cli.run("login", "--oauth", "--url", baseUrl)).toBe(0)
+    const first = cli.config!.profiles.default!.token!
+    cli.clear()
+    expect(await cli.run("login", "--url", baseUrl, "--token", bobToken)).toBe(0)
+    expect(await check(first)).toBe("owner")
+    const lines = cli.err.trimEnd().split("\n")
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^Didn't revoke the previous token of this profile \(from login --oauth at /)
+    expect(lines[0]).toContain("for @owner in CLI ")
+    expect(lines[0]).toContain("this login is another user or workspace")
+    expect(lines[0]).toContain("`campflare token revoke <id>`")
+  })
+
+  it("keeps the old token when signing in to another workspace or another server", async () => {
+    const first = memoryIo({ openUrl: person(await ownerToken()) })
+    expect(await first.run("login", "--oauth", "--url", baseUrl)).toBe(0)
+    const old = first.config!.profiles.default!.token!
+
+    // The same profile, signed in as the owner of another workspace.
+    first.clear()
+    const elsewhere = await ownerToken()
+    expect(await first.run("login", "--url", baseUrl, "--token", elsewhere)).toBe(0)
+    expect(await check(old)).toBe("owner")
+    expect(first.err).toContain("this login is another user or workspace")
+
+    // A profile from login --oauth at another server: that server isn't even asked.
+    const cli = memoryIo()
+    await cli.io.writeConfig(
+      JSON.stringify({ profiles: { default: { url: "https://chat.example.invalid", token: old, via: "oauth" } } }),
+    )
+    let calls = 0
+    cli.io.fetch = (input, init) => {
+      calls++
+      return fetch(input, init)
+    }
+    expect(await cli.run("login", "--url", baseUrl, "--token", elsewhere)).toBe(0)
+    expect(calls).toBe(1) // auth.test of the new token, nothing more
+    expect(await check(old)).toBe("owner")
+    expect(cli.err).toContain("(from login --oauth at https://chat.example.invalid; this login is to another server)")
+  })
+
+  it("keeps the old token when the server can't say whose it was", async () => {
+    const token = await ownerToken()
+    const cli = memoryIo({ openUrl: person(token) })
+    expect(await cli.run("login", "--oauth", "--url", baseUrl)).toBe(0)
+    const first = cli.config!.profiles.default!.token!
+    cli.io.fetch = (input, init) =>
+      new Request(input, init).headers.get("authorization") === `Bearer ${first}`
+        ? Promise.reject(new TypeError("fetch failed"))
+        : fetch(input, init)
+    expect(await cli.run("login", "--url", baseUrl, "--token", token)).toBe(0)
+    expect(await check(first)).toBe("owner")
+    expect(cli.err).toContain("couldn't ask whose it is: fetch failed")
+  })
+
+  it("forgets an old token the server already refuses without a word", async () => {
+    const token = await ownerToken()
+    const cli = memoryIo()
+    await cli.io.writeConfig(
+      JSON.stringify({ profiles: { default: { url: baseUrl, token: "xoxp-long-gone", via: "oauth" } } }),
+    )
+    expect(await cli.run("login", "--url", baseUrl, "--token", token)).toBe(0)
+    expect(cli.err).toBe("")
   })
 })

@@ -260,8 +260,11 @@ app, uses a Client ID Metadata Document URL as `client_id`, as MCP clients do.
 the protocol (PKCE on WebCrypto, `authorizeUrl`, `callbackCode`, `exchangeCode`)
 is `@campflare/client`'s (`src/oauth.ts`), shared with the app. Clients revoke
 only the tokens they got this way (`via: "oauth"` in the CLI's profile and the
-app's session), never a pasted one: `campflare logout`, and a login over such a
-profile, call `auth.revoke` (best effort, 5 s) before forgetting it. The `/login` and
+app's session), never a pasted one: `campflare logout`, and a re-login over such a
+profile, call `auth.revoke` (best effort, 5 s) before forgetting it. A re-login is the
+same server and the same user and workspace (the old token's `auth.test` against the
+new one's); a login over it to anywhere else keeps the old token live and says so,
+with how to revoke it, in one line on stderr. The `/login` and
 `/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
 check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 
