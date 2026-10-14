@@ -411,7 +411,7 @@ the app by itself (no script, no refresh): a scheme nobody registered would
 only show the browser's error.
 
 **Interactivity.** A click on a button in an app's message is
-`campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, members only): it
+`campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, anyone who can read the conversation, as on Slack): it
 finds the element in the stored blocks (`actionOf()` in `src/interactivity.ts`;
 `button`, or `feedback_buttons` with `value` naming the button) and sends the
 app that posted the message `block_actions` in Slack's shape. Over Socket Mode

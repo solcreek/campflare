@@ -244,10 +244,10 @@ describe("campflare.blocks.action over HTTP", () => {
     expect((await click()).error).toBe("interactivity_not_enabled")
   })
 
-  it("lets only members of the conversation click, and only on an app's message", async () => {
+  it("lets anyone who can read the conversation click, and only on an app's message", async () => {
     const { w, app, ts, click } = await setup()
     const carol = await w.addUser("carol")
-    // A public channel Carol isn't in: she may read it, but not click.
+    // A public channel Carol isn't in: she may read it, so she may click, as on Slack.
     const { channel: dev } = await ok<{ channel: { id: string } }>(
       "conversations.create",
       { name: "dev" },
@@ -259,7 +259,8 @@ describe("campflare.blocks.action over HTTP", () => {
       app.botToken,
       { json: true },
     )
-    expect((await click({ channel: dev.id, ts: there.ts }, carol.token)).error).toBe("not_in_channel")
+    expect(await click({ channel: dev.id, ts: there.ts }, carol.token)).toEqual({ ok: true, delivered: "http" })
+    expect((await urls.next(isAction)).body).toMatchObject({ user: { id: carol.id }, channel: { id: dev.id } })
     // A private channel is invisible to non-members.
     const { channel } = await ok<{ channel: { id: string } }>(
       "conversations.create",

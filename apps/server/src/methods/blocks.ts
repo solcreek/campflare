@@ -1,4 +1,4 @@
-import { getConversation, requireMember, requireNotArchived } from "../db/conversations"
+import { getConversation, requireNotArchived, requireReadable } from "../db/conversations"
 import { reactionsStatement } from "../db/messages"
 import { stmt } from "../db/query"
 import type { AppRow, MessageRow, ReactionRow } from "../db/rows"
@@ -20,7 +20,8 @@ import { postSigned } from "../request-url"
  */
 method("campflare.blocks.action", "user", async (ctx) => {
   const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
-  await requireMember(ctx, c)
+  // As on Slack, anyone who can read the conversation may click, not only its members.
+  await requireReadable(ctx, c)
   requireNotArchived(c)
   const ts = ctx.args.ts("ts")
   if (!ts) throw new CampflareError("message_not_found")
