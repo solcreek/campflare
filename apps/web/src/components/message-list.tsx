@@ -18,9 +18,19 @@ export interface MessageListProps {
   inThread?: boolean
   onOpenThread?: (ts: string) => void
   empty?: string
+  /** The ts of the message a link points at: highlighted, and scrolled to once it's in the list. */
+  highlight?: string
 }
 
-export function MessageList({ messages, hasMore, onLoadOlder, inThread, onOpenThread, empty }: MessageListProps) {
+export function MessageList({
+  messages,
+  hasMore,
+  onLoadOlder,
+  inThread,
+  onOpenThread,
+  empty,
+  highlight,
+}: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   const newest = messages.at(-1)?.ts
@@ -33,6 +43,14 @@ export function MessageList({ messages, hasMore, onLoadOlder, inThread, onOpenTh
     followed.current = newest
     if (pinned.current) el.scrollTop = el.scrollHeight
   }, [newest])
+
+  // A linked message, once loaded: into view (after the follow above), and the reader is no longer at the bottom.
+  const shown = Boolean(highlight && messages.some((m) => m.ts === highlight))
+  useLayoutEffect(() => {
+    if (!highlight || !shown) return
+    scroller.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "center" })
+    pinned.current = false
+  }, [highlight, shown])
 
   return (
     <div
@@ -60,6 +78,7 @@ export function MessageList({ messages, hasMore, onLoadOlder, inThread, onOpenTh
           grouped={isGrouped(messages[i - 1], m)}
           inThread={inThread}
           onOpenThread={onOpenThread}
+          highlighted={m.ts === highlight}
         />
       ))}
     </div>

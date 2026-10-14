@@ -15,6 +15,9 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
     return (mine.find((c) => c.is_general) ?? mine[0])?.id
   })
   const [route, navigate] = useRoute()
+  const known = useWorkspaceState((s) => Boolean(route.channel && s.conversations[route.channel]))
+  // A link to a reply (#/C/<thread>?msg=<reply>) highlights it in the thread, and the thread's head in the conversation.
+  const linked = route.message && route.thread ? route.thread : route.message
 
   useEffect(() => {
     void workspace.start()
@@ -53,16 +56,21 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
           key={route.channel}
           channel={route.channel}
           onOpenThread={(thread) => navigate({ channel: route.channel, thread })}
+          highlight={linked}
+          onClearHighlight={() => navigate({ channel: route.channel, thread: route.thread })}
+          onLeave={() => navigate({})}
         />
       ) : (
         <p className="flex-1 p-6 text-muted-foreground">Pick a conversation.</p>
       )}
-      {route.channel && route.thread && (
+      {route.channel && route.thread && known && (
         <ThreadPanel
           key={`${route.channel}/${route.thread}`}
           channel={route.channel}
           threadTs={route.thread}
           onClose={() => navigate({ channel: route.channel })}
+          highlight={route.message}
+          onClearHighlight={() => navigate({ channel: route.channel, thread: route.thread })}
         />
       )}
     </div>

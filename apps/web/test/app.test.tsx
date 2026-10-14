@@ -254,7 +254,7 @@ describe("App", () => {
     expect(within(log()).getByText("No messages yet.")).toBeTruthy()
     window.location.hash = "#/CNOPE"
     window.dispatchEvent(new HashChangeEvent("hashchange"))
-    expect(await screen.findByText("Conversation not found.")).toBeTruthy()
+    expect(await screen.findByRole("heading", { name: "Conversation not found", level: 1 })).toBeTruthy()
   })
 
   it("signs out from the team menu", async () => {
