@@ -111,8 +111,6 @@ describe("chat.startStream, appendStream and stopStream", () => {
         chunks: [
           { type: "markdown_text", text: "One" },
           { type: "markdown_text", text: ", two" },
-          { type: "task_update", id: "t1", title: "Look it up", status: "in_progress" },
-          { type: "plan_update", title: "Plan" },
           { type: "blocks", blocks: [divider] },
           { type: "markdown_text", text: "Three" },
         ],
@@ -122,16 +120,6 @@ describe("chat.startStream, appendStream and stopStream", () => {
     await ok(
       "chat.appendStream",
       { channel: w.general, ts: started.ts, chunks: [{ type: "markdown_text", text: " and four" }] },
-      app.botToken,
-    )
-    // Task and plan updates alone change nothing shown: no event for them.
-    await ok(
-      "chat.appendStream",
-      {
-        channel: w.general,
-        ts: started.ts,
-        chunks: [{ type: "task_update", id: "t1", title: "Done", status: "complete" }],
-      },
       app.botToken,
     )
     const stopped = await ok<Stopped>(
@@ -159,6 +147,154 @@ describe("chat.startStream, appendStream and stopStream", () => {
     await settle()
     expect(link.frames.filter(isMessage("message_changed"))).toEqual([])
     link.close()
+  })
+
+  it("shows task updates as task_card blocks among the text, updated in place by id", async () => {
+    const { w, app, question, link, recipient } = await setup()
+    const source = { type: "url", url: "https://example.com/zh", text: "中文資料" }
+    const started = await ok<Started>(
+      "chat.startStream",
+      {
+        channel: w.general,
+        thread_ts: question.ts,
+        ...recipient,
+        chunks: [
+          { type: "markdown_text", text: "Voy a buscar." },
+          { type: "task_update", id: "t1", title: "Recherche", status: "in_progress", details: "Requête: été" },
+        ],
+      },
+      app.botToken,
+    )
+    const task = { type: "task_card", task_id: "t1", title: "Recherche", block_id: expect.any(String) }
+    const begun = await link.next(isMessage())
+    expect(begun).toMatchObject({
+      text: "Voy a buscar.",
+      blocks: [
+        { type: "markdown", text: "Voy a buscar." },
+        { ...task, status: "in_progress", details: { type: "rich_text" } },
+      ],
+    })
+    const append = (chunks: unknown[]) =>
+      ok("chat.appendStream", { channel: w.general, ts: started.ts, chunks }, app.botToken)
+    await append([
+      { type: "task_update", id: "t2", title: "検索", status: "pending" },
+      { type: "markdown_text", text: " Fertig." },
+      {
+        type: "task_update",
+        id: "t1",
+        title: "Recherche",
+        status: "complete",
+        output: "3 résultats",
+        sources: [source],
+      },
+    ])
+    const changed = await link.next(isMessage("message_changed"))
+    const blocks = (changed.message as Frame).blocks as Frame[]
+    expect(blocks).toMatchObject([
+      { type: "markdown", text: "Voy a buscar." },
+      {
+        ...task,
+        status: "complete",
+        details: { elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "Requête: été" }] }] },
+        output: { elements: [{ elements: [{ text: "3 résultats" }] }] },
+        sources: [source],
+      },
+      { type: "task_card", task_id: "t2", title: "検索", status: "pending" },
+      { type: "markdown", text: " Fertig." },
+    ])
+    // The task keeps the block_id it was given.
+    expect(blocks[1]!.block_id).toBe((begun.blocks as Frame[])[1]!.block_id)
+    // A plan update alone titles a plan block, and is an event like any change.
+    await append([{ type: "plan_update", title: "계획" }])
+    expect(((await link.next(isMessage("message_changed"))).message as Frame).blocks).toMatchObject([
+      ...blocks.map(() => ({})),
+      { type: "plan", title: "계획", tasks: [] },
+    ])
+    // Stopping with chunks rewrites too, and closing blocks still go last.
+    const stopped = await ok<Stopped>(
+      "chat.stopStream",
+      {
+        channel: w.general,
+        ts: started.ts,
+        chunks: [{ type: "task_update", id: "t2", title: "検索", status: "error" }],
+        blocks: [{ type: "divider" }],
+      },
+      app.botToken,
+    )
+    expect(stopped.message).toMatchObject({ streaming_state: "completed" })
+    expect((stopped.message.blocks as Frame[]).map((b) => b.status ?? b.type)).toEqual([
+      "markdown",
+      "complete",
+      "error",
+      "markdown",
+      "plan",
+      "divider",
+    ])
+    link.close()
+  })
+
+  it("gathers tasks in one plan block with task_display_mode plan", async () => {
+    const { w, app, question, recipient } = await setup()
+    const started = await ok<Started>(
+      "chat.startStream",
+      { channel: w.general, thread_ts: question.ts, task_display_mode: "plan", ...recipient },
+      app.botToken,
+    )
+    const append = (chunks: unknown[]) =>
+      ok("chat.appendStream", { channel: w.general, ts: started.ts, chunks }, app.botToken)
+    // Tasks before any title start an untitled plan.
+    await append([{ type: "task_update", id: "a", title: "Lire", status: "in_progress" }])
+    await append([
+      { type: "plan_update", title: "Plan de travail" },
+      { type: "task_update", id: "b", title: "書く", status: "pending" },
+      { type: "markdown_text", text: "Working on it." },
+      { type: "task_update", id: "a", title: "Lire", status: "complete" },
+    ])
+    const [, answer] = await reply(w, question.ts)
+    expect(answer).toMatchObject({
+      text: "Working on it.",
+      blocks: [
+        {
+          type: "plan",
+          title: "Plan de travail",
+          tasks: [
+            { type: "task_card", task_id: "a", status: "complete" },
+            { type: "task_card", task_id: "b", status: "pending" },
+          ],
+        },
+        { type: "markdown", text: "Working on it." },
+      ],
+    })
+    // Task updates at once each land: one that read the row before another wrote reads it again.
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        append([{ type: "task_update", id: `p${i}`, title: `${i}`, status: "pending" }]),
+      ),
+    )
+    const [, after] = await reply(w, question.ts)
+    const plan = (after!.blocks as Frame[])[0]!
+    expect((plan.tasks as Frame[]).map((t) => t.task_id).toSorted()).toEqual([
+      "a",
+      "b",
+      "p0",
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+    ])
+    // Chunks after markdown_text don't mix, task updates included.
+    const other = await ok<Started>(
+      "chat.startStream",
+      { channel: w.general, thread_ts: question.ts, markdown_text: "x", ...recipient },
+      app.botToken,
+    )
+    await expectError(
+      "chat.appendStream",
+      { channel: w.general, ts: other.ts, chunks: [{ type: "task_update", id: "a", title: "x", status: "pending" }] },
+      app.botToken,
+      "streaming_mode_mismatch",
+    )
   })
 
   it("streams into a DM without a recipient, and as the bot's own username", async () => {
@@ -233,6 +369,11 @@ describe("chat.startStream, appendStream and stopStream", () => {
       [{ type: "blocks", blocks: [1] }],
       [{ type: "task_update", id: "t", title: "x", status: "sleeping" }],
       [{ type: "plan_update" }],
+      [{ type: "task_update", id: "", title: "x", status: "pending" }],
+      [{ type: "task_update", id: "t", title: "x", status: "pending", details: 1 }],
+      [{ type: "task_update", id: "t", title: "x", status: "pending", output: {} }],
+      [{ type: "task_update", id: "t", title: "x", status: "pending", sources: [{ type: "url", url: "x" }] }],
+      [{ type: "task_update", id: "t", title: "x", status: "pending", sources: {} }],
     ]) {
       await expectError("chat.startStream", start({ chunks }), app.botToken, "invalid_chunks")
     }
