@@ -293,6 +293,18 @@ describe("workspace", () => {
       cli.clear()
       expect(await cli.run("admin", "app", other.app.id, "--request-url", url, "--events", "app_mention")).toBe(0)
       expect(cli.out).toContain(`Request URL: ${url}\nEvents: app_mention\n`)
+      expect(cli.out).not.toContain("Last delivery")
+      // Every event again, one delivered: how it went shows.
+      expect(await cli.run("admin", "app", other.app.id, "--events", "")).toBe(0)
+      expect(await cli.run("send", "#general", "for the app")).toBe(0)
+      for (let tries = 0; !/Last 60 min: 1 attempts/.test(cli.out) && tries < 100; tries++) {
+        await new Promise((r) => setTimeout(r, 50))
+        cli.clear()
+        expect(await cli.run("admin", "app", other.app.id)).toBe(0)
+      }
+      expect(cli.out).toMatch(
+        /Last delivery: \d{4}-\d\d-\d\d \d\d:\d\d, ok \(HTTP 200\)\nLast 60 min: 1 attempts, 0 failed, 0 waiting to retry\n/,
+      )
       cli.clear()
       expect(await cli.run("admin", "app", other.app.id, "--request-url", "", "--json")).toBe(0)
       expect(JSON.parse(cli.out)).toMatchObject({ app: { event_subscriptions: { request_url: null } } })

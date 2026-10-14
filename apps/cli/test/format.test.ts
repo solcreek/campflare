@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { messageLine, plain } from "../src/format"
+import { deliveryLines, messageLine, plain, time } from "../src/format"
 import { matchUsers } from "../src/resolve"
 
 describe("plain", () => {
@@ -35,5 +35,36 @@ describe("matchUsers", () => {
     expect(matchUsers(users, "sammy").map((u) => u.id)).toEqual(["U2"])
     expect(matchUsers(users, "jon").map((u) => u.id)).toEqual(["U2"])
     expect(matchUsers(users, "gone")).toEqual([])
+  })
+})
+
+describe("deliveryLines", () => {
+  const window = { window_minutes: 60, attempts: 0, failures: 0, pending: 0 }
+  const at = 1_760_000_000
+
+  it("says nothing before the first delivery", () => {
+    expect(deliveryLines({})).toEqual([])
+    expect(deliveryLines({ disabled: null, delivery: { last_attempt: null, ...window } })).toEqual([])
+  })
+
+  it("shows the last attempt and the hour's counts", () => {
+    const timedOut = { at, ok: false, status: 0, reason: "http_timeout" }
+    expect(
+      deliveryLines({ delivery: { last_attempt: timedOut, ...window, attempts: 4, failures: 3, pending: 1 } }),
+    ).toEqual([
+      `Last delivery: ${time(String(at))}, no answer (http_timeout)`,
+      "Last 60 min: 4 attempts, 3 failed, 1 waiting to retry",
+    ])
+    const refused = { at, ok: false, status: 502, reason: "http_error" }
+    expect(deliveryLines({ delivery: { last_attempt: refused, ...window } })[0]).toBe(
+      `Last delivery: ${time(String(at))}, HTTP 502`,
+    )
+  })
+
+  it("says when delivery was turned off, why, and how to turn it back on", () => {
+    expect(deliveryLines({ disabled: { at, reason: "100% of 20 attempts failed" } })).toEqual([
+      `Event delivery: OFF since ${time(String(at))}: 100% of 20 attempts failed`,
+      "  Set the Request URL again (--request-url) to turn it back on.",
+    ])
   })
 })
