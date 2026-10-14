@@ -1,4 +1,7 @@
+import { runInDurableObject } from "cloudflare:test"
+import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
+import type { TeamHub } from "../src/hub"
 import { call, connect, expectError, ok, settle, workspace } from "./helpers"
 
 type Poll = { events: { event: Record<string, unknown> }[]; cursor: string }
@@ -122,5 +125,64 @@ describe("assistant.threads.setStatus", () => {
       app.botToken,
       "invalid_thread_ts",
     )
+  })
+
+  it("gives a link that opens later the statuses still showing, and not cleared or expired ones", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Thinker")
+    const bob = await w.addUser("bob")
+    const post = async (channel: string, text: string) =>
+      (await ok<{ ts: string }>("chat.postMessage", { channel, text }, w.owner.token)).ts
+    const { channel } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "private", is_private: true },
+      w.owner.token,
+    )
+    await ok("conversations.invite", { channel: channel.id, users: app.botUserId }, w.owner.token)
+    const showing = await post(w.general, "showing")
+    const replaced = await post(w.general, "replaced")
+    const cleared = await post(w.general, "cleared")
+    const answered = await post(w.general, "answered")
+    const secret = await post(channel.id, "secret")
+    const old = await post(w.general, "old")
+    const set = (thread: string, status: string, ch = w.general) =>
+      ok("assistant.threads.setStatus", { channel_id: ch, thread_ts: thread, status }, app.botToken)
+    await set(showing, "is thinking")
+    await set(replaced, "is reading")
+    await set(replaced, "is writing")
+    await set(cleared, "is looking")
+    await set(cleared, "")
+    await set(answered, "is answering")
+    await set(secret, "is whispering", channel.id)
+    await set(old, "was thinking")
+    // The app's reply ends its status; someone else's doesn't.
+    await ok("chat.postMessage", { channel: w.general, thread_ts: answered, text: "Here." }, app.botToken)
+    await ok("chat.postMessage", { channel: w.general, thread_ts: showing, text: "Still?" }, w.owner.token)
+    await settle(150)
+    // One that has run out of time is forgotten.
+    const stub = env.HUB.get(env.HUB.idFromName(w.teamId))
+    await runInDurableObject(stub, async (_hub: TeamHub, state) => {
+      state.storage.sql.exec("UPDATE thread_statuses SET expires = 0 WHERE thread_ts = ?", old)
+    })
+
+    const statuses = async (token: string) => {
+      const link = await connect((await ok<{ url: string }>("rtm.connect", {}, token)).url)
+      await link.next((f) => f.type === "hello")
+      await settle()
+      link.close()
+      return link.frames.filter((f) => f.type === "assistant_thread_status_changed")
+    }
+    const owners = await statuses(w.owner.token)
+    expect(owners.map((f) => `${String(f.thread_ts)} ${String(f.status)}`).toSorted()).toEqual(
+      [`${showing} is thinking`, `${replaced} is writing`, `${secret} is whispering`].toSorted(),
+    )
+    expect(owners.find((f) => f.thread_ts === showing)).toMatchObject({
+      channel: w.general,
+      user: app.botUserId,
+      expires_in: 120,
+    })
+    // Only to the people in the conversation, and again on every new link.
+    expect((await statuses(bob.token)).map((f) => f.status).toSorted()).toEqual(["is thinking", "is writing"])
+    expect(await statuses(w.owner.token)).toHaveLength(3)
   })
 })
