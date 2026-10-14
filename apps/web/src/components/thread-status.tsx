@@ -19,12 +19,14 @@ export function ThreadStatusLine({ channel, threadTs }: { channel: string; threa
   const [now, setNow] = useState(nowSeconds)
   const [turn, setTurn] = useState(0)
 
-  // Look again when it runs out.
+  // Look again when it runs out. Timers may fire a moment early, so `now` is a
+  // dependency: until the status has run out, each look arms the next.
   useEffect(() => {
-    if (!raw) return
-    const timer = setTimeout(() => setNow(nowSeconds()), Math.max(0, raw.expires - nowSeconds()) * 1000)
+    if (!raw || now >= raw.expires) return
+    const left = Math.max(0, raw.expires - nowSeconds())
+    const timer = setTimeout(() => setNow(nowSeconds()), left * 1000 + 1)
     return () => clearTimeout(timer)
-  }, [raw])
+  }, [raw, now])
 
   const loading = raw?.loadingMessages
   useEffect(() => {
