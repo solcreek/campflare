@@ -71,48 +71,182 @@ export function triggerId(): string {
 
 type Json = Record<string, unknown>
 
-/** Element types a click can be on, and what the clicker must say for each. */
-const CLICKABLE = new Set(["button", "feedback_buttons"])
+const isJson = (v: unknown): v is Json => Boolean(v) && typeof v === "object" && !Array.isArray(v)
+
+/** Select menus whose choice is one of the element's own options. */
+const OPTION_SELECTS = new Set(["static_select", "overflow"])
+/** Select menus whose choice is someone or somewhere in the workspace, and the field Slack names it by. */
+export const ID_SELECTS: Record<string, "selected_user" | "selected_conversation" | "selected_channel"> = {
+  users_select: "selected_user",
+  conversations_select: "selected_conversation",
+  channels_select: "selected_channel",
+}
+
+/** Element types a click can be on. */
+const CLICKABLE = new Set(["button", "feedback_buttons", "icon_button", ...OPTION_SELECTS, ...Object.keys(ID_SELECTS)])
+
+/** The interactive elements of a block: an actions block's elements, a section's accessory. */
+export function elementsOf(block: Json): Json[] {
+  if ((block.type === "actions" || block.type === "context_actions") && Array.isArray(block.elements)) {
+    return block.elements.filter(isJson)
+  }
+  if (block.type === "section" && isJson(block.accessory)) return [block.accessory]
+  return []
+}
+
+/** An element's options, those in option groups included. */
+export function optionsOf(element: Json): Json[] {
+  const flat = Array.isArray(element.options) ? element.options.filter(isJson) : []
+  const grouped = Array.isArray(element.option_groups)
+    ? element.option_groups.filter(isJson).flatMap((g) => (Array.isArray(g.options) ? g.options.filter(isJson) : []))
+    : []
+  return [...flat, ...grouped]
+}
+
+/** An option as Slack hands it back: its text and value, and its description when it has one. */
+export const optionOut = (o: Json): Json => ({
+  text: o.text,
+  value: o.value,
+  ...(o.description !== undefined ? { description: o.description } : {}),
+})
+
+/** What a click on an element is: the action, and the state it leaves, as block_actions carry them. */
+export interface Clicked {
+  action: Json
+  /** state.values for the element, when it holds a choice (a select): `{ [block_id]: { [action_id]: … } }`. */
+  state: Record<string, Record<string, Json>>
+}
 
 /**
  * The action a click makes, as Slack puts it in block_actions.actions[]: the
  * element found by its action_id (in the block given, or the first that has
- * it), described from the stored message, not from the clicker. A
- * feedback_buttons click names its button by `value`.
+ * it), described from the stored blocks, not from the clicker. A
+ * feedback_buttons click names its button by `value`; a static_select or an
+ * overflow its option by value; a users, conversations or channels select
+ * the id chosen (checked by the caller: `ID_SELECTS`).
  */
 export function actionOf(
   blocks: unknown,
   click: { blockId?: string; actionId: string; value?: string },
   actionTs: string,
-): Json {
+): Clicked {
   if (!Array.isArray(blocks)) throw new CampflareError("action_not_found")
   for (const block of blocks as Json[]) {
-    if (!block || typeof block !== "object") continue
+    if (!isJson(block)) continue
     if (click.blockId !== undefined && block.block_id !== click.blockId) continue
-    if (block.type !== "actions" && block.type !== "context_actions") continue
-    if (!Array.isArray(block.elements)) continue
-    const element = (block.elements as Json[]).find((e) => e && e.action_id === click.actionId)
+    const element = elementsOf(block).find((e) => e.action_id === click.actionId)
     if (!element) continue
-    if (!CLICKABLE.has(element.type as string)) throw new CampflareError("action_not_supported")
-    const base = { type: element.type, block_id: block.block_id, action_id: element.action_id }
-    if (element.type === "feedback_buttons") {
+    const type = element.type as string
+    if (!CLICKABLE.has(type)) throw new CampflareError("action_not_supported")
+    const base = { type, block_id: block.block_id, action_id: element.action_id }
+    const blockId = block.block_id as string
+    const actionId = element.action_id as string
+    const stateOf = (value: Json) => ({ [blockId]: { [actionId]: { type, ...value } } })
+    if (type === "feedback_buttons") {
       const button = [element.positive_button, element.negative_button].find(
-        (b) => b && typeof b === "object" && (b as Json).value === click.value,
+        (b) => isJson(b) && b.value === click.value,
       ) as Json | undefined
       if (!button || click.value === undefined) throw new CampflareError("invalid_value")
-      return { ...base, text: button.text, value: button.value, action_ts: actionTs }
+      return { action: { ...base, text: button.text, value: button.value, action_ts: actionTs }, state: {} }
+    }
+    if (OPTION_SELECTS.has(type)) {
+      const option = optionsOf(element).find((o) => o.value === click.value)
+      if (!option || click.value === undefined) throw new CampflareError("invalid_value")
+      const selected = { selected_option: optionOut(option) }
+      return {
+        action: {
+          ...base,
+          ...selected,
+          ...(element.placeholder !== undefined ? { placeholder: element.placeholder } : {}),
+          action_ts: actionTs,
+        },
+        state: type === "overflow" ? {} : stateOf(selected),
+      }
+    }
+    const field = ID_SELECTS[type]
+    if (field) {
+      if (!click.value) throw new CampflareError("invalid_value")
+      const initial = field.replace("selected_", "initial_")
+      return {
+        action: {
+          ...base,
+          [field]: click.value,
+          ...(element[initial] !== undefined ? { [initial]: element[initial] } : {}),
+          action_ts: actionTs,
+        },
+        state: stateOf({ [field]: click.value }),
+      }
     }
     if (click.value !== undefined && click.value !== (element.value ?? "")) throw new CampflareError("invalid_value")
     return {
-      ...base,
-      text: element.text,
-      ...(element.value !== undefined ? { value: element.value } : {}),
-      ...(element.style !== undefined ? { style: element.style } : {}),
-      ...(element.url !== undefined ? { url: element.url } : {}),
-      action_ts: actionTs,
+      action: {
+        ...base,
+        ...(type === "icon_button" ? { icon: element.icon } : {}),
+        text: element.text,
+        ...(element.value !== undefined ? { value: element.value } : {}),
+        ...(element.style !== undefined ? { style: element.style } : {}),
+        ...(element.url !== undefined ? { url: element.url } : {}),
+        action_ts: actionTs,
+      },
+      state: {},
     }
   }
   throw new CampflareError("action_not_found")
+}
+
+/** Someone or somewhere a person chose in a select menu: what their client let them pick from. */
+export interface Choice {
+  field: "selected_user" | "selected_conversation" | "selected_channel"
+  id: string
+}
+
+/**
+ * Checks, in one round trip, that each choice was on offer: a person in the
+ * workspace, a conversation the chooser can read, a public channel. Else
+ * `invalid_value`, naming the first that wasn't.
+ */
+export async function requireChoices(ctx: Ctx<Actor>, choices: Choice[]): Promise<void> {
+  if (choices.length === 0) return
+  const db = ctx.env.DB
+  const team = ctx.auth.team.id
+  const users = choices.filter((c) => c.field === "selected_user").map((c) => c.id)
+  const places = choices.filter((c) => c.field !== "selected_user").map((c) => c.id)
+  const [u, c] = await db.batch([
+    stmt(
+      db,
+      "SELECT id FROM users WHERE team_id = ? AND deleted = 0 AND id IN (SELECT value FROM json_each(?))",
+      team,
+      JSON.stringify(users),
+    ),
+    stmt(
+      db,
+      `SELECT c.id, c.kind, c.is_private,
+         EXISTS (SELECT 1 FROM members m WHERE m.conversation_id = c.id AND m.user_id = ?) AS member
+       FROM conversations c WHERE c.team_id = ? AND c.id IN (SELECT value FROM json_each(?))`,
+      ctx.auth.user.id,
+      team,
+      JSON.stringify(places),
+    ),
+  ])
+  const people = new Set((u!.results as { id: string }[]).map((r) => r.id))
+  const found = new Map(
+    (c!.results as (Pick<ConversationRow, "id" | "kind" | "is_private"> & { member: number })[]).map((r) => [r.id, r]),
+  )
+  for (const choice of choices) {
+    const place = found.get(choice.id)
+    const publicChannel = place?.kind === "channel" && !place.is_private
+    const ok =
+      choice.field === "selected_user"
+        ? people.has(choice.id)
+        : choice.field === "selected_channel"
+          ? publicChannel
+          : Boolean(place && (place.member || publicChannel))
+    if (!ok) {
+      throw new CampflareError("invalid_value", {
+        response_metadata: { messages: [`[ERROR] ${choice.field}: no ${choice.id} to choose`] },
+      })
+    }
+  }
 }
 
 /** How Slack names a conversation in an interaction payload: DMs are "directmessage". */

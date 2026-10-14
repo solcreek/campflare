@@ -310,6 +310,168 @@ describe("campflare.blocks.action over HTTP", () => {
   })
 })
 
+describe("select menus, overflow menus and icon buttons", () => {
+  const option = (text: string, value: string) => ({ text: { type: "plain_text", text }, value })
+  const MENUS = [
+    {
+      type: "section",
+      block_id: "pick",
+      text: { type: "mrkdwn", text: "Which environment?" },
+      accessory: {
+        type: "static_select",
+        action_id: "env",
+        placeholder: { type: "plain_text", text: "Choose" },
+        option_groups: [
+          { label: { type: "plain_text", text: "Live" }, options: [option("Production", "prod")] },
+          { label: { type: "plain_text", text: "Test" }, options: [option("Staging", "staging")] },
+        ],
+      },
+    },
+    {
+      type: "actions",
+      block_id: "more",
+      elements: [
+        { type: "users_select", action_id: "who", placeholder: { type: "plain_text", text: "Assign" } },
+        { type: "conversations_select", action_id: "where" },
+        { type: "channels_select", action_id: "channel", initial_channel: "C0" },
+        { type: "overflow", action_id: "menu", options: [option("Mute", "mute"), option("Señal", "senal")] },
+        {
+          type: "icon_button",
+          action_id: "trash",
+          icon: "trash",
+          text: { type: "plain_text", text: "Delete" },
+          value: "del-1",
+        },
+        { type: "datepicker", action_id: "when" },
+      ],
+    },
+  ]
+
+  async function menus() {
+    const s = await setup()
+    const posted = await ok<{ ts: string }>(
+      "chat.postMessage",
+      { channel: s.w.general, text: "Which environment?", blocks: MENUS },
+      s.app.botToken,
+      { json: true },
+    )
+    const choose = (args: Record<string, unknown>, token = s.bob.token) =>
+      call("campflare.blocks.action", { channel: s.w.general, ts: posted.ts, ...args }, token)
+    return { ...s, ts: posted.ts, choose }
+  }
+
+  it("delivers a static_select choice as selected_option, in the action and in state.values", async () => {
+    const { choose } = await menus()
+    expect((await choose({ action_id: "env", value: "staging" })).ok).toBe(true)
+    const body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "static_select",
+        block_id: "pick",
+        action_id: "env",
+        selected_option: option("Staging", "staging"),
+        placeholder: { type: "plain_text", text: "Choose" },
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({
+      values: { pick: { env: { type: "static_select", selected_option: option("Staging", "staging") } } },
+    })
+    expect((await choose({ action_id: "env", value: "qa" })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "env" })).error).toBe("invalid_value")
+  })
+
+  it("delivers people and conversations chosen, if they were there to choose", async () => {
+    const { w, bob, choose } = await menus()
+    expect((await choose({ action_id: "who", value: w.owner.id })).ok).toBe(true)
+    let body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "users_select",
+        block_id: "more",
+        action_id: "who",
+        selected_user: w.owner.id,
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({ values: { more: { who: { type: "users_select", selected_user: w.owner.id } } } })
+
+    expect((await choose({ action_id: "where", value: w.general })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toMatchObject([{ type: "conversations_select", selected_conversation: w.general }])
+
+    expect((await choose({ action_id: "channel", value: w.general })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toMatchObject([
+      { type: "channels_select", selected_channel: w.general, initial_channel: "C0" },
+    ])
+
+    // Nobody, a private channel Bob isn't in, a DM as a channel: not on offer.
+    const { channel: secret } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "secret", is_private: true },
+      w.owner.token,
+    )
+    const { channel: dm } = await ok<{ channel: { id: string } }>(
+      "conversations.open",
+      { users: w.owner.id },
+      bob.token,
+    )
+    expect((await choose({ action_id: "who", value: "UNOBODY" })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "where", value: secret.id })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "channel", value: dm.id })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "where", value: dm.id })).ok).toBe(true)
+    expect((await choose({ action_id: "who" })).error).toBe("invalid_value")
+  })
+
+  it("delivers an overflow choice and an icon button click; other elements aren't clickable yet", async () => {
+    const { choose } = await menus()
+    expect((await choose({ action_id: "menu", value: "senal" })).ok).toBe(true)
+    let body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "overflow",
+        block_id: "more",
+        action_id: "menu",
+        selected_option: option("Señal", "senal"),
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({ values: {} })
+    expect((await choose({ action_id: "trash" })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "icon_button",
+        block_id: "more",
+        action_id: "trash",
+        icon: "trash",
+        text: { type: "plain_text", text: "Delete" },
+        value: "del-1",
+        action_ts: expect.any(String),
+      },
+    ])
+    expect((await choose({ action_id: "when" })).error).toBe("action_not_supported")
+  })
+
+  it("gives a section's accessory an action_id when it has none", async () => {
+    const { w, app } = await setup()
+    const posted = await ok<{ message: { blocks: { accessory?: { action_id: string } }[] } }>(
+      "chat.postMessage",
+      {
+        channel: w.general,
+        text: "x",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "x" }, accessory: { type: "overflow", options: [] } },
+        ],
+      },
+      app.botToken,
+      { json: true },
+    )
+    expect(posted.message.blocks[0]!.accessory!.action_id).toMatch(/^[A-Za-z0-9]{5}$/)
+  })
+})
+
 describe("a streamed reply's feedback buttons", () => {
   it("get ids when the stream stops, and a click on one reaches the app", async () => {
     const { w, app, bob } = await setup()

@@ -5,14 +5,16 @@ import type { AppRow, MessageRow, ReactionRow } from "../db/rows"
 import { method } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { loadExtras, messageJson } from "../api/shapes"
-import { actionOf, channelName, issueResponseUrl, triggerId } from "../interactivity"
+import { actionOf, channelName, ID_SELECTS, issueResponseUrl, requireChoices, triggerId } from "../interactivity"
 import { postSigned } from "../request-url"
 
 /**
- * A person clicks a button in an app's message (Campflare's own method; a
- * Slack client uses an internal one). `channel`, `ts` (the message),
- * `action_id`, and `block_id` when several blocks share the action_id; a
- * feedback_buttons click names its button by `value`. The app whose bot posted
+ * A person clicks a button, or chooses in a select menu, in an app's message
+ * (Campflare's own method; a Slack client uses an internal one). `channel`,
+ * `ts` (the message), `action_id`, and `block_id` when several blocks share
+ * the action_id. `value` names a feedback button, a static_select's or an
+ * overflow's option, or the person or conversation chosen in a users,
+ * conversations or channels select. The app whose bot posted
  * the message gets block_actions, as Slack sends it: over Socket Mode when it
  * has a link (an `interactive` envelope it must ack), else POSTed to its
  * Interactivity Request URL. Clicks aren't retried: an app that doesn't take
@@ -43,11 +45,13 @@ method("campflare.blocks.action", "user", async (ctx) => {
   // Only an app's messages answer clicks: a person's blocks have nobody to go to.
   if (!app) throw new CampflareError("not_interactive")
   const now = `${(Date.now() / 1000).toFixed(6)}`
-  const action = actionOf(
+  const { action, state } = actionOf(
     message.blocks ? JSON.parse(message.blocks) : undefined,
     { blockId: ctx.args.str("block_id"), actionId: ctx.args.req("action_id"), value: ctx.args.str("value") },
     now,
   )
+  const field = ID_SELECTS[action.type as string]
+  if (field) await requireChoices(ctx, [{ field, id: action[field] as string }])
   const user = ctx.auth.user
   const reply = message.thread_ts && message.thread_ts !== message.ts ? message.thread_ts : undefined
   const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
@@ -69,7 +73,7 @@ method("campflare.blocks.action", "user", async (ctx) => {
     is_enterprise_install: false,
     channel: { id: c.id, name: channelName(c) },
     message: messageJson(message, extras, ctx.origin),
-    state: { values: {} },
+    state: { values: state },
     response_url: await issueResponseUrl(ctx.env.SIGNING_KEY, ctx.origin, {
       teamId: c.team_id,
       channelId: c.id,

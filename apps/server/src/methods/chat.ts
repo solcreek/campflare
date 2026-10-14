@@ -26,8 +26,9 @@ export function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id"
 
 /**
  * Block Kit blocks as stored: as given, with a block_id on every block and an
- * action_id on every element of an actions or context_actions block that
- * lacks one, as Slack fills them in, so a click can always say which it was.
+ * action_id on every interactive element that lacks one (an actions or
+ * context_actions block's elements, a section's accessory, an input's
+ * element), as Slack fills them in, so a click can always say which it was.
  */
 export function withBlockIds(blocks: unknown[]): unknown[] {
   return blocks.map((block) => {
@@ -35,14 +36,18 @@ export function withBlockIds(blocks: unknown[]): unknown[] {
     const b = { ...(block as Record<string, unknown>) }
     if (typeof b.block_id !== "string" || !b.block_id) b.block_id = shortId()
     if ((b.type === "actions" || b.type === "context_actions") && Array.isArray(b.elements)) {
-      b.elements = b.elements.map((element: unknown) => {
-        if (!element || typeof element !== "object" || Array.isArray(element)) return element
-        const e = element as Record<string, unknown>
-        return typeof e.action_id === "string" && e.action_id ? e : { ...e, action_id: shortId() }
-      })
+      b.elements = b.elements.map(withActionId)
     }
+    if (b.type === "section" && b.accessory) b.accessory = withActionId(b.accessory)
+    if (b.type === "input" && b.element) b.element = withActionId(b.element)
     return b
   })
+}
+
+function withActionId(element: unknown) {
+  if (!element || typeof element !== "object" || Array.isArray(element)) return element
+  const e = element as Record<string, unknown>
+  return typeof e.action_id === "string" && e.action_id ? e : { ...e, action_id: shortId() }
 }
 
 const ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
