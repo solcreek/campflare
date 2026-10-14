@@ -3,10 +3,12 @@ import type { AppRow, TokenRow, UserRow } from "../db/rows"
 import { APP_SCOPES, DEFAULT_BOT_SCOPES, DEFAULT_USER_SCOPES, issueToken } from "../api/auth"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
-import { ids, nowSeconds } from "../api/ids"
+import { ids, nowSeconds, randomSecret } from "../api/ids"
 import { teamJson, userJson } from "../api/shapes"
 import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
+import { EVENT_TYPE } from "../app-events"
+import { requestUrlProblem, verifyRequestUrl } from "../request-url"
 
 // campflare.* — what Slack does in its admin UI and OAuth flow, as API
 // methods: creating a workspace, people, tokens and apps. Not part of the
@@ -239,7 +241,8 @@ method("campflare.apps.create", "user", async (ctx) => {
   const botUser = await createUser(ctx.env, ctx.auth.team.id, { name: handle || "bot", realName: name, bot: botId })
   await run(
     ctx.env.DB,
-    "INSERT INTO apps (id, team_id, name, bot_id, bot_user_id, installer_user_id, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    `INSERT INTO apps (id, team_id, name, bot_id, bot_user_id, installer_user_id, created, signing_secret)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     appId,
     ctx.auth.team.id,
     name,
@@ -247,6 +250,7 @@ method("campflare.apps.create", "user", async (ctx) => {
     botUser.id,
     ctx.auth.user.id,
     nowSeconds(),
+    randomSecret(16),
   )
   const [botToken, appToken] = await Promise.all([
     issueToken(ctx.env, {
@@ -263,5 +267,95 @@ method("campflare.apps.create", "user", async (ctx) => {
     app: { id: app.id, name: app.name, bot_id: app.bot_id, bot_user_id: app.bot_user_id },
     bot_token: botToken,
     app_token: appToken,
+    signing_secret: app.signing_secret,
   }
 })
+
+/** An app's settings as its installer sees them, signing secret included. */
+function appSettings(app: AppRow) {
+  return {
+    id: app.id,
+    name: app.name,
+    bot_id: app.bot_id,
+    bot_user_id: app.bot_user_id,
+    installer_user_id: app.installer_user_id,
+    signing_secret: app.signing_secret,
+    event_subscriptions: {
+      request_url: app.event_request_url,
+      events: app.event_types ? (JSON.parse(app.event_types) as string[]) : null,
+    },
+  }
+}
+
+/** An app of the caller's workspace that they installed, or any if they're an admin. */
+async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
+  const app = await first<AppRow>(
+    ctx.env.DB,
+    "SELECT * FROM apps WHERE id = ? AND team_id = ?",
+    ctx.args.req("app", "app_not_found"),
+    ctx.auth.team.id,
+  )
+  if (!app) throw new CampflareError("app_not_found")
+  if (app.installer_user_id !== ctx.auth.user.id && !ctx.auth.user.is_admin) throw new CampflareError("not_allowed")
+  return app
+}
+
+/** An app's settings: its signing secret, Request URL and subscribed events. */
+method("campflare.apps.info", "user", async (ctx) => ({ app: appSettings(await ownApp(ctx)) }))
+
+/**
+ * Sets where and which events an app receives over HTTP (Slack's Event
+ * Subscriptions). `request_url` is checked with Slack's url_verification
+ * challenge before it's saved; an empty one stops HTTP delivery. `events`
+ * (comma-separated or a JSON array: "app_mention", "message.channels"…)
+ * limits what the app receives, over Socket Mode too; empty means every event
+ * it can see. Either may be left out to keep it.
+ */
+method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
+  const app = await ownApp(ctx)
+  const url = ctx.args.given("request_url") ? (ctx.args.str("request_url")?.trim() ?? "") : undefined
+  const events = eventTypes(ctx)
+  if (url === undefined && events === undefined) throw invalidArguments("give request_url, events or both")
+  if (url) {
+    const problem = requestUrlProblem(url)
+    if (problem) throw invalidArguments(problem)
+    const check = await verifyRequestUrl(url, app.signing_secret)
+    if (!check.verified) {
+      throw new CampflareError("url_verification_failed", {
+        response_metadata: {
+          messages: [
+            check.status === 0
+              ? `[ERROR] no answer from the Request URL (${check.reason})`
+              : `[ERROR] the Request URL answered ${check.status} without echoing the challenge`,
+          ],
+        },
+      })
+    }
+  }
+  const updated = (await first<AppRow>(
+    ctx.env.DB,
+    `UPDATE apps SET event_request_url = CASE WHEN ?1 THEN ?2 ELSE event_request_url END,
+       event_types = CASE WHEN ?3 THEN ?4 ELSE event_types END
+     WHERE id = ?5 RETURNING *`,
+    url !== undefined ? 1 : 0,
+    url || null,
+    events !== undefined ? 1 : 0,
+    events?.length ? JSON.stringify(events) : null,
+    app.id,
+  ))!
+  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
+  await hub.subscriptionsChanged()
+  return { app: appSettings(updated) }
+})
+
+/** `events` as a list (comma-separated or a JSON array), or undefined when not given. */
+function eventTypes(ctx: Ctx<Actor>): string[] | undefined {
+  if (!ctx.args.given("events")) return undefined
+  const list: unknown = ctx.args.str("events")?.trim().startsWith("[")
+    ? ctx.args.json<unknown>("events")
+    : ctx.args.list("events")
+  if (!Array.isArray(list) || !list.every((t) => typeof t === "string" && EVENT_TYPE.test(t))) {
+    throw invalidArguments('events is a list of event types, like "app_mention,message.channels"')
+  }
+  return [...new Set(list as string[])]
+}

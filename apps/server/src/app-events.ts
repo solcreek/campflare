@@ -44,3 +44,25 @@ export function appMentionOf(message: Record<string, unknown>): Event {
   for (const key of MENTION_FIELDS) if (message[key] !== undefined) event[key] = message[key]
   return event
 }
+
+/** Slack's message subscriptions, by the conversation's channel_type. */
+const MESSAGE_SUBSCRIPTION: Record<string, string> = {
+  channel: "message.channels",
+  group: "message.groups",
+  im: "message.im",
+  mpim: "message.mpim",
+}
+
+/** An event type subscription: "app_mention", "reaction_added", "message", "message.channels"… */
+export const EVENT_TYPE = /^[a-z][a-z_]*(\.[a-z_]+)?$/
+
+/**
+ * Whether an app subscribed to an event: every event without a list, else by
+ * its type, and a message also by Slack's per-conversation-kind names.
+ */
+export function subscribed(types: string[] | undefined, event: Record<string, unknown>): boolean {
+  if (!types) return true
+  const type = event.type as string
+  if (types.includes(type)) return true
+  return type === "message" && types.includes(MESSAGE_SUBSCRIPTION[event.channel_type as string] ?? "")
+}

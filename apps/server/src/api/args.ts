@@ -28,6 +28,11 @@ export class Args {
     return new Args(values)
   }
 
+  /** Whether the argument was sent at all, empty included: an empty value can mean "clear it". */
+  given(name: string): boolean {
+    return this.values[name] !== undefined && this.values[name] !== null
+  }
+
   has(name: string): boolean {
     const v = this.values[name]
     return v !== undefined && v !== null && v !== ""

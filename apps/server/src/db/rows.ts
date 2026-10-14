@@ -39,6 +39,12 @@ export interface AppRow {
   bot_user_id: string
   installer_user_id: string
   created: number
+  /** Signs Events API deliveries (migration 0009). */
+  signing_secret: string
+  /** Where the Events API POSTs, once verified; NULL for none. */
+  event_request_url: string | null
+  /** JSON array of subscribed event types; NULL for all. */
+  event_types: string | null
 }
 
 export interface TokenRow {
