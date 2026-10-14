@@ -38,6 +38,12 @@ Messages
   react <#channel|id> <ts> <emoji> [--remove]
   edit <#channel|id> <ts> <text>      delete <#channel|id> <ts>
 
+Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
+  stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
+                                 stream piped markdown into one message as it arrives
+                                 (chat.startStream, appendStream per piece, stopStream at the end)
+  status <#channel|id> <thread ts> [text]   the app's status in a thread; no text clears it
+
 Workspace
   channels [--all] [--json]        users [--json]
   create-channel <name> [--private]   join <#channel>   leave <#channel>
@@ -169,6 +175,44 @@ async function replaceProfile(io: Io, old: Profile | undefined, url: string, tok
 }
 
 type AuthTest = { ok: boolean; user: string; team: string; user_id: string; team_id: string }
+
+/** Markdown per chat.appendStream, as Slack limits it. */
+const MAX_STREAM_PIECE = 12_000
+
+/** Text in pieces of at most `max` characters, never splitting one. */
+function split(text: string, max: number): string[] {
+  const chars = Array.from(text)
+  const out: string[] = []
+  for (let i = 0; i < chars.length; i += max) out.push(chars.slice(i, i + max).join(""))
+  return out
+}
+
+/** The workspace of a bot token; anything else is a usage mistake, said plainly before the server refuses. */
+async function botTeam(s: Session, command: string): Promise<string> {
+  const who = await s.client.call<{ ok: boolean; team_id: string; bot_id?: string }>("auth.test")
+  if (!who.bot_id) {
+    throw new UsageError(
+      `${command} acts as an app: use its bot token, CAMPFLARE_TOKEN=xoxb-… (pnpm dev:all writes CAMPFLARE_BOT_TOKEN)`,
+    )
+  }
+  return who.team_id
+}
+
+/**
+ * Outside a DM a stream answers someone: --to, else whoever started the thread.
+ */
+async function streamRecipient(s: Session, channel: string, thread: string | undefined, to: string | undefined) {
+  if (to) return resolveUser(s.client, to, s.self)
+  if (!thread) throw new UsageError("stream outside a DM answers someone: give --to @person or --thread <ts>")
+  const res = await s.client.call<{ ok: boolean; messages: { user?: string }[] }>("conversations.replies", {
+    channel,
+    ts: thread,
+    limit: 1,
+  })
+  const user = res.messages[0]?.user
+  if (!user) throw new UsageError("the thread's first message has no author to answer: give --to @person")
+  return user
+}
 
 type Command = (argv: string[], io: Io) => Promise<number | void>
 
@@ -317,6 +361,70 @@ const commands: Record<string, Command> = {
     })
     if (values.json) return s.print({ channel: res.channel, ts: res.ts })
     io.stdout(`Sent to ${target} (ts ${res.ts})\n`)
+  },
+
+  async stream(argv, io) {
+    const { values, positionals } = parse(argv, {
+      thread: { type: "string" },
+      to: { type: "string" },
+      status: { type: "string" },
+      blocks: { type: "string" },
+    })
+    const [target] = positionals
+    if (!target) throw new UsageError("stream needs a conversation: #channel, @person or an id")
+    const thread = str(values.thread)
+    if (values.status !== undefined && !thread) throw new UsageError("--status needs --thread: it shows in a thread")
+    let blocks: object | undefined
+    if (values.blocks !== undefined) {
+      try {
+        blocks = JSON.parse(str(values.blocks)!) as object
+      } catch {
+        throw new UsageError("--blocks wants a JSON array of blocks")
+      }
+    }
+    const pieces = io.stdinChunks?.() ?? (await readStdin(io).then((text) => (text ? [text] : undefined)))
+    if (!pieces) throw new UsageError("stream reads markdown from stdin: pipe it in")
+    const s = await session(io, values)
+    const team = await botTeam(s, "stream")
+    const channel = await s.conversation(target)
+    const recipient = channel.startsWith("D") ? undefined : await streamRecipient(s, channel, thread, str(values.to))
+    if (values.status !== undefined) {
+      await s.client.call("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: thread,
+        status: values.status,
+      })
+    }
+    const { ts } = await s.client.call<{ ok: boolean; ts: string }>("chat.startStream", {
+      channel,
+      thread_ts: thread,
+      ...(recipient ? { recipient_user_id: recipient, recipient_team_id: team } : {}),
+    })
+    io.stderr(`Streaming to ${target} (ts ${ts})\n`)
+    for await (const piece of pieces) {
+      for (const markdown_text of split(piece, MAX_STREAM_PIECE)) {
+        await s.client.call("chat.appendStream", { channel, ts, markdown_text })
+      }
+    }
+    const stopped = await s.client.call<{ ok: boolean; message: { text: string } }>("chat.stopStream", {
+      channel,
+      ts,
+      blocks,
+    })
+    if (values.json) return s.print({ channel, ts, message: stopped.message })
+    io.stdout(`Streamed ${stopped.message.text.length} characters to ${target} (ts ${ts})\n`)
+  },
+
+  async status(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target, ts, ...words] = positionals
+    if (!target || !ts) throw new UsageError("status needs a conversation and a thread ts")
+    const s = await session(io, values)
+    await botTeam(s, "status")
+    const channel = await s.conversation(target)
+    const status = words.join(" ")
+    await s.client.call("assistant.threads.setStatus", { channel_id: channel, thread_ts: ts, status })
+    io.stdout(status ? `Status set in ${target}: ${status}\n` : `Status cleared in ${target}\n`)
   },
 
   async history(argv, io) {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { browsableChannels, conversationTitle, displayName, sidebar, thread, timeline } from "../src/selectors"
+import {
+  browsableChannels,
+  conversationTitle,
+  displayName,
+  sidebar,
+  thread,
+  threadStatus,
+  timeline,
+} from "../src/selectors"
 import { initialState, reduce, type WorkspaceState } from "../src/state"
 
 const state: WorkspaceState = reduce(initialState, {
@@ -59,5 +67,14 @@ describe("selectors", () => {
     expect(timeline(s, "C1")).toEqual([])
     s = { ...s, messages: {} }
     expect(thread(s, "C1", "0000000100.000000")).toEqual([])
+  })
+})
+
+describe("threadStatus", () => {
+  it("gives a thread's status until it expires", () => {
+    const statuses = { "C1/0000000100.000000": { user: "UBOT", status: "is thinking", expires: 200 } }
+    expect(threadStatus(statuses, "C1", "0000000100.000000", 199)?.status).toBe("is thinking")
+    expect(threadStatus(statuses, "C1", "0000000100.000000", 200)).toBeUndefined()
+    expect(threadStatus(statuses, "C1", "0000000999.000000", 0)).toBeUndefined()
   })
 })

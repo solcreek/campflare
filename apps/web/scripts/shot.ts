@@ -33,6 +33,7 @@ import {
   parseShotArgs,
   report,
   resolveRoute,
+  SHOT_HELP,
   stepProblem,
   UsageError,
   type ShotOptions,
@@ -102,8 +103,10 @@ async function shoot(base: string, options: ShotOptions): Promise<string[]> {
 // Errors set exitCode rather than process.exit, which cuts piped output short.
 try {
   const options = parseShotArgs(process.argv.slice(2))
-  const app = findApp(options, { root, cwd, env: process.env })
-  if ("error" in app) {
+  const app = options.help ? undefined : findApp(options, { root, cwd, env: process.env })
+  if (!app) {
+    console.log(SHOT_HELP)
+  } else if ("error" in app) {
     console.error(app.error)
     process.exitCode = 1
   } else {
@@ -115,8 +118,6 @@ try {
   }
 } catch (error) {
   if (!(error instanceof UsageError)) throw error
-  console.error(
-    `shot: ${error.message}\nUsage: pnpm shot [route...] [--as <handle>] [--dark] [--click role:name] [--type text] [--press key] …`,
-  )
+  console.error(`shot: ${error.message}\n${SHOT_HELP.split("\n")[0]} (pnpm shot --help for more)`)
   process.exitCode = 1
 }

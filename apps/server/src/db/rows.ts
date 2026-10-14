@@ -112,6 +112,10 @@ export interface MessageRow {
   edited_user: string | null
   client_msg_id: string | null
   deleted: number
+  /** A streamed message's state: "in_progress" or "completed"; null for an ordinary message. */
+  stream_state: string | null
+  /** How the stream sends content, "markdown_text" or "chunks", once it has sent any. */
+  stream_mode: string | null
 }
 
 export interface ReactionRow {

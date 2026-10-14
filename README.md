@@ -39,6 +39,7 @@ own stack; `--fresh` starts over and `--no-seed` leaves the server empty.
 pnpm otui                                       # opentui-slack against it (from ~/Projects/solcreek/opentui-slack)
 set -a; . apps/server/.wrangler/campflare-dev.env; set +a
 node apps/cli/dist/index.mjs send '#dev' "hello"  # the CLI, as @alex
+CAMPFLARE_TOKEN=$CAMPFLARE_BOT_TOKEN node apps/cli/dist/index.mjs send '#dev' "beep"  # as the seeded app's bot
 ```
 
 The app runs against the same server and signs in by itself in development
@@ -275,6 +276,8 @@ campflare send @vincent "have a look" -f screenshot.png
 make test 2>&1 | tail -5 | campflare send @me                  # text from stdin
 campflare history '#dev' -n 50
 campflare search 'deploy in:#dev from:@bob after:2026-10-01'
+llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791990000.000100 --status "is thinking…"
+                                                              # as a bot: one message that grows as stdin arrives
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON

@@ -50,6 +50,11 @@ const io: Io = {
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
     return Buffer.concat(chunks).toString("utf8")
   },
+  stdinChunks() {
+    if (process.stdin.isTTY) return undefined
+    process.stdin.setEncoding("utf8")
+    return process.stdin as AsyncIterable<string>
+  },
   secret: process.stdin.isTTY ? readHidden : undefined,
   env: process.env,
   readFile: async (path) => new Uint8Array(await readFile(path)),

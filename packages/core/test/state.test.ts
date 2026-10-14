@@ -358,3 +358,74 @@ describe("reduce", () => {
     expect(s.conversations.C3?.is_member).toBe(false)
   })
 })
+
+describe("streamed messages and thread statuses", () => {
+  const head = "0000000100.000000"
+  const threadKey = keyOf("C1", head)
+  const status = (s: string | undefined, extra: Record<string, unknown> = {}) =>
+    e({
+      type: "assistant_thread_status_changed",
+      channel: "C1",
+      thread_ts: head,
+      status: s,
+      user: "UBOT",
+      event_ts: "0000000150.000000",
+      ...extra,
+    })
+  const loaded = () =>
+    run(ready, history([msg(head, { thread_ts: head, reply_count: 0 })]), {
+      type: "replies",
+      channel: "C1",
+      threadTs: head,
+      messages: [msg(head, { thread_ts: head })],
+    })
+
+  it("grows a streamed reply in place, from message to message_changed", () => {
+    const reply = { ts: "0000000160.000000", thread_ts: head, user: "UBOT", streaming_state: "in_progress" }
+    let s = reduce(
+      loaded(),
+      event({ channel: "C1", ...reply, text: "Hel", blocks: [{ type: "markdown", text: "Hel" }] }),
+    )
+    const key = keyOf("C1", reply.ts)
+    expect(s.threads[threadKey]?.keys).toEqual([key])
+    expect(s.messages[threadKey]?.reply_count).toBe(1)
+    s = reduce(s, event({ channel: "C1", subtype: "message_changed", message: { ...reply, text: "Hello" } }))
+    s = reduce(
+      s,
+      event({
+        channel: "C1",
+        subtype: "message_changed",
+        message: { ...reply, text: "Hello!", streaming_state: "completed" },
+      }),
+    )
+    expect(s.messages[key]).toMatchObject({ text: "Hello!", streaming_state: "completed" })
+    expect(s.threads[threadKey]?.keys).toEqual([key])
+    expect(s.messages[threadKey]?.reply_count).toBe(1)
+  })
+
+  it("keeps an app's status until its next message in the thread", () => {
+    let s = reduce(loaded(), status("is thinking…", { loading_messages: ["Reading", "Writing"], expires_in: 60 }))
+    expect(s.statuses[threadKey]).toEqual({
+      user: "UBOT",
+      status: "is thinking…",
+      loadingMessages: ["Reading", "Writing"],
+      expires: 210,
+    })
+    // Someone else's reply, or the app's message elsewhere, leave it.
+    s = reduce(s, event({ channel: "C1", ts: "0000000155.000000", thread_ts: head, user: "U2", text: "?" }))
+    s = reduce(s, event({ channel: "C1", ts: "0000000156.000000", user: "UBOT", text: "elsewhere" }))
+    expect(s.statuses[threadKey]?.status).toBe("is thinking…")
+    s = reduce(s, event({ channel: "C1", ts: "0000000160.000000", thread_ts: head, user: "UBOT", text: "Answer" }))
+    expect(s.statuses).toEqual({})
+  })
+
+  it("clears a status on an empty one, and times it out after two minutes by default", () => {
+    let s = reduce(loaded(), status("is working"))
+    expect(s.statuses[threadKey]).toEqual({ user: "UBOT", status: "is working", expires: 270 })
+    s = reduce(s, status(""))
+    expect(s.statuses).toEqual({})
+    // Clearing what isn't there changes nothing.
+    expect(reduce(s, status(""))).toBe(s)
+    expect(reduce(s, status(undefined))).toBe(s)
+  })
+})

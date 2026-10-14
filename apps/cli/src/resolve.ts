@@ -61,6 +61,16 @@ export async function resolveConversation(client: Client, ref: string, self: () 
     exclude_archived: true,
   })
   const found = channels.find((c) => c.name === name)
-  if (!found) throw new UsageError(`you're not in #${name}`)
-  return found.id
+  if (found) return found.id
+  // A bot posts to public channels without joining them.
+  const isBot = await client.call<{ ok: boolean; bot_id?: string }>("auth.test").then((r) => Boolean(r.bot_id))
+  if (isBot) {
+    const all = await client.paginate<Conversation>("conversations.list", "channels", {
+      types: "public_channel",
+      exclude_archived: true,
+    })
+    const open = all.find((c) => c.name === name)
+    if (open) return open.id
+  }
+  throw new UsageError(`you're not in #${name}`)
 }

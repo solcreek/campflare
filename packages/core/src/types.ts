@@ -63,6 +63,13 @@ export interface MessageFile {
   [key: string]: unknown
 }
 
+/** A Block Kit block, as far as apps read it. */
+export interface MessageBlock {
+  type: string
+  text?: unknown
+  [key: string]: unknown
+}
+
 export interface Message {
   ts: string
   /** Not in Slack's message JSON (the channel is implied); the store always sets it. */
@@ -79,6 +86,10 @@ export interface Message {
   reactions?: Reaction[]
   edited?: { user: string; ts: string }
   files?: MessageFile[]
+  /** Block Kit blocks; a `markdown` block's text is markdown, not mrkdwn. */
+  blocks?: MessageBlock[]
+  /** A streamed message (chat.startStream): "in_progress" while its app writes it, then "completed". */
+  streaming_state?: string
   is_ephemeral?: boolean
   /** Set by the sender, echoed by the server: ties a stored message to the pending one it replaces. */
   client_msg_id?: string

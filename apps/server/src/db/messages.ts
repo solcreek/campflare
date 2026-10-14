@@ -22,6 +22,8 @@ export type NewMessage = Partial<
     | "files"
     | "thread_ts"
     | "client_msg_id"
+    | "stream_state"
+    | "stream_mode"
   >
 > & { text: string }
 
@@ -86,8 +88,8 @@ export async function postMessage(
       stmt(
         db,
         `INSERT INTO messages (channel_id, ts, team_id, user_id, bot_id, app_id, username, subtype, text, blocks,
-           attachments, metadata, files, thread_ts, parent_user_id, client_msg_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           attachments, metadata, files, thread_ts, parent_user_id, client_msg_id, stream_state, stream_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         c.id,
         ts,
         c.team_id,
@@ -104,6 +106,8 @@ export async function postMessage(
         parent?.ts ?? null,
         parent?.user_id ?? null,
         input.client_msg_id ?? null,
+        input.stream_state ?? null,
+        input.stream_mode ?? null,
       ),
       ...(parent
         ? [

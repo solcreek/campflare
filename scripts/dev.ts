@@ -131,6 +131,8 @@ if (seeded) {
     `SLACK_USER_TOKEN=${seeded.owner}`,
     `SLACK_APP_TOKEN=${seeded.appToken}`,
     `SLACK_BOT_TOKEN=${seeded.botToken}`,
+    // The CLI reads CAMPFLARE_TOKEN: CAMPFLARE_TOKEN=$CAMPFLARE_BOT_TOKEN acts as the bot (campflare stream, status).
+    `CAMPFLARE_BOT_TOKEN=${seeded.botToken}`,
     // An app that takes events over HTTP: campflare admin app $CAMPFLARE_APP_ID --request-url <url>
     ...(seeded.appId ? [`CAMPFLARE_APP_ID=${seeded.appId}`] : []),
     ...(seeded.signingSecret ? [`SLACK_SIGNING_SECRET=${seeded.signingSecret}`] : []),
@@ -176,4 +178,5 @@ console.log(`
     set -a; . ${rel(envFile)}; set +a    # then the CLI acts as @alex:
     campflare send '#dev' "hello"
     CAMPFLARE_TOKEN=$CAMPFLARE_TOKEN_VINCENT campflare send @alex "hi"
+    echo "**hi**" | CAMPFLARE_TOKEN=$CAMPFLARE_BOT_TOKEN campflare stream @alex   # a streamed bot reply
 `)

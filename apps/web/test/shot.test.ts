@@ -10,6 +10,7 @@ import {
   parseShotArgs,
   report,
   resolveRoute,
+  SHOT_HELP,
   stepProblem,
   UsageError,
 } from "../scripts/shot-options.ts"
@@ -28,6 +29,14 @@ describe("shot's command line", () => {
       routes: [""],
       steps: [],
     })
+  })
+
+  it("answers --help with what it takes", () => {
+    expect(parseShotArgs(["--help"]).help).toBe(true)
+    expect(parseShotArgs(["-h"]).help).toBe(true)
+    expect(parseShotArgs([]).help).toBeUndefined()
+    expect(SHOT_HELP).toMatch(/^Usage: pnpm shot/)
+    expect(SHOT_HELP).toContain("--wait")
   })
 
   it("takes several routes, one screenshot each", () => {

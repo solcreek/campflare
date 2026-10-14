@@ -244,6 +244,23 @@ export function reactionsOfQuery(db: D1Database, messages: string, ...params: un
     .bind(...params)
 }
 
+/** Reactions grouped by message, as MessageExtras holds them. */
+function reactionsByMessage(rows: ReactionRow[]) {
+  const byMessage = new Map<string, ReactionRow[]>()
+  for (const r of rows) {
+    const k = key(r.channel_id, r.ts)
+    const list = byMessage.get(k) ?? []
+    list.push(r)
+    byMessage.set(k, list)
+  }
+  return byMessage
+}
+
+/** MessageExtras from what the caller already holds, for messages without files: no query. */
+export function knownExtras(reactions: ReactionRow[], apps: AppRow[] = []): MessageExtras {
+  return { reactions: reactionsByMessage(reactions), files: new Map(), apps: new Map(apps.map((a) => [a.bot_id, a])) }
+}
+
 /**
  * Loads what a batch of messages needs to serialise: their reactions, files and bot apps.
  * `reactions`, when the caller already has them (read in its own batch), saves that query.
@@ -264,12 +281,7 @@ export async function loadExtras(env: Env, messages: MessageRow[], reactions?: R
       `SELECT * FROM reactions WHERE (channel_id, ts) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?)) ORDER BY created`,
       JSON.stringify(messages.map((m) => [m.channel_id, m.ts])),
     ))
-  for (const r of reactionRows) {
-    const k = key(r.channel_id, r.ts)
-    const list = extras.reactions.get(k) ?? []
-    list.push(r)
-    extras.reactions.set(k, list)
-  }
+  extras.reactions = reactionsByMessage(reactionRows)
   // Files and bot apps, when there are any, in parallel: two more queries but one more round trip.
   const fileIds = [...new Set(messages.flatMap((m) => (m.files ? (JSON.parse(m.files) as string[]) : [])))]
   const botIds = [...new Set(messages.flatMap((m) => (m.bot_id ? [m.bot_id] : [])))]
@@ -346,6 +358,7 @@ export function messageJson(m: MessageRow, extras: MessageExtras, origin: string
       : {}),
     ...(m.edited_ts ? { edited: { user: m.edited_user, ts: m.edited_ts } } : {}),
     ...(reactions.length > 0 ? { reactions } : {}),
+    ...(m.stream_state ? { streaming_state: m.stream_state } : {}),
   }
 }
 

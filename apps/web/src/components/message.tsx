@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
+import { MessageBody } from "./message-body"
 import { MessageFiles } from "./message-files"
 import { Emoji, Mrkdwn } from "./mrkdwn"
 
@@ -146,6 +147,7 @@ export function MessageItem({ message, grouped, inThread, onOpenThread, highligh
     <article
       aria-label={`${name} at ${message.pending ? "sending" : formatTime(message.ts)}`}
       aria-current={highlighted || undefined}
+      aria-busy={message.streaming_state === "in_progress" || undefined}
       className={cn(
         "group relative flex gap-2 px-4 py-0.5",
         highlighted ? "bg-highlight" : "hover:bg-muted/50",
@@ -173,7 +175,7 @@ export function MessageItem({ message, grouped, inThread, onOpenThread, highligh
           <Editor message={message} onDone={() => setEditing(false)} />
         ) : (
           <div className={cn(message.subtype === "tombstone" && "text-muted-foreground italic")}>
-            <Mrkdwn text={message.text ?? ""} />
+            <MessageBody message={message} />
             {message.edited && <span className="text-xs text-muted-foreground"> (edited)</span>}
           </div>
         )}

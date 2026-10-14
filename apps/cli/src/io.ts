@@ -6,6 +6,8 @@ export interface Io {
   stderr(text: string): void
   /** Piped input, or undefined when stdin is a terminal. */
   stdin(): Promise<string | undefined>
+  /** Piped input as it arrives, for commands that act on each piece (stream); undefined from a terminal. */
+  stdinChunks?(): AsyncIterable<string> | undefined
   /** Asks at the terminal without echoing what's typed (for passwords); absent without one. */
   secret?(prompt: string): Promise<string>
   env: Record<string, string | undefined>

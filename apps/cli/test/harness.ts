@@ -14,6 +14,8 @@ export const baseUrl = inject("baseUrl")
 export function memoryIo(
   opts: {
     stdin?: string
+    /** Piped input in pieces, as `stream` reads it; each piece after the one before has been handled. */
+    stdinChunks?: string[]
     files?: Record<string, string>
     env?: Record<string, string>
     openUrl?: (url: string) => Promise<void>
@@ -29,6 +31,12 @@ export function memoryIo(
     stdout: (t) => void out.push(t),
     stderr: (t) => void err.push(t),
     stdin: async () => opts.stdin,
+    stdinChunks: opts.stdinChunks
+      ? () =>
+          (async function* () {
+            yield* opts.stdinChunks!
+          })()
+      : undefined,
     env: opts.env ?? {},
     async readFile(path) {
       const text = opts.files?.[path]
