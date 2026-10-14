@@ -1,16 +1,19 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { env } from "cloudflare:workers"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import type { DeliveryHealth } from "../src/delivery-health"
 import { MAX_RETRIES, type TeamHub } from "../src/hub"
 import {
   connect,
   expectError,
   fakeRequestUrls,
+  eventually,
   ok,
   settle,
   validSignature,
   workspace,
   type RequestUrlHit,
+  type Workspace,
 } from "./helpers"
 
 // The Events API over HTTP: an app's Request URL gets signed event_callbacks.
@@ -79,6 +82,50 @@ describe("signing secret and settings", () => {
   })
 })
 
+describe("campflare.apps.rotateSigningSecret", () => {
+  it("switches every delivery to a new secret at once, retries of earlier events included", async () => {
+    const { w, app } = await subscribedApp()
+    // An event fails before the rotation, so its retry comes after.
+    urls.answer = () => new Response("", { status: 500 })
+    await ok("chat.postMessage", { channel: w.general, text: "before" }, w.owner.token)
+    const before = await urls.next(isEvent("message", "before"))
+    expect(await validSignature(before, app.signingSecret)).toBe(true)
+    await settle()
+
+    const rotated = await ok<{ app: { signing_secret: string } }>(
+      "campflare.apps.rotateSigningSecret",
+      { app: app.id },
+      w.owner.token,
+    )
+    const secret = rotated.app.signing_secret
+    expect(secret).toMatch(/^[0-9a-f]{32}$/)
+    expect(secret).not.toBe(app.signingSecret)
+    const info = await ok<{ app: { signing_secret: string } }>("campflare.apps.info", { app: app.id }, w.owner.token)
+    expect(info.app.signing_secret).toBe(secret)
+
+    urls.answer = () => new Response("")
+    await expire(w.teamId)
+    const retry = await urls.next(isEvent("message", "before"))
+    expect(await validSignature(retry, secret)).toBe(true)
+    expect(await validSignature(retry, app.signingSecret)).toBe(false)
+    await ok("chat.postMessage", { channel: w.general, text: "after" }, w.owner.token)
+    const after = await urls.next(isEvent("message", "after"))
+    expect(await validSignature(after, secret)).toBe(true)
+    expect(await validSignature(after, app.signingSecret)).toBe(false)
+  })
+
+  it("is for the installer or an admin", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Hooked")
+    const bob = await w.addUser("bob")
+    await expectError("campflare.apps.rotateSigningSecret", { app: app.id }, bob.token, "not_allowed")
+    await expectError("campflare.apps.rotateSigningSecret", { app: app.id }, app.botToken, "not_allowed_token_type")
+    await expectError("campflare.apps.rotateSigningSecret", {}, w.owner.token, "app_not_found")
+    const admin = await w.addUser("ada", { is_admin: true })
+    await ok("campflare.apps.rotateSigningSecret", { app: app.id }, admin.token)
+  })
+})
+
 describe("campflare.apps.setEventSubscriptions", () => {
   it("checks the Request URL with a signed url_verification challenge before saving it", async () => {
     const w = await workspace()
@@ -88,7 +135,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { app: app.id, request_url: URL },
       w.owner.token,
     )
-    expect(res.app.event_subscriptions).toEqual({ request_url: URL, events: null })
+    expect(res.app.event_subscriptions).toMatchObject({ request_url: URL, events: null })
     const hit = await urls.next()
     expect(hit.url).toBe(URL)
     expect(hit.body).toEqual({ token: "", challenge: expect.any(String), type: "url_verification" })
@@ -149,7 +196,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { app: app.id },
       w.owner.token,
     )
-    expect(info.app.event_subscriptions).toEqual({ request_url: null, events: null })
+    expect(info.app.event_subscriptions).toMatchObject({ request_url: null, events: null })
   })
 
   it("allows http on localhost, for an app in development", async () => {
@@ -165,7 +212,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
     type Settings = { app: { event_subscriptions: { request_url: string | null; events: string[] | null } } }
     const set = (args: Record<string, unknown>) =>
       ok<Settings>("campflare.apps.setEventSubscriptions", { app: app.id, ...args }, w.owner.token)
-    expect((await set({ events: "app_mention, message.channels" })).app.event_subscriptions).toEqual({
+    expect((await set({ events: "app_mention, message.channels" })).app.event_subscriptions).toMatchObject({
       request_url: URL,
       events: ["app_mention", "message.channels"],
     })
@@ -179,8 +226,8 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { json: true },
     )
     expect(json.app.event_subscriptions.events).toEqual(["app_mention"])
-    expect((await set({ events: "" })).app.event_subscriptions).toEqual({ request_url: URL, events: null })
-    expect((await set({ request_url: "" })).app.event_subscriptions).toEqual({ request_url: null, events: null })
+    expect((await set({ events: "" })).app.event_subscriptions).toMatchObject({ request_url: URL, events: null })
+    expect((await set({ request_url: "" })).app.event_subscriptions).toMatchObject({ request_url: null, events: null })
     // Only the first set verified a URL.
     expect(urls.hits).toEqual([])
     await expectError("campflare.apps.setEventSubscriptions", { app: app.id }, w.owner.token, "invalid_arguments")
@@ -358,5 +405,269 @@ describe("retries", () => {
     await expire(w.teamId)
     expect(await pending(w.teamId)).toEqual([])
     expect(urls.hits).toEqual([])
+  })
+})
+
+/** event_subscriptions.delivery from campflare.apps.info. */
+async function deliveryOf(app: { id: string }, token: string) {
+  const info = await ok<{ app: { event_subscriptions: { delivery: DeliveryHealth } } }>(
+    "campflare.apps.info",
+    { app: app.id },
+    token,
+  )
+  return info.app.event_subscriptions.delivery
+}
+
+/** Waits until the hub has counted `n` attempts in the window (it counts after the POST's answer). */
+const counted = (w: Workspace, app: { id: string }, n: number) =>
+  eventually(async () => (await deliveryOf(app, w.owner.token)).attempts === n)
+
+/** Waits until delivery has been turned off, and returns the subscriptions. */
+const turnedOff = (w: Workspace, app: { id: string }) =>
+  eventually(async () => {
+    const subs = await subscriptionsOf(app, w.owner.token)
+    return subs.disabled ? subs : undefined
+  })
+
+describe("delivery health in campflare.apps.info", () => {
+  it("reports the last attempt, the hour's attempts and failures, and pending retries", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Hooked")
+    expect(await deliveryOf(app, w.owner.token)).toEqual({
+      last_attempt: null,
+      window_minutes: 60,
+      attempts: 0,
+      failures: 0,
+      pending: 0,
+    })
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: URL }, w.owner.token)
+    await urls.next((h) => h.body.type === "url_verification")
+    // url_verification isn't a delivery.
+    expect((await deliveryOf(app, w.owner.token)).attempts).toBe(0)
+
+    const before = Math.floor(Date.now() / 1000)
+    await ok("chat.postMessage", { channel: w.general, text: "taken" }, w.owner.token)
+    await urls.next(isEvent("message", "taken"))
+    await counted(w, app, 1)
+    expect(await deliveryOf(app, w.owner.token)).toEqual({
+      last_attempt: { at: expect.any(Number), ok: true, status: 200, reason: null },
+      window_minutes: 60,
+      attempts: 1,
+      failures: 0,
+      pending: 0,
+    })
+    expect((await deliveryOf(app, w.owner.token)).last_attempt!.at).toBeGreaterThanOrEqual(before)
+
+    urls.answer = () => new Response("down", { status: 503 })
+    await ok("chat.postMessage", { channel: w.general, text: "refused" }, w.owner.token)
+    await urls.next(isEvent("message", "refused"))
+    await counted(w, app, 2)
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { ok: false, status: 503, reason: "http_error" },
+      attempts: 2,
+      failures: 1,
+      pending: 1,
+    })
+    // Retries count as attempts.
+    urls.answer = () => {
+      throw new TypeError("connection refused")
+    }
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "refused"))
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { ok: false, status: 0, reason: "connection_failed" },
+      attempts: 3,
+      failures: 2,
+      pending: 1,
+    })
+
+    // A new Request URL starts the count afresh; the last attempt stays.
+    urls.answer = (h) =>
+      h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response("")
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: `${URL}/v2` }, w.owner.token)
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { reason: "connection_failed" },
+      attempts: 0,
+      failures: 0,
+    })
+    // The pending retry goes to the new URL; taken, it leaves nothing to fire in a later test.
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "refused"))
+    expect(await pending(w.teamId)).toEqual([])
+  })
+
+  it("forgets attempts older than the hour", async () => {
+    const { w, app } = await subscribedApp()
+    // Not retried, so nothing fires in a later test.
+    urls.answer = () => new Response("", { status: 500, headers: { "x-slack-no-retry": "1" } })
+    await ok("chat.postMessage", { channel: w.general, text: "old" }, w.owner.token)
+    await urls.next(isEvent("message", "old"))
+    await counted(w, app, 1)
+    expect((await deliveryOf(app, w.owner.token)).failures).toBe(1)
+    await runInDurableObject(hub(w.teamId), async (_hub: TeamHub, state) => {
+      state.storage.sql.exec("UPDATE delivery_minutes SET minute = minute - 60")
+    })
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({ attempts: 0, failures: 0 })
+  })
+})
+
+/** Counts attempts in the app's current minute, as if they had been made. */
+async function seedAttempts(teamId: string, appId: string, attempts: number, failures: number) {
+  await runInDurableObject(hub(teamId), async (_hub: TeamHub, state) => {
+    state.storage.sql.exec(
+      "INSERT INTO delivery_minutes (app_id, minute, attempts, failures) VALUES (?, ?, ?, ?)",
+      appId,
+      Math.floor(Date.now() / 60_000),
+      attempts,
+      failures,
+    )
+  })
+}
+
+type Subscriptions = {
+  request_url: string | null
+  events: string[] | null
+  disabled: { at: number; reason: string } | null
+  delivery: DeliveryHealth
+}
+const subscriptionsOf = async (app: { id: string }, token: string) =>
+  (await ok<{ app: { event_subscriptions: Subscriptions } }>("campflare.apps.info", { app: app.id }, token)).app
+    .event_subscriptions
+
+/** The messages in the DM between the owner and the app's bot. */
+async function dmFromBot(w: Workspace, app: { botUserId: string }) {
+  const dm = await ok<{ channel: { id: string } }>("conversations.open", { users: app.botUserId }, w.owner.token)
+  const history = await ok<{ messages: { text: string; user: string; bot_id?: string }[] }>(
+    "conversations.history",
+    { channel: dm.channel.id },
+    w.owner.token,
+  )
+  return history.messages
+}
+
+/** One event the URL refuses. */
+async function failOne(w: Workspace, text: string) {
+  await ok("chat.postMessage", { channel: w.general, text }, w.owner.token)
+  await urls.next(isEvent("message", text))
+}
+
+describe("turning off a failing Request URL", () => {
+  const refuse = (h: RequestUrlHit) =>
+    h.body.type === "url_verification"
+      ? Response.json({ challenge: h.body.challenge })
+      : new Response("", { status: 500 })
+
+  it("waits for at least 20 attempts in the hour, then turns delivery off when over 95% failed", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 18, 18)
+    await failOne(w, "nineteenth")
+    await counted(w, app, 19)
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).toBeNull()
+    await failOne(w, "twentieth")
+    const subs = await turnedOff(w, app)
+    expect(subs).toMatchObject({
+      request_url: URL,
+      disabled: {
+        at: expect.any(Number),
+        reason: "100% of 20 attempts in the last 60 minutes failed; the last: HTTP 500",
+      },
+    })
+    // The pending retries went with it, and the count starts afresh.
+    expect(subs.delivery).toMatchObject({ attempts: 0, failures: 0, pending: 0, last_attempt: { status: 500 } })
+    expect(await pending(w.teamId)).toEqual([])
+    await expire(w.teamId)
+    await ok("chat.postMessage", { channel: w.general, text: "not sent" }, w.owner.token)
+    await settle()
+    expect(urls.hits).toEqual([])
+  })
+
+  it("keeps delivering while at most 95% fail", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 30, 27)
+    await failOne(w, "ninety percent")
+    await counted(w, app, 31)
+    expect(await subscriptionsOf(app, w.owner.token)).toMatchObject({
+      disabled: null,
+      delivery: { attempts: 31, failures: 28 },
+    })
+    // A success never trips it, whatever came before.
+    urls.answer = () => new Response("")
+    await ok("chat.postMessage", { channel: w.general, text: "fine" }, w.owner.token)
+    await urls.next(isEvent("message", "fine"))
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "ninety percent"))
+    expect(await pending(w.teamId)).toEqual([])
+  })
+
+  it("tells the installer in a DM from the app's bot, once, with how to turn it back on", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = () => {
+      throw new DOMException("timed out", "TimeoutError")
+    }
+    await seedAttempts(w.teamId, app.id, 25, 25)
+    await failOne(w, "slow")
+    await turnedOff(w, app)
+    const messages = await eventually(async () => {
+      const found = await dmFromBot(w, app)
+      return found.length > 0 ? found : undefined
+    })
+    await settle()
+    expect(await dmFromBot(w, app)).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ user: app.botUserId, bot_id: app.botId })
+    expect(messages[0]!.text).toContain(`Campflare turned off event delivery for *Hooked* (${app.id})`)
+    expect(messages[0]!.text).toContain(
+      "100% of 26 attempts in the last 60 minutes failed; the last: no answer (http_timeout)",
+    )
+    expect(messages[0]!.text).toContain(`campflare admin app ${app.id} --request-url ${URL}`)
+  })
+
+  it("turns back on when the Request URL is set again and passes url_verification", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 19, 19)
+    await failOne(w, "last straw")
+    await turnedOff(w, app)
+
+    // Changing the events alone leaves it off; a URL that fails the challenge too.
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, events: "message.channels" }, w.owner.token)
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).not.toBeNull()
+    urls.answer = () => new Response("nope")
+    await expectError(
+      "campflare.apps.setEventSubscriptions",
+      { app: app.id, request_url: URL },
+      w.owner.token,
+      "url_verification_failed",
+    )
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).not.toBeNull()
+
+    urls.answer = (h) =>
+      h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response("")
+    urls.hits.length = 0
+    const res = await ok<{ app: { event_subscriptions: Subscriptions } }>(
+      "campflare.apps.setEventSubscriptions",
+      { app: app.id, request_url: URL },
+      w.owner.token,
+    )
+    expect(res.app.event_subscriptions).toMatchObject({ request_url: URL, disabled: null })
+    await urls.next((h) => h.body.type === "url_verification")
+    await ok("chat.postMessage", { channel: w.general, text: "back on" }, w.owner.token)
+    await urls.next(isEvent("message", "back on"))
+  })
+
+  it("is cleared by removing the Request URL, and leaves Socket Mode alone", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 19, 19)
+    await failOne(w, "down")
+    await turnedOff(w, app)
+    const link = await connect((await ok<{ url: string }>("apps.connections.open", {}, app.appToken)).url)
+    await link.next((f) => f.type === "hello")
+    await ok("chat.postMessage", { channel: w.general, text: "over the socket" }, w.owner.token)
+    await link.next((f) => f.type === "events_api")
+    link.close()
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: "" }, w.owner.token)
+    expect(await subscriptionsOf(app, w.owner.token)).toMatchObject({ request_url: null, disabled: null })
   })
 })

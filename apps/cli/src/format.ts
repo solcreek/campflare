@@ -37,3 +37,40 @@ export function messageLine(m: MessageLike, names: Map<string, string>, prefix =
   const text = plain(m.text ?? "", names)
   return `${prefix}${time(m.ts)}  ${who}:${text ? ` ${text}` : ""}${files}${replies}`
 }
+
+/** An app's event delivery health, as campflare.apps.info gives it (event_subscriptions). */
+export interface EventDelivery {
+  disabled?: { at: number; reason: string } | null
+  delivery?: {
+    last_attempt: { at: number; ok: boolean; status: number; reason: string | null } | null
+    window_minutes: number
+    attempts: number
+    failures: number
+    pending: number
+  }
+}
+
+/** Lines saying how an app's Request URL is doing; none before its first delivery. */
+export function deliveryLines(subs: EventDelivery): string[] {
+  const lines: string[] = []
+  if (subs.disabled) {
+    lines.push(
+      `Event delivery: OFF since ${time(String(subs.disabled.at))}: ${subs.disabled.reason}`,
+      "  Set the Request URL again (--request-url) to turn it back on.",
+    )
+  }
+  const d = subs.delivery
+  if (d?.last_attempt) {
+    const last = d.last_attempt
+    const how = last.ok
+      ? `ok (HTTP ${last.status})`
+      : last.status
+        ? `HTTP ${last.status}`
+        : `no answer (${last.reason})`
+    lines.push(
+      `Last delivery: ${time(String(last.at))}, ${how}`,
+      `Last ${d.window_minutes} min: ${d.attempts} attempts, ${d.failures} failed, ${d.pending} waiting to retry`,
+    )
+  }
+  return lines
+}

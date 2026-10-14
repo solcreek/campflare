@@ -108,20 +108,20 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 `{ "ok": false, "error": "<code>" }`, using Slack's error codes. Lists page with
 `cursor` and `response_metadata.next_cursor`.
 
-| Area                  | Methods                                                                                                                                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                   |
-| conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations` |
-| chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                          |
-| reactions             | `add`, `remove`, `get`                                                                                                                                                                                   |
-| files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                   |
-| search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                    |
-| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                              |
-| dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                   |
-| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                          |
-| interactivity         | `block_actions` for `button`s and `feedback_buttons`, over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                                    |
-| other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                      |
-| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`                      |
+| Area                  | Methods                                                                                                                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                          |
+| conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`        |
+| chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                 |
+| reactions             | `add`, `remove`, `get`                                                                                                                                                                                          |
+| files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                          |
+| search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                           |
+| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                     |
+| dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                          |
+| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                 |
+| interactivity         | `block_actions` for `button`s and `feedback_buttons`, over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                                           |
+| other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                             |
+| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -186,6 +186,30 @@ after 1 s, 1 min and 5 min, with `X-Slack-Retry-Num` and
 `X-Slack-Retry-Reason` (`http_error`, `http_timeout`, `connection_failed`);
 an answer with `X-Slack-No-Retry: 1` stops them. An app with a live Socket
 Mode link gets its events there instead, as on Slack.
+
+A Request URL that keeps failing is turned off, as Slack does: once more than
+95% of the attempts in the last 60 minutes failed (retries count; at least 20
+attempts, so a quiet app isn't turned off by a blip), Campflare stops sending
+and retrying, records when and why, and the app's bot DMs its installer.
+Setting the Request URL again (it is checked with `url_verification` again)
+turns delivery back on; clearing it does too. Interactivity POSTs don't count.
+
+`campflare.apps.info` reports how delivery is going, for people and agents
+alike: `event_subscriptions.delivery` has the last attempt (`at`, `ok`,
+`status`, `reason`), the hour's `attempts` and `failures`, and the events
+`pending` a retry; `event_subscriptions.disabled` is `{at, reason}` while
+delivery is off. `campflare admin app A0123` prints the same.
+
+To replace a signing secret (`campflare.apps.rotateSigningSecret`, by the
+installer or an admin):
+
+```sh
+campflare admin app A0123 --rotate-secret
+```
+
+The new secret signs everything from then on, retries of earlier events and
+clicks included. There is no window where both secrets sign, so update the
+app's secret right away; until then it rejects every request.
 
 ### Interactivity
 

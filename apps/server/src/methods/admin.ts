@@ -283,9 +283,22 @@ function appSettings(app: AppRow) {
     event_subscriptions: {
       request_url: app.event_request_url,
       events: app.event_types ? (JSON.parse(app.event_types) as string[]) : null,
+      /** Turned off for failing too often, until the Request URL is set again. */
+      disabled: app.event_delivery_disabled_at
+        ? { at: app.event_delivery_disabled_at, reason: app.event_delivery_disabled_reason }
+        : null,
     },
     interactivity: { request_url: app.interactivity_request_url },
   }
+}
+
+const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
+
+/** appSettings and how its Request URL is doing (the team hub keeps the counts). */
+async function appOut(ctx: Ctx<Actor>, app: AppRow) {
+  const settings = appSettings(app)
+  const delivery = await hubOf(ctx).deliveryHealth(app.id)
+  return { ...settings, event_subscriptions: { ...settings.event_subscriptions, delivery } }
 }
 
 /** An app of the caller's workspace that they installed, or any if they're an admin. */
@@ -301,8 +314,11 @@ async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
   return app
 }
 
-/** An app's settings: its signing secret, Request URL and subscribed events. */
-method("campflare.apps.info", "user", async (ctx) => ({ app: appSettings(await ownApp(ctx)) }))
+/**
+ * An app's settings: its signing secret, Request URL and subscribed events,
+ * and how deliveries to the URL are doing (event_subscriptions.delivery).
+ */
+method("campflare.apps.info", "user", async (ctx) => ({ app: await appOut(ctx, await ownApp(ctx)) }))
 
 /**
  * Sets where and which events an app receives over HTTP (Slack's Event
@@ -336,7 +352,9 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
   const updated = (await first<AppRow>(
     ctx.env.DB,
     `UPDATE apps SET event_request_url = CASE WHEN ?1 THEN ?2 ELSE event_request_url END,
-       event_types = CASE WHEN ?3 THEN ?4 ELSE event_types END
+       event_types = CASE WHEN ?3 THEN ?4 ELSE event_types END,
+       event_delivery_disabled_at = CASE WHEN ?1 THEN NULL ELSE event_delivery_disabled_at END,
+       event_delivery_disabled_reason = CASE WHEN ?1 THEN NULL ELSE event_delivery_disabled_reason END
      WHERE id = ?5 RETURNING *`,
     url !== undefined ? 1 : 0,
     url || null,
@@ -344,9 +362,29 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
     events?.length ? JSON.stringify(events) : null,
     app.id,
   ))!
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
-  await hub.subscriptionsChanged()
-  return { app: appSettings(updated) }
+  // A new URL (or the same one, verified again, turning delivery back on) has its failures counted afresh.
+  await hubOf(ctx).subscriptionsChanged(url ? app.id : undefined, url ? ctx.origin : undefined)
+  return { app: await appOut(ctx, updated) }
+})
+
+/**
+ * Replaces an app's signing secret and returns the new one. The switch is
+ * immediate, with no window where both sign: every delivery from now on,
+ * retries of earlier events and clicks included, is signed with the new
+ * secret, so the app must start verifying with it at once (as on Slack, which
+ * signs with one secret at a time).
+ */
+method("campflare.apps.rotateSigningSecret", "user", async (ctx) => {
+  const app = await ownApp(ctx)
+  const updated = (await first<AppRow>(
+    ctx.env.DB,
+    "UPDATE apps SET signing_secret = ? WHERE id = ? RETURNING *",
+    randomSecret(16),
+    app.id,
+  ))!
+  // The hub keeps each subscriber's secret: it must sign the next delivery with the new one.
+  await hubOf(ctx).subscriptionsChanged()
+  return { app: await appOut(ctx, updated) }
 })
 
 /**
@@ -367,7 +405,7 @@ method("campflare.apps.setInteractivity", "user", async (ctx) => {
     url || null,
     app.id,
   ))!
-  return { app: appSettings(updated) }
+  return { app: await appOut(ctx, updated) }
 })
 
 /** `events` as a list (comma-separated or a JSON array), or undefined when not given. */

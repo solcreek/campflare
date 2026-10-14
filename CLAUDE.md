@@ -155,6 +155,9 @@ The hub's SQLite also holds:
   `alarm()` resends overdue ones (3 s, up to 3 retries) on the app's next link.
   Rows with `transport = 'http'` are Events API POSTs (keyed by `event_id`)
   that failed, with the `reason`; `alarm()` retries them too (below).
+- `delivery_minutes` / `delivery_last` (`src/delivery-health.ts`): every Events
+  API attempt (retries too; not `url_verification`, not interactivity) counted
+  per app in one-minute buckets over a rolling hour, and the last attempt.
 
 Apps get events through `callbacksFor()` in `hub.ts`: the `event_callback`, plus
 `app_mention` (`src/app-events.ts`) when a new message mentions the app's bot
@@ -175,6 +178,26 @@ that cache. `event_types` filters Socket Mode as well (`subscribed()`;
 `message.channels`/`groups`/`im`/`mpim` by `channel_type`). Tests replace
 outbound POSTs with `setRequestUrlFetch()`; `fakeRequestUrls()` and
 `validSignature()` in `test/helpers.ts` record them and check signatures.
+
+Failing URLs are turned off, as on Slack: when an attempt leaves more than 95%
+of at least 20 attempts in the hour failed (`DISABLE_*` in
+`delivery-health.ts`), `TeamHub.turnOff()` sets
+`apps.event_delivery_disabled_at`/`_reason` (migration 0015; guarded on the
+URL and on not being off yet, so concurrent trips report once), drops the
+app's pending HTTP retries and resets its count, and `src/delivery-disabled.ts`
+DMs the installer from the app's own bot with the reason and the command that
+turns it back on. `subscribersOf()` treats a disabled URL as none; the URL
+itself stays so `campflare.apps.info` can show it. Setting a Request URL again
+(re-verified) or clearing it clears the flag and the count; changing only
+`events` doesn't. The DM's origin is the one `setEventSubscriptions` last
+passed to `subscriptionsChanged()` (kept in DO storage). `campflare.apps.info`
+(and every `campflare.apps.*` setter) adds `event_subscriptions.disabled` and
+`.delivery` (`TeamHub.deliveryHealth()`: last attempt, the hour's attempts and
+failures, pending retries). `campflare.apps.rotateSigningSecret` replaces the
+secret at once, with no grace window (Slack signs with one secret too; the app
+must update), and drops the hub's cache so retries are signed with the new
+one. Tests seed `delivery_minutes` with `runInDurableObject` rather than
+making twenty failing posts.
 
 **Streaming and app status.** `chat.startStream` / `appendStream` /
 `stopStream` (`src/methods/chat-stream.ts`, bot tokens only) store a message

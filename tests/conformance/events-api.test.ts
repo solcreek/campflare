@@ -121,3 +121,48 @@ describe("retries", () => {
     }
   })
 })
+
+describe("signing secret rotation", () => {
+  it("leaves Bolt with the old secret refusing every request, and Bolt with the new one taking them", async () => {
+    const created = await createApp("Rotated App")
+    const rotated = (await owner.apiCall("campflare.apps.rotateSigningSecret", { app: created.app.id })) as unknown as {
+      app: { signing_secret: string }
+    }
+    const secret = rotated.app.signing_secret
+    expect(secret).not.toBe(created.signing_secret)
+
+    const boltWith = async (signingSecret: string) => {
+      const messages: Record<string, unknown>[] = []
+      const bolt = new App({
+        token: created.bot_token,
+        signingSecret,
+        clientOptions: { slackApiUrl },
+        logLevel: LogLevel.ERROR,
+      })
+      bolt.message(async ({ message }) => void messages.push(message as unknown as Record<string, unknown>))
+      const server = (await bolt.start(0)) as unknown as { address(): AddressInfo }
+      return { bolt, messages, url: `http://127.0.0.1:${server.address().port}/slack/events` }
+    }
+
+    // The old secret: Bolt refuses the signed url_verification, so the URL isn't saved.
+    const stale = await boltWith(created.signing_secret)
+    try {
+      await expect(
+        owner.apiCall("campflare.apps.setEventSubscriptions", { app: created.app.id, request_url: stale.url }),
+      ).rejects.toMatchObject({ data: { error: "url_verification_failed" } })
+    } finally {
+      await stale.bolt.stop()
+    }
+
+    const fresh = await boltWith(secret)
+    try {
+      await owner.apiCall("campflare.apps.setEventSubscriptions", { app: created.app.id, request_url: fresh.url })
+      const posted = await owner.chat.postMessage({ channel: general, text: "signed with the new secret" })
+      expect(await until(() => fresh.messages.find((m) => m.ts === posted.ts))).toMatchObject({
+        text: "signed with the new secret",
+      })
+    } finally {
+      await fresh.bolt.stop()
+    }
+  })
+})

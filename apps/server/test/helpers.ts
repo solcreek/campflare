@@ -161,6 +161,20 @@ export async function connect(url: string) {
 /** Events reach the hub after the response (waitUntil); give them a moment. */
 export const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * Waits for a condition the Worker or a Durable Object reaches after its
+ * response (waitUntil work): steadier than a fixed settle() under load.
+ */
+export async function eventually<T>(check: () => Promise<T | undefined> | T | undefined, ms = 5000): Promise<T> {
+  const end = Date.now() + ms
+  for (;;) {
+    const value = await check()
+    if (value) return value
+    if (Date.now() > end) throw new Error("timed out")
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 export interface RequestUrlHit {
   url: string
   headers: Headers
