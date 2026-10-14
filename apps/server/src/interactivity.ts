@@ -9,6 +9,7 @@ import { b64url, unb64url } from "./api/tickets"
 import { requireMessage, postMessage } from "./db/messages"
 import { stmt } from "./db/query"
 import type { AppRow, ConversationRow, TeamRow, UserRow } from "./db/rows"
+import { postSigned } from "./request-url"
 import type { Env } from "./env"
 import { authorOf, content, deleteMessage, editMessage, sendEphemeral } from "./methods/chat"
 
@@ -63,11 +64,75 @@ export async function readResponseUrl(key: string, token: string): Promise<Respo
   }
 }
 
-/** A trigger_id shaped like Slack's ("1234567890.1234567890.0123abcd…"). Nothing accepts one yet: no views.open. */
+/**
+ * A trigger_id shaped like Slack's ("1234567890.1234567890.0123abcd…"). It's
+ * random: the hub keeps whom it's for when the interaction carrying it is
+ * sent (TeamHub.interact), and views.open or views.push spends it.
+ */
 export function triggerId(): string {
   const digits = [...crypto.getRandomValues(new Uint8Array(10))].map((b) => b % 10).join("")
   return `${Math.floor(Date.now() / 1000)}.${digits}.${randomSecret(16)}`
 }
+
+/** How an interaction reached the app, and what it answered (a view_submission's response_action). */
+export interface Delivered {
+  delivered: "socket" | "http"
+  response?: unknown
+}
+
+/**
+ * Sends an interaction payload to an app, as Slack does: over Socket Mode
+ * when it has a link (an `interactive` envelope it must ack), else POSTed,
+ * signed, to its Interactivity Request URL. Not retried: an app that doesn't
+ * take it within 3 seconds is the person's error, `app_unreachable`. With
+ * `acceptsResponse`, the ack's payload (or the POST's JSON answer) comes back.
+ */
+export async function deliverInteraction(
+  ctx: Ctx<Actor>,
+  app: AppRow,
+  payload: Json,
+  { acceptsResponse = false }: { acceptsResponse?: boolean } = {},
+): Promise<Delivered> {
+  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(app.team_id))
+  const trigger =
+    typeof payload.trigger_id === "string" ? { id: payload.trigger_id, userId: ctx.auth.user.id } : undefined
+  const socket = await hub.interact(app.id, payload, { trigger, acceptsResponse })
+  if (socket.status === "acked") {
+    return { delivered: "socket", ...(socket.response ? { response: JSON.parse(socket.response) as unknown } : {}) }
+  }
+  if (socket.status === "timeout") throw unreachable("its Socket Mode connection didn't acknowledge within 3 seconds")
+  if (!app.interactivity_request_url) throw new CampflareError("interactivity_not_enabled")
+  const res = await postSigned(
+    app.interactivity_request_url,
+    app.signing_secret,
+    new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
+    { contentType: "application/x-www-form-urlencoded" },
+  )
+  if (!res.ok) {
+    throw unreachable(
+      res.status === 0
+        ? `no answer from its Interactivity Request URL (${res.reason})`
+        : `its Interactivity Request URL answered ${res.status}`,
+    )
+  }
+  if (!acceptsResponse || !res.body.trim()) return { delivered: "http" }
+  try {
+    return { delivered: "http", response: JSON.parse(res.body) as unknown }
+  } catch {
+    throw unreachable("its Interactivity Request URL answered with something other than JSON")
+  }
+}
+
+const unreachable = (why: string) =>
+  new CampflareError("app_unreachable", { response_metadata: { messages: [`[ERROR] the app didn't take it: ${why}`] } })
+
+/** Who did it, as an interaction payload names them. */
+export const interactor = (user: UserRow, teamId: string) => ({
+  id: user.id,
+  username: user.name,
+  name: user.name,
+  team_id: teamId,
+})
 
 type Json = Record<string, unknown>
 

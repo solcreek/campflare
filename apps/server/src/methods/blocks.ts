@@ -1,26 +1,54 @@
 import { getConversation, requireNotArchived, requireReadable } from "../db/conversations"
 import { reactionsStatement } from "../db/messages"
-import { stmt } from "../db/query"
+import { first, stmt } from "../db/query"
 import type { AppRow, MessageRow, ReactionRow } from "../db/rows"
-import { method } from "../api/context"
+import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { loadExtras, messageJson } from "../api/shapes"
-import { actionOf, channelName, ID_SELECTS, issueResponseUrl, requireChoices, triggerId } from "../interactivity"
-import { postSigned } from "../request-url"
+import {
+  actionOf,
+  channelName,
+  deliverInteraction,
+  ID_SELECTS,
+  interactor,
+  issueResponseUrl,
+  requireChoices,
+  triggerId,
+  type Choice,
+  type Clicked,
+} from "../interactivity"
+import { findView, formState, givenValues } from "../views"
 
 /**
  * A person clicks a button, or chooses in a select menu, in an app's message
- * (Campflare's own method; a Slack client uses an internal one). `channel`,
- * `ts` (the message), `action_id`, and `block_id` when several blocks share
- * the action_id. `value` names a feedback button, a static_select's or an
- * overflow's option, or the person or conversation chosen in a users,
- * conversations or channels select. The app whose bot posted
- * the message gets block_actions, as Slack sends it: over Socket Mode when it
- * has a link (an `interactive` envelope it must ack), else POSTed to its
- * Interactivity Request URL. Clicks aren't retried: an app that doesn't take
- * it within 3 seconds is the clicker's error, `app_unreachable`.
+ * or in a view the app opened for them (Campflare's own method; a Slack
+ * client uses an internal one). `channel` and `ts` name the message, or
+ * `view_id` the view; then `action_id`, and `block_id` when several blocks
+ * share the action_id. `value` names a feedback button, a static_select's or
+ * an overflow's option, or the person or conversation chosen in a users,
+ * conversations or channels select. In a view, `values` may say what its
+ * inputs hold now, as campflare.views.submit takes them. The app gets
+ * block_actions, as Slack sends it (see deliverInteraction).
  */
 method("campflare.blocks.action", "user", async (ctx) => {
+  const delivered = ctx.args.str("view_id") ? await inView(ctx) : await inMessage(ctx)
+  return { delivered: delivered.delivered }
+})
+
+const actionTs = () => `${(Date.now() / 1000).toFixed(6)}`
+
+/** The element clicked, found in `blocks`, with the people and conversations it chose. */
+function clickOn(ctx: Ctx<Actor>, blocks: unknown): Clicked & { choices: Choice[] } {
+  const clicked = actionOf(
+    blocks,
+    { blockId: ctx.args.str("block_id"), actionId: ctx.args.req("action_id"), value: ctx.args.str("value") },
+    actionTs(),
+  )
+  const field = ID_SELECTS[clicked.action.type as string]
+  return { ...clicked, choices: field ? [{ field, id: clicked.action[field] as string }] : [] }
+}
+
+async function inMessage(ctx: Ctx<Actor>) {
   const c = await getConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   // As on Slack, anyone who can read the conversation may click, not only its members.
   await requireReadable(ctx, c)
@@ -44,20 +72,14 @@ method("campflare.blocks.action", "user", async (ctx) => {
   const app = apps!.results[0] as AppRow | undefined
   // Only an app's messages answer clicks: a person's blocks have nobody to go to.
   if (!app) throw new CampflareError("not_interactive")
-  const now = `${(Date.now() / 1000).toFixed(6)}`
-  const { action, state } = actionOf(
-    message.blocks ? JSON.parse(message.blocks) : undefined,
-    { blockId: ctx.args.str("block_id"), actionId: ctx.args.req("action_id"), value: ctx.args.str("value") },
-    now,
-  )
-  const field = ID_SELECTS[action.type as string]
-  if (field) await requireChoices(ctx, [{ field, id: action[field] as string }])
+  const { action, state, choices } = clickOn(ctx, message.blocks ? JSON.parse(message.blocks) : undefined)
+  await requireChoices(ctx, choices)
   const user = ctx.auth.user
   const reply = message.thread_ts && message.thread_ts !== message.ts ? message.thread_ts : undefined
   const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
   const payload = {
     type: "block_actions",
-    user: { id: user.id, username: user.name, name: user.name, team_id: c.team_id },
+    user: interactor(user, c.team_id),
     api_app_id: app.id,
     token: "",
     container: {
@@ -84,27 +106,37 @@ method("campflare.blocks.action", "user", async (ctx) => {
     }),
     actions: [action],
   }
+  return deliverInteraction(ctx, app, payload)
+}
 
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(c.team_id))
-  const socket = await hub.interact(app.id, payload)
-  if (socket === "acked") return { delivered: "socket" }
-  if (socket === "timeout") throw unreachable("its Socket Mode connection didn't acknowledge within 3 seconds")
-  if (!app.interactivity_request_url) throw new CampflareError("interactivity_not_enabled")
-  const res = await postSigned(
-    app.interactivity_request_url,
-    app.signing_secret,
-    new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
-    { contentType: "application/x-www-form-urlencoded" },
+/** A click in a view: block_actions with the view, and its inputs' state, instead of a message. */
+async function inView(ctx: Ctx<Actor>) {
+  const found = await findView(ctx, { id: ctx.args.str("view_id") })
+  if (!found || found.userId !== ctx.auth.user.id) throw new CampflareError("not_found")
+  const view = found.stack[found.index]!.view
+  const app = await first<AppRow>(
+    ctx.env.DB,
+    "SELECT * FROM apps WHERE id = ? AND team_id = ?",
+    view.app_id,
+    ctx.auth.team.id,
   )
-  if (!res.ok) {
-    throw unreachable(
-      res.status === 0
-        ? `no answer from its Interactivity Request URL (${res.reason})`
-        : `its Interactivity Request URL answered ${res.status}`,
-    )
+  if (!app) throw new CampflareError("not_found")
+  const { action, choices } = clickOn(ctx, view.blocks)
+  // What's typed so far goes along, as on Slack; an incomplete form is fine here.
+  const form = formState(view, givenValues(ctx.args.json("values")))
+  await requireChoices(ctx, [...choices, ...form.choices])
+  const payload = {
+    type: "block_actions",
+    user: interactor(ctx.auth.user, ctx.auth.team.id),
+    api_app_id: app.id,
+    token: "",
+    container: { type: "view", view_id: view.id },
+    trigger_id: triggerId(),
+    team: { id: ctx.auth.team.id, domain: ctx.auth.team.domain },
+    enterprise: null,
+    is_enterprise_install: false,
+    view: { ...view, state: { values: form.values } },
+    actions: [action],
   }
-  return { delivered: "http" }
-})
-
-const unreachable = (why: string) =>
-  new CampflareError("app_unreachable", { response_metadata: { messages: [`[ERROR] the app didn't take it: ${why}`] } })
+  return deliverInteraction(ctx, app, payload)
+}
