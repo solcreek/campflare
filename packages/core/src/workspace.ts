@@ -3,6 +3,7 @@ import type { Click } from "./blocks"
 import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
 import { type Action, initialState, isReply, keyOf, reduce, type WorkspaceState } from "./state"
 import type { Conversation, Message, User } from "./types"
+import type { FormValues, View } from "./views"
 
 // A live workspace: the store, the Web API calls that fill it, and the RTM link
 // that keeps it current. UI code reads state and calls these methods; it never
@@ -65,6 +66,17 @@ export interface Workspace {
    * as Slack's stop button does. The completed message arrives as an event.
    */
   stopStream(channel: string, ts: string): Promise<void>
+  /** Clicks a button, or chooses in a menu, in an open view; what the form holds so far goes along. */
+  clickInView(viewId: string, click: Click, values?: FormValues): Promise<void>
+  /**
+   * Submits an open view's form. Resolves with the errors to show by
+   * block_id (required inputs left empty, or the app's response_action
+   * errors), or none once the app took it: the views then open, if any, are
+   * in `views`.
+   */
+  submitView(viewId: string, values: FormValues): Promise<{ errors?: Record<string, string> }>
+  /** Closes an open view (and those opened on it). */
+  closeView(viewId: string): Promise<void>
   /** Marks a conversation read up to its newest loaded message. */
   markRead(channel: string): Promise<void>
   join(channel: string): Promise<void>
@@ -134,7 +146,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   async function resync() {
     const conversations = await listConversations().catch(() => [])
     for (const conversation of conversations) dispatch({ type: "conversation", conversation })
-    await Promise.all(Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})))
+    await Promise.all([...Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})), loadViews()])
   }
 
   function goLive() {
@@ -189,6 +201,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
         users,
         conversations,
       })
+      void loadViews()
     } catch (error) {
       dispatch({ type: "failed", error: error instanceof ApiError ? error.code : String(error) })
       return false
@@ -353,6 +366,38 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     await client.call("campflare.chat.stopStream", { channel, ts })
   }
 
+  async function clickInView(viewId: string, { blockId, actionId, value }: Click, values?: FormValues) {
+    await client.call("campflare.blocks.action", {
+      view_id: viewId,
+      block_id: blockId,
+      action_id: actionId,
+      ...(value !== undefined ? { value } : {}),
+      ...(values ? { values } : {}),
+    })
+  }
+
+  type ViewsAnswer = ApiResult & { views: View[]; errors?: Record<string, string> }
+
+  async function submitView(viewId: string, values: FormValues) {
+    const r = await client.call<ViewsAnswer>("campflare.views.submit", { view_id: viewId, values })
+    dispatch({ type: "views", views: r.views })
+    return r.errors ? { errors: r.errors } : {}
+  }
+
+  async function closeView(viewId: string) {
+    // Gone at once (with those on it): a close isn't the app's to refuse, and a view the server lost is closed too.
+    const at = state.views.findIndex((v) => v.id === viewId)
+    if (at >= 0) dispatch({ type: "views", views: state.views.slice(0, at) })
+    const r = await client.call<ViewsAnswer>("campflare.views.close", { view_id: viewId }).catch(() => undefined)
+    if (r) dispatch({ type: "views", views: r.views })
+  }
+
+  /** The views open for you now: after loading, and after a reconnect (an app may have opened one meanwhile). */
+  async function loadViews() {
+    const r = await client.call<ViewsAnswer>("campflare.views.list").catch(() => undefined)
+    if (r) dispatch({ type: "views", views: r.views })
+  }
+
   async function markRead(channel: string) {
     const keys = state.timelines[channel]?.keys ?? []
     const newest = keys
@@ -421,6 +466,9 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     toggleReaction,
     click,
     stopStream,
+    clickInView,
+    submitView,
+    closeView,
     markRead,
     join,
     createChannel,

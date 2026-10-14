@@ -7,10 +7,22 @@ export type { Block, Inline, MrkdwnBlock } from "./mrkdwn"
 export { parseMarkdown, parseMarkdownInline } from "./markdown"
 export { createFileCache, fileKind, fileLabel, fitImage, formatBytes, imageSource, pastedFileName } from "./files"
 export type { FileCache, FileCacheOptions, FileKind } from "./files"
-export { interactiveBlocks } from "./blocks"
-export type { ActionButton, Click, FeedbackButton, InteractiveBlock } from "./blocks"
 export { planOf, richTextPlain, taskOf } from "./tasks"
 export type { Plan, Task, TaskSource, TaskStatus } from "./tasks"
+export { actionElement, interactiveBlocks, optionsOf } from "./blocks"
+export type {
+  ActionButton,
+  ActionElement,
+  Click,
+  FeedbackButton,
+  IconButton,
+  InteractiveBlock,
+  MenuOption,
+  OverflowMenu,
+  SelectMenu,
+} from "./blocks"
+export { formField, initialValue, initialValues } from "./views"
+export type { FormField, FormValues, View } from "./views"
 export { createWorkspace } from "./workspace"
 export type { NewFile, Workspace, WorkspaceOptions } from "./workspace"
 export type { Conversation, Message, MessageBlock, MessageFile, Reaction, Self, User } from "./types"

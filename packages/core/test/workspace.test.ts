@@ -391,6 +391,71 @@ describe("createWorkspace", () => {
     await expect(ws.stopStream("C1", "0000000200.000000")).rejects.toThrow("message_not_in_streaming_state")
   })
 
+  it("follows the views open for you: listed at the start, changed live, submitted, closed", async () => {
+    const form = { id: "V1", type: "modal", title: { text: "Deploy" }, blocks: [] }
+    const pushed = { id: "V2", type: "modal", title: { text: "Sure?" }, blocks: [] }
+    const { api, ws } = await started({
+      "campflare.views.list": () => ({ views: [form] }),
+      "campflare.views.submit": (args) =>
+        JSON.parse(args.values!).note?.text === "x"
+          ? { views: [form], errors: { note: "Too short" } }
+          : { views: [form, pushed], delivered: "http" },
+      "campflare.views.close": () => ({ views: [] }),
+      "campflare.blocks.action": () => ({ delivered: "http" }),
+    })
+    await settle()
+    expect(ws.getState().views).toEqual([form])
+    expect(await ws.submitView("V1", { note: { text: "x" } })).toEqual({ errors: { note: "Too short" } })
+    expect(await ws.submitView("V1", { note: { text: "Ship it" }, checks: { boxes: ["a", "b"] } })).toEqual({})
+    expect(ws.getState().views.map((v) => v.id)).toEqual(["V1", "V2"])
+    expect(api.calls.find((c) => c.method === "campflare.views.submit")?.args).toEqual({
+      view_id: "V1",
+      values: JSON.stringify({ note: { text: "x" } }),
+    })
+    await ws.clickInView("V2", { blockId: "b", actionId: "a", value: "v" }, { note: { text: "half" } })
+    expect(api.calls.at(-1)).toEqual({
+      method: "campflare.blocks.action",
+      args: {
+        view_id: "V2",
+        block_id: "b",
+        action_id: "a",
+        value: "v",
+        values: JSON.stringify({ note: { text: "half" } }),
+      },
+    })
+    await ws.clickInView("V2", { blockId: "b", actionId: "a" })
+    expect(api.calls.at(-1)?.args).toEqual({ view_id: "V2", block_id: "b", action_id: "a" })
+
+    // A view the store doesn't hold is closed on the server all the same; one it holds goes at once.
+    await ws.closeView("V9")
+    expect(ws.getState().views).toEqual([])
+    // A close the server refuses still closes it here.
+    const reopened = await started({ "campflare.views.list": () => ({ views: [form, pushed] }) })
+    await settle()
+    reopened.api.handlers["campflare.views.close"] = () => new Error("not_found")
+    await reopened.ws.closeView("V2")
+    expect(reopened.ws.getState().views).toEqual([form])
+  })
+
+  it("takes views_changed over RTM, and lists views again after a reconnect", async () => {
+    let listed = [{ id: "V1", type: "modal", blocks: [] }]
+    const { ws } = await started({ "campflare.views.list": () => ({ views: listed }) }, "rtm")
+    await settle()
+    const link = FakeSocket.all[0]!
+    link.receive({ type: "hello" })
+    link.receive({ type: "views_changed", views: [] })
+    expect(ws.getState().views).toEqual([])
+    link.receive({ type: "views_changed" })
+    expect(ws.getState().views).toEqual([])
+    listed = [{ id: "V3", type: "modal", blocks: [] }]
+    link.close()
+    for (let i = 0; i < 50 && FakeSocket.all.length < 2; i++) await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    await settle()
+    expect(ws.getState().views.map((v) => v.id)).toEqual(["V3"])
+    ws.stop()
+  })
+
   it("marks read up to the newest message, once", async () => {
     const { api, ws } = await started({ "conversations.mark": () => ({}) })
     await ws.markRead("C1")
