@@ -411,9 +411,11 @@ describe("response_url", () => {
     })
     const [latest] = await history(w)
     expect(latest).toMatchObject({ ts, text: "Approved", bot_id: app.botId, blocks: [{ type: "section" }] })
-    expect(await rtm.next((f) => f.subtype === "message_changed")).toMatchObject({
-      message: { ts, text: "Approved" },
-    })
+    // As on Slack, an app's replacement isn't an edit: no "(edited)".
+    expect(latest).not.toHaveProperty("edited")
+    const changed = await rtm.next((f) => f.subtype === "message_changed")
+    expect(changed).toMatchObject({ message: { ts, text: "Approved" } })
+    expect(changed.message).not.toHaveProperty("edited")
     rtm.close()
   })
 

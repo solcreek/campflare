@@ -149,21 +149,31 @@ method("chat.update", "actor", async (ctx) => {
   return { channel: c.id, ts: message.ts, ...updated }
 })
 
-/** Replaces a message's content with the caller's, and announces the change. */
-export async function editMessage(ctx: Ctx<Actor>, c: ConversationRow, message: MessageRow) {
+/**
+ * Replaces a message's content with the caller's, and announces the change.
+ * An app replacing its message through a response_url (`quiet`) doesn't mark
+ * it edited: Slack shows no "(edited)" for those.
+ */
+export async function editMessage(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  message: MessageRow,
+  { quiet = false }: { quiet?: boolean } = {},
+) {
   const next = content(ctx, !message.files)
   const db = ctx.env.DB
   // The edit, the edited row, the audience and the reactions: one round trip.
   const [, edited, audience, reactions] = await db.batch([
     stmt(
       db,
-      `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments), edited_ts = ?, edited_user = ?
+      `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments),
+         edited_ts = COALESCE(?, edited_ts), edited_user = COALESCE(?, edited_user)
        WHERE channel_id = ? AND ts = ?`,
       next.text,
       next.blocks,
       next.attachments,
-      nextTs(),
-      ctx.auth.user.id,
+      quiet ? null : nextTs(),
+      quiet ? null : ctx.auth.user.id,
       c.id,
       message.ts,
     ),

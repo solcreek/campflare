@@ -177,7 +177,7 @@ export async function handleResponseUrl(
       await deleteMessage(ctx, c, await requireMessage(ctx, c.id, claims.ts))
     } else if (args.bool("replace_original")) {
       if (c.is_archived) throw new CampflareError("is_archived")
-      await editMessage(ctx, c, await requireMessage(ctx, c.id, claims.ts))
+      await editMessage(ctx, c, await requireMessage(ctx, c.id, claims.ts), { quiet: true })
     } else if (args.str("response_type") === "in_channel") {
       if (c.is_archived) throw new CampflareError("is_archived")
       await postMessage(ctx, c, { ...authorOf(ctx), ...content(ctx), thread_ts: threadTs ?? null })
