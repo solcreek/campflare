@@ -9,6 +9,8 @@
 // names, or --state <dir>. --url or CAMPFLARE_WEB_PORT point it elsewhere.
 //
 //   shot '#/C123'                     a conversation (routes are URL hashes)
+//   shot 'http://localhost:8787/archives/C123/p1700000000000100'
+//                                     a permalink: the screen it redirects to
 //   shot '#/C123' '#/C456'            several, one screenshot each (shot.png, shot-2.png…)
 //   shot '#/C123' --as vincent        signed in as another seeded person
 //   shot --dark --width 900           dark theme, narrower window
@@ -30,6 +32,7 @@ import {
   pageUrl,
   parseShotArgs,
   report,
+  resolveRoute,
   stepProblem,
   UsageError,
   type ShotOptions,
@@ -54,6 +57,8 @@ async function run(page: Page, step: Step) {
 /** Shoots every route; returns the steps that failed. */
 async function shoot(base: string, options: ShotOptions): Promise<string[]> {
   const failed: string[] = []
+  // Permalinks become routes before a browser starts: a bad one fails fast.
+  const hashes = await Promise.all(options.routes.map((route) => resolveRoute(route)))
   const browser = await chromium.launch()
   try {
     for (const [i, route] of options.routes.entries()) {
@@ -68,7 +73,7 @@ async function shoot(base: string, options: ShotOptions): Promise<string[]> {
         if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`)
       })
 
-      const url = pageUrl(base, options.as, route)
+      const url = pageUrl(base, options.as, hashes[i]!)
       await page.goto(url)
       await page.waitForLoadState("networkidle").catch(() => {})
       await page.waitForTimeout(options.wait)
