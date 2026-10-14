@@ -269,3 +269,99 @@ test("signs in through the browser: the server's sign-in and consent, then back 
   // The person's own token, from before the browser sign-in, still works.
   expect((await authTest(created.token)).ok).toBe(true)
 })
+
+test("a permalink from chat.getPermalink opens its message, a root or a reply", async ({ browser }) => {
+  const api = async <T>(method: string, args: Record<string, string>) => {
+    const res = (await (
+      await fetch(`${stack.apiUrl}/api/${method}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${stack.people.alex}` },
+        body: new URLSearchParams(args),
+      })
+    ).json()) as T & { ok: boolean; error?: string }
+    expect(res.error).toBeUndefined()
+    return res
+  }
+  const name = `e2e-links-${Date.now()}`
+  const { channel } = await api<{ channel: { id: string } }>("conversations.create", { name })
+  const root = await api<{ ts: string }>("chat.postMessage", {
+    channel: channel.id,
+    text: "Où est le rapport ? ¿Dónde?",
+  })
+  const reply = await api<{ ts: string }>("chat.postMessage", {
+    channel: channel.id,
+    thread_ts: root.ts,
+    text: "報告書はここ 보고서 여기",
+  })
+  // Later messages, so the linked one isn't simply the newest.
+  for (let i = 0; i < 3; i++) await api("chat.postMessage", { channel: channel.id, text: `later ${i}` })
+  const permalink = async (ts: string) =>
+    (await api<{ permalink: string }>("chat.getPermalink", { channel: channel.id, message_ts: ts })).permalink
+
+  // The server's link redirects to the app (signed in as alex in dev), highlighted in the conversation.
+  const page = await (await browser.newContext()).newPage()
+  const rootLink = await permalink(root.ts)
+  expect(rootLink.startsWith(`${stack.apiUrl}/archives/${channel.id}/p`)).toBe(true)
+  await page.goto(rootLink)
+  await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible()
+  const linked = messages(page).locator('article[aria-current="true"]')
+  await expect(linked).toHaveCount(1)
+  await expect(linked).toContainText("Où est le rapport ?")
+  await expect(linked).toBeInViewport()
+
+  // A reply's link opens its thread with the reply highlighted.
+  await page.goto(await permalink(reply.ts))
+  const thread = page.getByRole("complementary", { name: "Thread" })
+  await expect(thread.locator('article[aria-current="true"]')).toContainText("報告書はここ")
+  expect(new URL(page.url()).hash).toBe(`#/${channel.id}/${root.ts}?msg=${reply.ts}`)
+
+  // A link to nothing gets the app's not-found view, not a bare 404.
+  await page.goto(`${stack.apiUrl}/archives/CNOPE404/p1700000000000100`)
+  await expect(page.getByRole("heading", { name: "Conversation not found", level: 1 })).toBeVisible()
+})
+
+test("a permalink opened signed out signs in through the browser first, then lands on the message", async ({
+  browser,
+}) => {
+  // Someone new, so the server asks for consent; their token signs them in on the server's page.
+  const run = Date.now().toString(36)
+  const call = async <T>(method: string, args: Record<string, string>, token = stack.people.alex!) =>
+    (await (
+      await fetch(`${stack.apiUrl}/api/${method}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: new URLSearchParams(args),
+      })
+    ).json()) as T & { ok: boolean }
+  const created = await call<{ token: string }>("campflare.users.create", {
+    name: `linnea-${run}`,
+    real_name: `Linnéa Park ${run}`,
+    email: `linnea-${run}@campflare.test`,
+  })
+  // In #general, which everyone is in.
+  const posted = await call<{ ts: string; channel: string }>("chat.postMessage", {
+    channel: "#general",
+    text: `Lien direct ${run}`,
+  })
+  const general = posted.channel
+  const { permalink } = await call<{ permalink: string }>("chat.getPermalink", {
+    channel: general,
+    message_ts: posted.ts,
+  })
+
+  // Where the link sends the browser, with the dev server's auto sign-in stepped aside (?as=none).
+  const target = new URL((await fetch(permalink, { redirect: "manual" })).headers.get("location")!)
+  target.search = "?as=none"
+  const page = await (await browser.newContext()).newPage()
+  await page.goto(target.href)
+  await page.getByRole("button", { name: "Sign in with your browser" }).click()
+  await page.getByText("Sign in with a token instead").click()
+  await page.getByLabel("Campflare token").fill(created.token)
+  await page.getByRole("button", { name: "Continue with token" }).click()
+  await page.getByRole("button", { name: "Allow" }).click()
+
+  // Back in the app, signed in as them, on the linked message.
+  await expect(page.getByRole("status", { name: "Connected" })).toBeVisible()
+  await expect(messages(page).locator('article[aria-current="true"]')).toContainText(`Lien direct ${run}`)
+  expect(new URL(page.url()).hash).toBe(`#/${general}?msg=${posted.ts}`)
+})
