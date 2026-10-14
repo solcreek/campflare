@@ -230,6 +230,25 @@ describe("thumbnails", () => {
     expect(image.src).toMatch(/^blob:/)
     expect(fetched(server)).toEqual(["tokyo_360.png", "tokyo.png"])
   })
+
+  it("draws an animated GIF from its moving thumbnail, not the still one", async () => {
+    vi.stubGlobal("devicePixelRatio", 1)
+    const gif = {
+      ...withFiles.files![0]!,
+      name: "tokyo.gif",
+      mimetype: "image/gif",
+      url_private: `${FILES}F1/tokyo.gif`,
+      ...thumbs,
+      thumb_360_gif: `${TMB}F1/tokyo_360.gif`,
+      deanimate_gif: `${TMB}F1/tokyo_deanimate_gif.png`,
+    }
+    const { server } = await signedIn([{ ...withFiles, files: [gif] }], (s) => {
+      s.api.files[gif.thumb_360_gif] = new Uint8Array([7])
+    })
+    const image = (await within(log()).findByRole("img", { name: "Nachtansicht von Tokio" })) as HTMLImageElement
+    expect(image.src).toMatch(/^blob:/)
+    expect(fetched(server)).toEqual(["tokyo_360.gif"])
+  })
 })
 
 describe("the image viewer", () => {
