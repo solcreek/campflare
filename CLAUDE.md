@@ -136,7 +136,8 @@ team). The hub holds hibernating WebSockets of two kinds:
   per app per event (round robin), as Slack does. An app sees what its installer
   or its bot user can see.
 - RTM (`rtm.connect`): raw events to every connection of the user, including
-  `rtmOnly` client-state events (`*_marked`, ephemeral messages).
+  `rtmOnly` client-state events (`*_marked`, ephemeral messages,
+  `assistant_thread_status_changed`).
   WebSocket URLs carry a signed, single-use, 60-second ticket (`src/api/tickets.ts`)
   that the hub checks against its own SQLite storage.
 
@@ -170,6 +171,26 @@ that cache. `event_types` filters Socket Mode as well (`subscribed()`;
 `message.channels`/`groups`/`im`/`mpim` by `channel_type`). Tests replace
 outbound POSTs with `setRequestUrlFetch()`; `fakeRequestUrls()` and
 `validSignature()` in `test/helpers.ts` record them and check signatures.
+
+**Streaming and app status.** `chat.startStream` / `appendStream` /
+`stopStream` (`src/methods/chat-stream.ts`, bot tokens only) store a message
+that grows: `text` is all its markdown so far, `blocks` holds it as `markdown`
+blocks plus any streamed or closing blocks in order (consecutive markdown
+extends the last markdown block), and `messages.stream_state` /
+`stream_mode` (migration 0010) give `streaming_state` (`in_progress`,
+`completed`) and the `markdown_text`-or-`chunks` mode Slack won't mix. Start
+publishes a `message`, each change a `message_changed`. An append is one
+batch after the conversation: a guarded UPDATE builds the blocks in SQL
+(`json_set`/`json_insert`), and the row read before it in the same batch says
+why it changed nothing (`message_not_owned_by_app`,
+`message_not_in_streaming_state`, `streaming_mode_mismatch`, the limits).
+`task_update`/`plan_update` chunks are checked and accepted but not shown.
+Outside DMs, start wants `recipient_user_id`/`recipient_team_id`.
+`assistant.threads.setStatus` (`src/methods/assistant.ts`) stores nothing: it
+publishes the RTM-only `assistant_thread_status_changed` (`channel`,
+`thread_ts`, `status`, `loading_messages`, the bot's `user`, `expires_in` 120) to the members; clients clear it on the bot's next message in the
+thread, an empty status, or the timeout. A client that connects later
+doesn't see a status already set.
 
 **Files.** `files.getUploadURLExternal` reserves a row and returns a signed
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;
@@ -365,7 +386,12 @@ a reloaded page) replaces the pending one at once (`pendingTwin`): a send by the
 `client.upload`'s `onUploaded` reports before completion, so uploads need no
 API beyond Slack's. `start()` is idempotent (StrictMode).
 `src/mrkdwn.ts` parses Slack mrkdwn into a tree; the app renders it as elements,
-never HTML, and only links http(s) and mailto. `src/files.ts` decides image vs
+never HTML, and only links http(s) and mailto. `src/markdown.ts` parses
+markdown (`markdown_text`, `markdown` blocks) into the same tree, plus
+headings, lists and rules; the app shows a message's blocks instead of its
+text when it has a markdown block (`message-body.tsx`). `state.statuses`
+holds apps' thread statuses; `threadStatus()` drops expired ones, and the
+thread view shows them (`thread-status.tsx`). `src/files.ts` decides image vs
 card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into
 shared object URLs via `client.fetchFile` (token sent to the server's origin
 only), revoked after a grace period; `workspace.upload` is optimistic like `send`.
