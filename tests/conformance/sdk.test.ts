@@ -180,6 +180,56 @@ describe("@slack/web-api", () => {
       "Direct stream",
     ])
   })
+
+  it("streams tasks and a plan with chatStream, until a person stops it: stopped_by_user", async () => {
+    const bot = client(app.botToken)
+    const question = await owner.chat.postMessage({ channel: general, text: "plan it?" })
+    const thread_ts = question.ts!
+    const streamer = bot.chatStream({
+      channel: general,
+      thread_ts,
+      recipient_user_id: ownerId,
+      recipient_team_id: (await owner.auth.test()).team_id!,
+      task_display_mode: "plan",
+    })
+    // Chunks flush at once, buffer or not.
+    const started = await streamer.append({
+      chunks: [
+        { type: "plan_update", title: "Plan de travail" },
+        { type: "task_update", id: "read", title: "Lire", status: "in_progress" },
+      ],
+    })
+    expect(started).toMatchObject({ ok: true, ts: streamer.ts })
+    await streamer.append({
+      chunks: [
+        { type: "task_update", id: "read", title: "Lire", status: "complete", output: "読んだ" },
+        { type: "task_update", id: "write", title: "Escribir", status: "in_progress" },
+      ],
+    })
+    const [, reply] = (await owner.conversations.replies({ channel: general, ts: thread_ts })).messages!
+    expect(reply).toMatchObject({
+      streaming_state: "in_progress",
+      blocks: [
+        {
+          type: "plan",
+          title: "Plan de travail",
+          tasks: [
+            { type: "task_card", task_id: "read", status: "complete", output: { type: "rich_text" } },
+            { type: "task_card", task_id: "write", status: "in_progress" },
+          ],
+        },
+      ],
+    })
+
+    // The person it answers stops it from their client.
+    const stopped = (await owner.apiCall("campflare.chat.stopStream", { channel: general, ts: streamer.ts })) as {
+      message?: { streaming_state?: string }
+    }
+    expect(stopped.message?.streaming_state).toBe("completed")
+    await expect(streamer.append({ chunks: [{ type: "markdown_text", text: "more" }] })).rejects.toMatchObject({
+      data: { error: "stopped_by_user" },
+    })
+  })
 })
 
 describe("@slack/socket-mode", () => {
