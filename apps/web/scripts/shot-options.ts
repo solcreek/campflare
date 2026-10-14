@@ -21,7 +21,20 @@ export interface ShotOptions {
   routes: string[]
   /** --click, --type and --press in the order they were given. */
   steps: Step[]
+  /** --help: print SHOT_HELP and shoot nothing. */
+  help?: true
 }
+
+export const SHOT_HELP = `Usage: pnpm shot [route...] [options]
+
+  route              a URL hash (#/C123, #/C123/<thread ts>) or a permalink; several give one shot each
+  --as <handle>      signed in as another seeded person (vincent, minjun, ada)
+  --dark             dark theme
+  --width N --height N   window size (1280 x 800)
+  --wait <ms>, -w    how long to let the app settle (and live events arrive) before the steps (1500)
+  --click role:name  --type text  --press key   steps, in order, on each route before the shot
+  --out <file>       where to save it (.shots/shot.png)
+  --state <dir>      the stack of pnpm dev:all --state <dir> --web; --url <app url> for any other`
 
 /** Thrown for a command line shot can't run; its message says what to change. */
 export class UsageError extends Error {}
@@ -53,6 +66,7 @@ export function parseShotArgs(args: string[]): ShotOptions {
         click: { type: "string", multiple: true },
         type: { type: "string", multiple: true },
         press: { type: "string", multiple: true },
+        help: { type: "boolean", short: "h" },
       },
     })
   } catch (error) {
@@ -77,6 +91,7 @@ export function parseShotArgs(args: string[]): ShotOptions {
     wait: number("wait", values.wait, 0),
     routes: positionals.length ? positionals : [""],
     steps,
+    ...(values.help ? { help: true as const } : {}),
   }
 }
 
