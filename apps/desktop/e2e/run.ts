@@ -10,7 +10,9 @@
 //
 // It starts a fresh, seeded server for the app to sign in to (scripts/dev.ts
 // --port 0, its state in a temporary directory) and stops it afterwards.
-// On Linux without a display, run it under xvfb-run. See
+// On Linux without a display, run it under xvfb-run; under dbus-run-session
+// too for the test of a second launch handing its link to the running app
+// (single instance goes over D-Bus), which is skipped without a session bus. See
 // https://v2.tauri.app/develop/tests/webdriver/
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process"
@@ -132,16 +134,23 @@ for (let i = 0; !(await listening()); i++) {
   await new Promise((r) => setTimeout(r, 100))
 }
 
-const tests = spawn(process.execPath, ["--test", "--test-concurrency=1", join(desktop, "e2e/login.test.ts")], {
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    ...config,
-    CAMPFLARE_DESKTOP_APP: app,
-    CAMPFLARE_E2E_STACK: JSON.stringify(stack),
-    WEBDRIVER_URL: `http://127.0.0.1:${port}`,
-  },
-})
-const code: number = await new Promise((ok) => tests.on("exit", (c) => ok(c ?? 1)))
+// In this order, one file after the other: they share the app's state, and
+// deep-link.test.ts signs in where login.test.ts left it signed out. (One
+// `node --test` for both would sort them by name.) A failure stops the run.
+const env = {
+  ...process.env,
+  // The app's own directories for what the tests launch themselves (a second launch with a link).
+  ...xdg,
+  ...config,
+  CAMPFLARE_DESKTOP_APP: app,
+  CAMPFLARE_E2E_STACK: JSON.stringify(stack),
+  WEBDRIVER_URL: `http://127.0.0.1:${port}`,
+}
+let code = 0
+for (const file of ["login.test.ts", "deep-link.test.ts"]) {
+  const tests = spawn(process.execPath, ["--test", join(desktop, "e2e", file)], { stdio: "inherit", env })
+  code = await new Promise<number>((ok) => tests.on("exit", (c) => ok(c ?? 1)))
+  if (code !== 0) break
+}
 if (code !== 0) console.error(`The server's output:\n${serverLog.slice(-20_000)}`)
 await finish(code)

@@ -501,7 +501,11 @@ sit behind a `SecretStore` trait, so `cargo test` fakes the keychain. The CSP in
 end-to-end tests (`apps/desktop/e2e/`, `run.ts` + W3C WebDriver helpers in
 `driver.ts`) start a fresh seeded server (`scripts/dev.ts --port 0`), give the
 app its own XDG dirs on Linux, sign in with a pasted token, send a message,
-restart the app expecting it signed in, then sign out; CI sets
+restart the app expecting it signed in, then sign out (`login.test.ts`); then
+launch it with a `campflare://` link as its argument (tauri-driver's
+`tauri:options.args`), to a message here and to another server, and start a
+second instance with a link while it runs (`deep-link.test.ts`; skipped
+without a D-Bus session bus, so CI runs them under `dbus-run-session`). CI sets
 `CAMPFLARE_E2E_SESSION=file` so they also check the fallback file.
 
 **Deep links.** The app opens `campflare://<host>[:<port>]/archives/<channel>[/p<ts>][?thread_ts=…&cid=…]`:
