@@ -155,9 +155,23 @@ and `content-security-policy: sandbox`. `/files-pri/*` and `/upload/v1/*` answer
 CORS (any origin, Authorization allowed, no credentials) so browser apps fetch
 with the token; there are no signed download URLs. `/avatars/:id` draws the
 user's initials (one query; a CJK name gives its first character).
-Thumbnails are a TODO: uploads record an image's `width`/`height` (sent as
-`original_w`/`original_h`) but no `thumb_*` are made, since resizing in a Worker
-is heavy. Until then the app fetches the whole file for an inline image.
+Thumbnails (`src/api/thumbs.ts`): uploads record an image's `width`/`height`
+(sent as `original_w`/`original_h`), and from those alone `fileJson` adds
+Slack's `thumb_*` (no query): `thumb_64` (square crop), `thumb_80` (padded
+square), `thumb_160`, and `thumb_360` always, `thumb_480`/`720`/`800`/`960`/`1024`
+only below the original's longest side, each from 360 up with `_w`/`_h`. PNG,
+JPEG, GIF and WebP only (not SVG). They're served at
+`/files-tmb/<team>-<file>/<name>_<size>.<png|jpg>` (`handleThumb`) with
+`url_private`'s auth, CORS and CSP; the Images binding (`IMAGES`, optional:
+without it no `thumb_*` are sent) makes each on its first fetch, and R2 keeps it
+at `<team>/<file>/thumb_<size>`; `files.delete` removes them. JPEG stays JPEG,
+the rest become PNG (a GIF's first frame: no `thumb_*_gif` yet). If Images fails
+on a file, the original is served, uncached. Locally (wrangler dev, vitest)
+Miniflare runs the binding with sharp, so tests make real thumbnails (it can't
+write GIF; `test/images.ts` encodes one); `setImagesOverride()` fakes a failing
+binding or none. The app draws an inline image from the smallest thumb that covers
+its box at `devicePixelRatio` (`imageSource` in core), the original for GIFs and
+in the viewer.
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with
@@ -341,8 +355,9 @@ composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
 Inline images (`message-files.tsx`) take their final box from
 `original_w`/`original_h` before the bytes come, and fetch them only when they
 near the viewport (`useInView`, IntersectionObserver; tests replace it with
-`ViewportObserver` in `test/setup.ts`); a click opens the message's images in a
-viewer dialog.
+`ViewportObserver` in `test/setup.ts`), from the best-fitting thumbnail
+(`imageSource`), falling back to `url_private` if it fails; a click opens the
+message's images, as originals, in a viewer dialog.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
 Rust side opens other origins' links in the system browser and keeps the session
