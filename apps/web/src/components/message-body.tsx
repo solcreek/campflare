@@ -4,7 +4,7 @@ import { Markdown, Mrkdwn } from "./mrkdwn"
 // What a message says. Text is mrkdwn; a message with markdown blocks (what an
 // app streams with chat.startStream, or posts as a markdown block) shows its
 // blocks instead, in order: markdown, and the text of sections, headers and
-// context. Blocks that act (buttons and the like) wait for interactivity.
+// context. Blocks that act (buttons, feedback buttons) are MessageBlocks's.
 
 interface TextObject {
   type?: string
