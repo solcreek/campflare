@@ -41,8 +41,8 @@ function web(search = "", hash = "", handlers: Record<string, Handler> = {}) {
 }
 
 /** Starts a sign-in on the login screen and returns the authorize URL it left for. */
-async function leaveForServer(server = "https://x.test") {
-  const app = web()
+async function leaveForServer(server = "https://x.test", hash = "") {
+  const app = web("", hash)
   const user = userEvent.setup()
   render(<App store={app.store} connect={app.server.connect} fetch={app.server.api.fetch} signIn={app.signIn} />)
   const field = await screen.findByLabelText("Server")
@@ -118,6 +118,17 @@ describe("signing in through the browser", () => {
     expect(app.replaced).toEqual(["/#/CDEV"])
     // Spent: the same state can't be used twice.
     expect(sessionStorage.getItem(`campflare.oauth.${state}`)).toBeNull()
+  })
+
+  it("comes back to the link the sign-in started from", async () => {
+    // A permalink opened signed out: the redirect URI is the app's root, so the route rides in the pending sign-in.
+    const link = "#/CGEN/1700000200.000000?msg=1700000300.000000"
+    const state = (await leaveForServer("https://x.test", link)).searchParams.get("state")!
+    const app = returnWith({ code: "code-1", state }, "", {
+      "oauth.v2.access": () => ({ authed_user: { id: "U1", access_token: "xoxp-new" }, team: { id: "T1" } }),
+    })
+    await screen.findByRole("heading", { name: "general", level: 1 })
+    expect(app.replaced).toEqual([`/${link}`])
   })
 
   it("refuses a return it didn't start, a denial and a code the server won't take", async () => {

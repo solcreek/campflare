@@ -77,6 +77,8 @@ interface Pending {
   verifier: string
   clientId: string
   redirectUri: string
+  /** Where the person was when they signed in (a permalink's #/C123?msg=…): the redirect URI can't carry it. */
+  hash?: string
 }
 
 export interface WebSignInOptions {
@@ -102,12 +104,13 @@ export function webSignIn(opts: WebSignInOptions = {}): BrowserSignIn {
   async function finish(): Promise<Session> {
     const q = query()
     const state = q.get("state") ?? ""
-    // The code is single-use and the query says nothing once read: out of the address bar and history.
-    replaceUrl(`${loc.pathname}${loc.hash}`)
     const saved = storage.getItem(KEY + state)
     storage.removeItem(KEY + state)
-    if (!saved) throw new OAuthError("state_mismatch")
-    const pending = JSON.parse(saved) as Pending
+    const pending = saved ? (JSON.parse(saved) as Pending) : undefined
+    // The code is single-use and the query says nothing once read: out of the address bar and history.
+    // Back where the sign-in started, so a link that asked for it lands on its message.
+    replaceUrl(`${loc.pathname}${pending?.hash || loc.hash}`)
+    if (!pending) throw new OAuthError("state_mismatch")
     const code = callbackCode(q, state)
     const res = await exchangeCode(pending.server, { ...pending, code, fetch: opts.fetch })
     return { url: pending.server, token: res.authed_user.access_token, via: "oauth" }
@@ -118,7 +121,7 @@ export function webSignIn(opts: WebSignInOptions = {}): BrowserSignIn {
       const { verifier, challenge } = await createPkce()
       const state = randomState()
       const { clientId, redirectUri } = webClient(loc.origin)
-      const pending: Pending = { server: serverRoot(server), verifier, clientId, redirectUri }
+      const pending: Pending = { server: serverRoot(server), verifier, clientId, redirectUri, hash: loc.hash }
       storage.setItem(KEY + state, JSON.stringify(pending))
       navigate(authorizeUrl(server, { clientId, redirectUri, state, challenge, userScopes: USER_SCOPES }))
       return null
