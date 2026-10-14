@@ -10,7 +10,7 @@ import { fakeSfu, type FakeSfu } from "./fake-sfu"
 import exchanges from "./fixtures/sfu/exchanges.json"
 import summaries from "./fixtures/speech/summaries.json"
 import whisper from "./fixtures/speech/whisper.json"
-import { call, connect, expectError, ok, workspace, type Workspace } from "./helpers"
+import { call, connect, eventually, expectError, ok, workspace, type Workspace } from "./helpers"
 
 // Huddle transcription offline: a fake SFU, Whisper answering with its
 // recorded responses, and the SFU's adapter played by a WebSocket we open to
@@ -51,17 +51,6 @@ const join = (who: { token: string }, channel: string) =>
   ok<{ session_id: string }>("campflare.huddles.join", { channel, sdp: OFFER, mid: "0" }, who.token)
 
 const owner = (w: Workspace) => ({ id: w.owner.id, token: w.owner.token })
-
-/** Waits for a condition the Worker reaches after its response (waitUntil work). */
-async function eventually<T>(check: () => Promise<T | undefined> | T | undefined, ms = 5000): Promise<T> {
-  const end = Date.now() + ms
-  for (;;) {
-    const value = await check()
-    if (value) return value
-    if (Date.now() > end) throw new Error("timed out")
-    await new Promise((r) => setTimeout(r, 25))
-  }
-}
 
 /** 48 kHz stereo PCM: a tone (speech, to the segmenter) or silence, in 20 ms adapter packets. */
 function packets(ms: number, amplitude: number, from = 0): Uint8Array[] {
