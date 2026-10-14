@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "./env"
 import { ids } from "./api/ids"
+import { appMentionOf, mentionedUsers } from "./app-events"
 
 // One TeamHub per workspace holds its live connections and fans events out.
 //
@@ -329,39 +330,11 @@ export class TeamHub extends DurableObject<Env> {
     }
 
     for (const [appId, links] of apps) {
-      const ws = this.nextLink(appId)!
-      const conn = links.find((l) => l.ws === ws)?.conn ?? links[0]!.conn
-      // Authorized as the installer when the event is theirs to see, else as the bot.
-      const asInstaller = conn.installerUserId && (audience === "team" || audience.includes(conn.installerUserId))
-      const envelope = {
-        envelope_id: ids.envelope(),
-        type: "events_api",
-        accepts_response_payload: false,
-        retry_attempt: 0,
-        retry_reason: "",
-        payload: {
-          token: "",
-          team_id: input.teamId,
-          context_team_id: input.teamId,
-          context_enterprise_id: null,
-          api_app_id: appId,
-          event: body,
-          type: "event_callback",
-          event_id: ids.event(),
-          event_time: Math.floor(Number(eventTs)),
-          authorizations: [
-            {
-              enterprise_id: null,
-              team_id: input.teamId,
-              user_id: asInstaller ? conn.installerUserId : conn.botUserId,
-              is_bot: !asInstaller,
-              is_enterprise_install: false,
-            },
-          ],
-          is_ext_shared_channel: false,
-        },
+      // Every link of an app has the same installer and bot.
+      const { installerUserId, botUserId } = links[0]!.conn
+      for (const payload of callbacksFor(input, body, { appId, installerUserId, botUserId })) {
+        delivered += await this.deliver(this.nextLink(appId)!, appId, socketEnvelope(payload))
       }
-      delivered += await this.deliver(ws, appId, envelope)
     }
     return delivered
   }
@@ -465,6 +438,81 @@ export class TeamHub extends DurableObject<Env> {
     } catch {
       // already closed
     }
+  }
+}
+
+interface AppView {
+  appId: string
+  installerUserId?: string
+  botUserId?: string
+}
+
+/**
+ * What one app receives for a published event, as event_callbacks: the event,
+ * and app_mention when it's a new message mentioning the app's bot user in a
+ * conversation the bot is in (never for the bot's own message).
+ */
+function callbacksFor(input: PublishInput, body: Record<string, unknown>, app: AppView) {
+  const { teamId, audience } = input
+  // Authorized as the installer when the event is theirs to see, else as the bot.
+  const asInstaller = app.installerUserId && (audience === "team" || audience.includes(app.installerUserId))
+  const callbacks = [
+    callbackOf(teamId, app.appId, body, {
+      userId: (asInstaller ? app.installerUserId : app.botUserId) ?? "",
+      isBot: !asInstaller,
+    }),
+  ]
+  const bot = app.botUserId
+  if (
+    bot &&
+    body.user !== bot &&
+    (audience === "team" || audience.includes(bot)) &&
+    mentionedUsers(body).has(bot)
+  ) {
+    callbacks.push(callbackOf(teamId, app.appId, appMentionOf(body), { userId: bot, isBot: true }))
+  }
+  return callbacks
+}
+
+/** Slack's event_callback: an event as the Events API wraps it for one app. */
+function callbackOf(
+  teamId: string,
+  appId: string,
+  event: Record<string, unknown>,
+  authorized: { userId: string; isBot: boolean },
+) {
+  return {
+    token: "",
+    team_id: teamId,
+    context_team_id: teamId,
+    context_enterprise_id: null,
+    api_app_id: appId,
+    event,
+    type: "event_callback",
+    event_id: ids.event(),
+    event_time: Math.floor(Number(event.event_ts)),
+    authorizations: [
+      {
+        enterprise_id: null,
+        team_id: teamId,
+        user_id: authorized.userId,
+        is_bot: authorized.isBot,
+        is_enterprise_install: false,
+      },
+    ],
+    is_ext_shared_channel: false,
+  }
+}
+
+/** A Socket Mode envelope around an event_callback. */
+function socketEnvelope(payload: ReturnType<typeof callbackOf>) {
+  return {
+    envelope_id: ids.envelope(),
+    type: "events_api",
+    accepts_response_payload: false,
+    retry_attempt: 0,
+    retry_reason: "",
+    payload,
   }
 }
 
