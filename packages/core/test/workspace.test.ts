@@ -360,6 +360,26 @@ describe("createWorkspace", () => {
     expect(api.calls.at(-1)?.method).toBe("reactions.add")
   })
 
+  it("clicks a button with campflare.blocks.action, and passes on the app's refusal", async () => {
+    const { api, ws } = await started({ "campflare.blocks.action": () => ({ delivered: "http" }) })
+    await ws.click("C1", "0000000200.000000", { blockId: "decide", actionId: "approve" })
+    await ws.click("C1", "0000000200.000000", { blockId: "rate", actionId: "feedback", value: "up" })
+    expect(api.calls.slice(-2)).toEqual([
+      {
+        method: "campflare.blocks.action",
+        args: { channel: "C1", ts: "0000000200.000000", block_id: "decide", action_id: "approve" },
+      },
+      {
+        method: "campflare.blocks.action",
+        args: { channel: "C1", ts: "0000000200.000000", block_id: "rate", action_id: "feedback", value: "up" },
+      },
+    ])
+    api.handlers["campflare.blocks.action"] = () => new Error("app_unreachable")
+    await expect(ws.click("C1", "0000000200.000000", { blockId: "b", actionId: "a" })).rejects.toThrow(
+      "app_unreachable",
+    )
+  })
+
   it("marks read up to the newest message, once", async () => {
     const { api, ws } = await started({ "conversations.mark": () => ({}) })
     await ws.markRead("C1")
