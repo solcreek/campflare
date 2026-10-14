@@ -192,29 +192,27 @@ export interface RequestUrlHit {
  */
 export function fakeRequestUrls() {
   const hits: RequestUrlHit[] = []
-  const waiters: { test: (h: RequestUrlHit) => boolean; resolve: (h: RequestUrlHit) => void }[] = []
   const fake = {
     hits,
     answer: (hit: RequestUrlHit): Response | Promise<Response> =>
       hit.body.type === "url_verification" ? Response.json({ challenge: hit.body.challenge }) : new Response(""),
-    /** The first POST (already made or yet to come) that passes `test`, taken off `hits`. */
-    next(test: (h: RequestUrlHit) => boolean = () => true, timeoutMs = 2000): Promise<RequestUrlHit> {
-      const seen = hits.find(test)
-      if (seen) {
-        hits.splice(hits.indexOf(seen), 1)
-        return Promise.resolve(seen)
+    /**
+     * The first POST (already made or yet to come) that passes `test`, taken
+     * off `hits`. It looks every few milliseconds rather than being woken by
+     * the POST: a POST made in a request's waitUntil would otherwise resume
+     * the test inside that request, where its next SELF.fetch never returns.
+     */
+    async next(test: (h: RequestUrlHit) => boolean = () => true, timeoutMs = 2000): Promise<RequestUrlHit> {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const seen = hits.find(test)
+        if (seen) {
+          hits.splice(hits.indexOf(seen), 1)
+          return seen
+        }
+        if (Date.now() > deadline) throw new Error(`no matching POST; got ${JSON.stringify(hits)}`)
+        await new Promise((r) => setTimeout(r, 5))
       }
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`no matching POST; got ${JSON.stringify(hits)}`)), timeoutMs)
-        waiters.push({
-          test,
-          resolve: (h) => {
-            clearTimeout(timer)
-            hits.splice(hits.indexOf(h), 1)
-            resolve(h)
-          },
-        })
-      })
     },
     restore: () => setRequestUrlFetch(undefined),
   }
@@ -226,11 +224,6 @@ export function fakeRequestUrls() {
     const body = JSON.parse(form ? (new URLSearchParams(raw).get("payload") ?? "null") : raw)
     const hit = { url: String(input), headers, raw, body }
     hits.push(hit)
-    const waiter = waiters.find((w) => w.test(hit))
-    if (waiter) {
-      waiters.splice(waiters.indexOf(waiter), 1)
-      waiter.resolve(hit)
-    }
     return fake.answer(hit)
   })
   return fake
