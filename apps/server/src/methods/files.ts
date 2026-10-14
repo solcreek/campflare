@@ -11,7 +11,7 @@ import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds } from "../api/ids"
 import { imageSize, isAnimated, mimeOf } from "../api/media"
 import { fileJson } from "../api/shapes"
-import { imagesOf, makeThumb, THUMB_SIZES, thumbKey, thumbSizeOf, thumbSizes } from "../api/thumbs"
+import { imagesOf, isOriginal, makeThumb, THUMB_VARIANTS, thumbKey, thumbVariantOf, thumbVariants } from "../api/thumbs"
 
 export const MAX_FILE_BYTES = 1024 * 1024 * 1024
 /** Bytes buffered to read an image's size; larger files stream straight to R2. */
@@ -210,7 +210,7 @@ method("files.delete", "actor", async (ctx) => {
   const admin = ctx.auth.kind === "user" && ctx.auth.user.is_admin
   if (f.user_id !== ctx.auth.user.id && !admin) throw new CampflareError("cant_delete_file")
   // The thumbnails too, made or not: deleting a missing key is no error.
-  await ctx.env.FILES.delete([r2Key(f), ...THUMB_SIZES.map((size) => thumbKey(f, size))])
+  await ctx.env.FILES.delete([r2Key(f), ...THUMB_VARIANTS.map((v) => thumbKey(f, v))])
   await run(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id)
   const channels = JSON.parse(f.channels) as string[]
   const members = await all<{ user_id: string }>(
@@ -282,27 +282,29 @@ export async function handleDownload(env: Env, request: Request, teamFile: strin
 }
 
 /**
- * GET /files-tmb/<team>-<file>/<name>_<size>.<ext>: a thumbnail (thumb_*), with the same auth
- * as url_private. The Images binding makes it on its first fetch, and R2 keeps it beside the
- * original (concurrent first fetches each make it; the last write stays). If Images fails on
- * the file, the original is served instead, uncached, so the image still shows.
+ * GET /files-tmb/<team>-<file>/<name>_<size>.<ext>: a thumbnail (thumb_*, deanimate_gif), with
+ * the same auth as url_private. The Images binding makes it on its first fetch, and R2 keeps it
+ * beside the original (concurrent first fetches each make it; the last write stays). If Images
+ * fails on the file (local Images can't write GIF at all), the original is served instead,
+ * uncached, so the image still shows. An animated GIF that already fits is its own thumb_<n>_gif.
  */
 export async function handleThumb(env: Env, request: Request, teamFile: string, name: string) {
   const f = await visibleFile(env, request, teamFile)
   if (f instanceof Response) return f
-  const size = thumbSizeOf(name)
+  const variant = thumbVariantOf(name)
   const images = imagesOf(env)
-  if (!images || !size || !thumbSizes(f).includes(size)) return notFound()
-  const key = thumbKey(f, size)
+  if (!images || !variant || !thumbVariants(f).includes(variant)) return notFound()
+  if (isOriginal(f, variant)) return (await serveObject(env, request, r2Key(f), name, false)) ?? notFound()
+  const key = thumbKey(f, variant)
   const cached = await serveObject(env, request, key, name, false)
   if (cached) return cached
   const original = await env.FILES.get(r2Key(f))
   if (!original) return notFound()
   try {
-    const thumb = await makeThumb(images, f, size, original.body)
+    const thumb = await makeThumb(images, f, variant, original.body)
     await env.FILES.put(key, thumb.bytes, { httpMetadata: { contentType: thumb.contentType } })
   } catch (error) {
-    console.error(`thumbnail ${size} of ${f.id} failed`, error)
+    console.error(`thumbnail ${variant} of ${f.id} failed`, error)
     return (await serveObject(env, request, r2Key(f), f.name, false)) ?? notFound()
   }
   return (await serveObject(env, request, key, name, false)) ?? notFound()

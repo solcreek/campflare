@@ -2,7 +2,7 @@ import { SELF } from "cloudflare:test"
 import { env } from "cloudflare:workers"
 import { afterEach, describe, expect, it } from "vitest"
 import { imageSize } from "../src/api/media"
-import { fittedSize, setImagesOverride, thumbSizeOf, thumbSizes, thumbsJson } from "../src/api/thumbs"
+import { fittedSize, setImagesOverride, thumbSizes, thumbsJson, thumbVariantOf, thumbVariants } from "../src/api/thumbs"
 import type { FileRow } from "../src/db/rows"
 import { ok, workspace } from "./helpers"
 import { convert, makeGif, makePng } from "./images"
@@ -41,6 +41,7 @@ const row = (over: Partial<FileRow>): FileRow =>
     mimetype: "image/png",
     width: 1600,
     height: 1200,
+    animated: 0,
     ...over,
   }) as FileRow
 
@@ -75,9 +76,39 @@ describe("thumbnail sizes", () => {
       "https://x.test/files-tmb/T1-F1/image_80.png",
     )
     expect(thumbsJson("https://x.test", row({}), false)).toEqual({})
-    expect(thumbSizeOf("a_b_360.png")).toBe(360)
-    expect(thumbSizeOf("a_361.png")).toBeUndefined()
-    expect(thumbSizeOf("a_360.svg")).toBeUndefined()
+    expect(thumbVariantOf("a_b_360.png")).toBe("360")
+    expect(thumbVariantOf("a_64.jpg")).toBe("64")
+    expect(thumbVariantOf("a_361.png")).toBeUndefined()
+    expect(thumbVariantOf("a_360.svg")).toBeUndefined()
+  })
+
+  it("adds Slack's thumb_360_gif, thumb_480_gif and deanimate_gif for animated images", () => {
+    const moving = row({ name: "baile.gif", mimetype: "image/gif", width: 400, height: 300, animated: 1 })
+    expect(thumbVariants(moving)).toEqual(["64", "80", "160", "360", "360_gif", "deanimate_gif"])
+    const json = thumbsJson("https://x.test", moving, true)
+    expect(json).toMatchObject({
+      thumb_360: "https://x.test/files-tmb/T1-F1/baile_360.png",
+      thumb_360_gif: "https://x.test/files-tmb/T1-F1/baile_360.gif",
+      thumb_360_w: 360,
+      thumb_360_h: 270,
+      deanimate_gif: "https://x.test/files-tmb/T1-F1/baile_deanimate_gif.png",
+    })
+    expect(json.thumb_480_gif).toBeUndefined()
+    // thumb_480_gif comes with thumb_480; there's no larger GIF.
+    const big = row({ mimetype: "image/gif", animated: 1 })
+    expect(thumbVariants(big)).toEqual([...thumbSizes(big).map(String), "360_gif", "480_gif", "deanimate_gif"])
+    // An animated WebP's are GIFs too; a still GIF, or a GIF of unknown size, has none.
+    expect(thumbVariants(row({ mimetype: "image/webp", animated: 1 }))).toContain("480_gif")
+    expect(thumbVariants(row({ mimetype: "image/gif", animated: 0 }))).not.toContain("360_gif")
+    expect(thumbVariants(row({ mimetype: "image/gif", animated: 1, width: null }))).toEqual([])
+    // Uploaded before animation was recorded: a GIF counts as animated, other images don't.
+    expect(thumbVariants(row({ mimetype: "image/gif", animated: null }))).toContain("deanimate_gif")
+    expect(thumbVariants(row({ animated: null }))).not.toContain("deanimate_gif")
+    expect(thumbVariantOf("baile_360.gif")).toBe("360_gif")
+    expect(thumbVariantOf("baile_480.gif")).toBe("480_gif")
+    expect(thumbVariantOf("baile_720.gif")).toBeUndefined()
+    expect(thumbVariantOf("baile_deanimate_gif.png")).toBe("deanimate_gif")
+    expect(thumbVariantOf("baile_deanimate_gif.jpg")).toBeUndefined()
   })
 })
 
@@ -200,6 +231,81 @@ describe("thumbnails", () => {
     expect(await sizeOf(res)).toEqual({ width: 360, height: 288 })
   })
 
+  it("give animated GIFs moving ones: GIFs from Images, else the original", async () => {
+    const w = await workspace()
+    const bytes = makeGif(500, 400, 2)
+    const file = await share(w.owner.token, w.general, "動き.gif", bytes)
+    const base = `/files-tmb/${w.teamId}-${file.id}/`
+    expect(file).toMatchObject({
+      original_w: 500,
+      original_h: 400,
+      thumb_360_w: 360,
+      thumb_360_h: 288,
+      thumb_480_w: 480,
+      thumb_480_h: 384,
+    })
+    expect(file.thumb_360_gif).toContain(`${base}${encodeURIComponent("動き_360.gif")}`)
+    expect(file.thumb_480_gif).toContain(`${base}${encodeURIComponent("動き_480.gif")}`)
+    expect(file.deanimate_gif).toContain(`${base}${encodeURIComponent("動き_deanimate_gif.png")}`)
+    expect(file.thumb_720_gif).toBeUndefined()
+    expect(file.thumb_360).toMatch(/_360\.png$/)
+
+    // Local Images can't write GIF: the original stands in, uncached.
+    const local = await get(file.thumb_360_gif as string, w.owner.token)
+    expect(local.headers.get("content-type")).toBe("image/gif")
+    expect(new Uint8Array(await local.arrayBuffer())).toEqual(bytes)
+    expect(await env.FILES.head(`${w.teamId}/${file.id}/thumb_360_gif`)).toBeNull()
+
+    // Real Images writes an animated GIF, which R2 keeps.
+    const calls: { transforms: ImageTransform[]; output: ImageOutputOptions }[] = []
+    setImagesOverride(gifWritingImages(calls))
+    const made = await get(file.thumb_480_gif as string, w.owner.token)
+    expect(made.headers.get("content-type")).toBe("image/gif")
+    expect(made.headers.get("content-disposition")).toBe(
+      `inline; filename*=UTF-8''${encodeURIComponent("動き_480.gif")}`,
+    )
+    expect(await sizeOf(made)).toEqual({ width: 480, height: 384 })
+    expect(calls).toEqual([
+      { transforms: [{ width: 480, height: 480, fit: "scale-down" }], output: { format: "image/gif", anim: true } },
+    ])
+    expect((await env.FILES.head(`${w.teamId}/${file.id}/thumb_480_gif`))?.httpMetadata?.contentType).toBe("image/gif")
+    // The stills ask Images for no animation.
+    await get(file.thumb_360 as string, w.owner.token)
+    expect(calls[1]!.output).toEqual({ format: "image/png", anim: false })
+    setImagesOverride(undefined)
+
+    // deanimate_gif: the first frame at full size, as a PNG.
+    const still = await get(file.deanimate_gif as string, w.owner.token)
+    expect(still.headers.get("content-type")).toBe("image/png")
+    expect(await sizeOf(still)).toEqual({ width: 500, height: 400 })
+
+    await ok("files.delete", { file: file.id }, w.owner.token)
+    for (const key of ["thumb_480_gif", "deanimate_gif", "thumb_360"]) {
+      expect(await env.FILES.head(`${w.teamId}/${file.id}/${key}`)).toBeNull()
+    }
+  })
+
+  it("serve a small animated GIF as its own thumb_360_gif, and give still GIFs none", async () => {
+    const w = await workspace()
+    const bytes = makeGif(176, 226, 3)
+    const small = await share(w.owner.token, w.general, "danse.gif", bytes)
+    expect(small).toMatchObject({ thumb_360_w: 176, thumb_360_h: 226 })
+    expect(small.thumb_480_gif).toBeUndefined()
+    // No Images involved: even a failing binding serves it.
+    setImagesOverride(failingImages())
+    const res = await get(small.thumb_360_gif as string, w.owner.token)
+    expect(res.headers.get("content-disposition")).toBe("inline; filename*=UTF-8''danse_360.gif")
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes)
+    setImagesOverride(undefined)
+
+    const still = await share(w.owner.token, w.general, "plan.gif", makeGif(500, 400, 1, { loop: true }))
+    expect(still.thumb_480).toMatch(/plan_480\.png$/)
+    expect(Object.keys(still).filter((k) => k.endsWith("_gif"))).toEqual([])
+    const base = (still.thumb_360 as string).replace(/[^/]+$/, "")
+    expect((await get(`${base}plan_360.gif`, w.owner.token)).status).toBe(404)
+    expect((await get(`${base}plan_deanimate_gif.png`, w.owner.token)).status).toBe(404)
+  })
+
   it("keep JPEG as JPEG, and give GIFs a PNG of the first frame", async () => {
     const w = await workspace()
     const png = await makePng(800, 600)
@@ -269,6 +375,42 @@ describe("thumbnails", () => {
     expect((await get(file.url_private, w.owner.token)).status).toBe(404)
   })
 })
+
+/**
+ * The local Images binding, except that it "writes" GIFs as real Images does: a two-frame GIF of
+ * the size asked for, standing in for the resized animation. Records what it was asked.
+ */
+function gifWritingImages(calls: { transforms: ImageTransform[]; output: ImageOutputOptions }[]): ImagesBinding {
+  const real = env.IMAGES!
+  return {
+    info: (stream: ReadableStream<Uint8Array>) => real.info(stream),
+    input(stream: ReadableStream<Uint8Array>) {
+      const transforms: ImageTransform[] = []
+      const transformer = {
+        transform(t: ImageTransform) {
+          transforms.push(t)
+          return transformer
+        },
+        draw: () => transformer,
+        async output(output: ImageOutputOptions) {
+          calls.push({ transforms, output })
+          if (output.format !== "image/gif") {
+            return transforms.reduce((t, x) => t.transform(x), real.input(stream)).output(output)
+          }
+          const info = (await real.info(stream)) as { width: number; height: number }
+          const { width, height } = fittedSize(transforms[0]?.width ?? 0, info.width, info.height)
+          const bytes = makeGif(width, height, 2)
+          return {
+            response: () => new Response(bytes, { headers: { "content-type": "image/gif" } }),
+            contentType: () => "image/gif",
+            image: () => new Blob([bytes]).stream(),
+          }
+        },
+      }
+      return transformer
+    },
+  } as unknown as ImagesBinding
+}
 
 /** An Images binding that fails every transformation, as it does on a file it can't read. */
 function failingImages(): ImagesBinding {
