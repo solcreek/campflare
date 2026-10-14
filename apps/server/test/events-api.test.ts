@@ -490,11 +490,16 @@ describe("delivery health in campflare.apps.info", () => {
       attempts: 0,
       failures: 0,
     })
+    // The pending retry goes to the new URL; taken, it leaves nothing to fire in a later test.
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "refused"))
+    expect(await pending(w.teamId)).toEqual([])
   })
 
   it("forgets attempts older than the hour", async () => {
     const { w, app } = await subscribedApp()
-    urls.answer = () => new Response("", { status: 500 })
+    // Not retried, so nothing fires in a later test.
+    urls.answer = () => new Response("", { status: 500, headers: { "x-slack-no-retry": "1" } })
     await ok("chat.postMessage", { channel: w.general, text: "old" }, w.owner.token)
     await urls.next(isEvent("message", "old"))
     await counted(w, app, 1)
@@ -591,6 +596,9 @@ describe("turning off a failing Request URL", () => {
     urls.answer = () => new Response("")
     await ok("chat.postMessage", { channel: w.general, text: "fine" }, w.owner.token)
     await urls.next(isEvent("message", "fine"))
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "ninety percent"))
+    expect(await pending(w.teamId)).toEqual([])
   })
 
   it("tells the installer in a DM from the app's bot, once, with how to turn it back on", async () => {
