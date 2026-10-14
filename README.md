@@ -111,21 +111,22 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 `{ "ok": false, "error": "<code>" }`, using Slack's error codes. Lists page with
 `cursor` and `response_metadata.next_cursor`.
 
-| Area                  | Methods                                                                                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                            |
-| conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`          |
-| chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                   |
-| streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus` |
-| reactions             | `add`, `remove`, `get`                                                                                                                                                                                            |
-| files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                            |
-| search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                             |
-| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                       |
-| dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                            |
-| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                   |
-| interactivity         | `block_actions` for `button`s and `feedback_buttons`, over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                                             |
-| other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                               |
-| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret`   |
+| Area                  | Methods                                                                                                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                                            |
+| conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`                          |
+| chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                                   |
+| streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                 |
+| reactions             | `add`, `remove`, `get`                                                                                                                                                                                                            |
+| files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                            |
+| search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                             |
+| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                                       |
+| dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                            |
+| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                   |
+| interactivity         | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action` |
+| views (modals)        | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                    |
+| other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                               |
+| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret`                   |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -217,13 +218,23 @@ app's secret right away; until then it rejects every request.
 
 ### Interactivity
 
-Buttons in an app's messages work as on Slack. A person clicks an `actions`
-block's `button`, or a `context_actions` block's `feedback_buttons` (👍/👎),
-in the app or with `campflare click <#channel> <ts> [action_id]` (without an
-action_id it lists the message's buttons). Under both is
-`campflare.blocks.action` (`channel`, `ts`, `action_id`, `block_id`, and
-`value` naming a feedback button), Campflare's own method, since Slack's
-clients use an internal one. Only members of the conversation can click.
+Buttons and menus in an app's messages work as on Slack. A person clicks an
+`actions` block's `button` or `icon_button`, a `context_actions` block's
+`feedback_buttons` (👍/👎), or chooses in a `static_select`, `users_select`,
+`conversations_select`, `channels_select` or `overflow` menu (in an actions
+block, or a section's accessory), in the app or with
+`campflare click <#channel> <ts> [action_id]` (without an action_id it lists
+what's clickable and how: `--option <value>`, `--user <@person>`,
+`--conversation <#channel>`). Under both is `campflare.blocks.action`
+(`channel`, `ts`, `action_id`, `block_id`, and `value`: a feedback button's,
+an option's, or the id chosen), Campflare's own method, since Slack's clients
+use an internal one. As on Slack, anyone who can read the conversation can
+click, public channels included. The action is described from the stored
+blocks (`selected_option`, `selected_user`, `selected_conversation`,
+`selected_channel`), and a select's choice is in `state.values` too. An app's
+ephemeral messages with blocks are kept by the server for a day, so their
+buttons click: the payload says `is_ephemeral`, and its `response_url`
+replaces or deletes the message for the clicker alone.
 
 The app whose bot posted the message gets `block_actions` in Slack's shape
 (`user`, `team`, `channel`, `container`, `message`, `actions[]`,
@@ -241,8 +252,37 @@ within 3 seconds gives the clicker `app_unreachable`. The `response_url` takes
 the app's answer for 30 minutes, 5 times: `replace_original`,
 `delete_original`, `response_type: "in_channel"`, or by default a message only
 the clicker sees (ephemeral). Posted as the app's bot, in the clicked message's
-thread unless `thread_ts` says otherwise. `trigger_id` is generated, but
-`views.open` (modals) isn't there yet.
+thread unless `thread_ts` says otherwise. A replacement isn't marked
+"(edited)", as on Slack.
+
+### Modals
+
+The `trigger_id` of a click (or of a submission) opens a modal for the person
+who clicked: `views.open` with the app's bot token, once, within 3 seconds
+(`expired_trigger_id`, `exchanged_trigger_id`). `views.push` stacks another on
+it (3 at most), and `views.update` changes one by `view_id` or `external_id`,
+with `hash` to guard against a newer change (`hash_conflict`). Inputs:
+`plain_text_input`, `email_text_input`, `url_text_input`, `number_input`,
+`static_select`, `users_select`, `conversations_select`, `channels_select`
+(and their multi-selects), `checkboxes`, `radio_buttons`, `datepicker`,
+`timepicker`. The app shows the top view as a dialog. With the CLI:
+
+```sh
+campflare view list                       # your open views, their inputs, how to fill each
+campflare view submit V0123 --value note.text="Ship it" --value env.pick=prod --value who.pick=@vincent
+campflare view close V0123
+```
+
+Under them are `campflare.views.list`, `campflare.views.submit` (`view_id`,
+`values`: `{ block_id: { action_id: value } }`, an input left out keeping its
+initial value) and `campflare.views.close`. A submission with required inputs
+left empty answers `errors` without bothering the app, as Slack's client does.
+Else the app gets `view_submission` with the view's `state.values` in Slack's
+shape, and its answer (the Socket Mode ack's payload, or the Request URL's JSON
+body) decides: `response_action` `errors` (shown under the inputs), `update`,
+`push`, `clear`, or nothing, which closes the view. Closing one sends
+`view_closed` when it has `notify_on_close`. A click in a modal is
+`block_actions` with `container.type: "view"` and the view's state so far.
 
 ### The event log
 
