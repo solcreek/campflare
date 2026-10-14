@@ -284,6 +284,7 @@ function appSettings(app: AppRow) {
       request_url: app.event_request_url,
       events: app.event_types ? (JSON.parse(app.event_types) as string[]) : null,
     },
+    interactivity: { request_url: app.interactivity_request_url },
   }
 }
 
@@ -345,6 +346,27 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
   ))!
   const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
   await hub.subscriptionsChanged()
+  return { app: appSettings(updated) }
+})
+
+/**
+ * Sets where clicks on the app's buttons are POSTed (Slack's Interactivity
+ * Request URL): block_actions, form-encoded and signed like events. Slack
+ * doesn't challenge this URL, so it's only checked for its form; an empty one
+ * stops HTTP delivery. A Socket Mode link takes clicks whether it's set or not.
+ */
+method("campflare.apps.setInteractivity", "user", async (ctx) => {
+  const app = await ownApp(ctx)
+  if (!ctx.args.given("request_url")) throw invalidArguments("missing required field: request_url")
+  const url = ctx.args.str("request_url")?.trim() ?? ""
+  const problem = url ? requestUrlProblem(url) : undefined
+  if (problem) throw invalidArguments(problem)
+  const updated = (await first<AppRow>(
+    ctx.env.DB,
+    "UPDATE apps SET interactivity_request_url = ? WHERE id = ? RETURNING *",
+    url || null,
+    app.id,
+  ))!
   return { app: appSettings(updated) }
 })
 

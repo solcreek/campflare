@@ -45,6 +45,8 @@ export interface AppRow {
   event_request_url: string | null
   /** JSON array of subscribed event types; NULL for all. */
   event_types: string | null
+  /** Where clicks on the app's buttons are POSTed (migration 0013); NULL for none. */
+  interactivity_request_url: string | null
 }
 
 export interface TokenRow {
