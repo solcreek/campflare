@@ -7,11 +7,13 @@ import {
   connect,
   expectError,
   fakeRequestUrls,
+  eventually,
   ok,
   settle,
   validSignature,
   workspace,
   type RequestUrlHit,
+  type Workspace,
 } from "./helpers"
 
 // The Events API over HTTP: an app's Request URL gets signed event_callbacks.
@@ -416,6 +418,17 @@ async function deliveryOf(app: { id: string }, token: string) {
   return info.app.event_subscriptions.delivery
 }
 
+/** Waits until the hub has counted `n` attempts in the window (it counts after the POST's answer). */
+const counted = (w: Workspace, app: { id: string }, n: number) =>
+  eventually(async () => (await deliveryOf(app, w.owner.token)).attempts === n)
+
+/** Waits until delivery has been turned off, and returns the subscriptions. */
+const turnedOff = (w: Workspace, app: { id: string }) =>
+  eventually(async () => {
+    const subs = await subscriptionsOf(app, w.owner.token)
+    return subs.disabled ? subs : undefined
+  })
+
 describe("delivery health in campflare.apps.info", () => {
   it("reports the last attempt, the hour's attempts and failures, and pending retries", async () => {
     const w = await workspace()
@@ -435,7 +448,7 @@ describe("delivery health in campflare.apps.info", () => {
     const before = Math.floor(Date.now() / 1000)
     await ok("chat.postMessage", { channel: w.general, text: "taken" }, w.owner.token)
     await urls.next(isEvent("message", "taken"))
-    await settle()
+    await counted(w, app, 1)
     expect(await deliveryOf(app, w.owner.token)).toEqual({
       last_attempt: { at: expect.any(Number), ok: true, status: 200, reason: null },
       window_minutes: 60,
@@ -448,7 +461,7 @@ describe("delivery health in campflare.apps.info", () => {
     urls.answer = () => new Response("down", { status: 503 })
     await ok("chat.postMessage", { channel: w.general, text: "refused" }, w.owner.token)
     await urls.next(isEvent("message", "refused"))
-    await settle()
+    await counted(w, app, 2)
     expect(await deliveryOf(app, w.owner.token)).toMatchObject({
       last_attempt: { ok: false, status: 503, reason: "http_error" },
       attempts: 2,
@@ -469,7 +482,8 @@ describe("delivery health in campflare.apps.info", () => {
     })
 
     // A new Request URL starts the count afresh; the last attempt stays.
-    urls.answer = (h) => (h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response(""))
+    urls.answer = (h) =>
+      h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response("")
     await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: `${URL}/v2` }, w.owner.token)
     expect(await deliveryOf(app, w.owner.token)).toMatchObject({
       last_attempt: { reason: "connection_failed" },
@@ -483,11 +497,169 @@ describe("delivery health in campflare.apps.info", () => {
     urls.answer = () => new Response("", { status: 500 })
     await ok("chat.postMessage", { channel: w.general, text: "old" }, w.owner.token)
     await urls.next(isEvent("message", "old"))
-    await settle()
+    await counted(w, app, 1)
     expect((await deliveryOf(app, w.owner.token)).failures).toBe(1)
     await runInDurableObject(hub(w.teamId), async (_hub: TeamHub, state) => {
       state.storage.sql.exec("UPDATE delivery_minutes SET minute = minute - 60")
     })
     expect(await deliveryOf(app, w.owner.token)).toMatchObject({ attempts: 0, failures: 0 })
+  })
+})
+
+/** Counts attempts in the app's current minute, as if they had been made. */
+async function seedAttempts(teamId: string, appId: string, attempts: number, failures: number) {
+  await runInDurableObject(hub(teamId), async (_hub: TeamHub, state) => {
+    state.storage.sql.exec(
+      "INSERT INTO delivery_minutes (app_id, minute, attempts, failures) VALUES (?, ?, ?, ?)",
+      appId,
+      Math.floor(Date.now() / 60_000),
+      attempts,
+      failures,
+    )
+  })
+}
+
+type Subscriptions = {
+  request_url: string | null
+  events: string[] | null
+  disabled: { at: number; reason: string } | null
+  delivery: DeliveryHealth
+}
+const subscriptionsOf = async (app: { id: string }, token: string) =>
+  (await ok<{ app: { event_subscriptions: Subscriptions } }>("campflare.apps.info", { app: app.id }, token)).app
+    .event_subscriptions
+
+/** The messages in the DM between the owner and the app's bot. */
+async function dmFromBot(w: Workspace, app: { botUserId: string }) {
+  const dm = await ok<{ channel: { id: string } }>("conversations.open", { users: app.botUserId }, w.owner.token)
+  const history = await ok<{ messages: { text: string; user: string; bot_id?: string }[] }>(
+    "conversations.history",
+    { channel: dm.channel.id },
+    w.owner.token,
+  )
+  return history.messages
+}
+
+/** One event the URL refuses. */
+async function failOne(w: Workspace, text: string) {
+  await ok("chat.postMessage", { channel: w.general, text }, w.owner.token)
+  await urls.next(isEvent("message", text))
+}
+
+describe("turning off a failing Request URL", () => {
+  const refuse = (h: RequestUrlHit) =>
+    h.body.type === "url_verification"
+      ? Response.json({ challenge: h.body.challenge })
+      : new Response("", { status: 500 })
+
+  it("waits for at least 20 attempts in the hour, then turns delivery off when over 95% failed", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 18, 18)
+    await failOne(w, "nineteenth")
+    await counted(w, app, 19)
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).toBeNull()
+    await failOne(w, "twentieth")
+    const subs = await turnedOff(w, app)
+    expect(subs).toMatchObject({
+      request_url: URL,
+      disabled: {
+        at: expect.any(Number),
+        reason: "100% of 20 attempts in the last 60 minutes failed; the last: HTTP 500",
+      },
+    })
+    // The pending retries went with it, and the count starts afresh.
+    expect(subs.delivery).toMatchObject({ attempts: 0, failures: 0, pending: 0, last_attempt: { status: 500 } })
+    expect(await pending(w.teamId)).toEqual([])
+    await expire(w.teamId)
+    await ok("chat.postMessage", { channel: w.general, text: "not sent" }, w.owner.token)
+    await settle()
+    expect(urls.hits).toEqual([])
+  })
+
+  it("keeps delivering while at most 95% fail", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 30, 27)
+    await failOne(w, "ninety percent")
+    await counted(w, app, 31)
+    expect(await subscriptionsOf(app, w.owner.token)).toMatchObject({
+      disabled: null,
+      delivery: { attempts: 31, failures: 28 },
+    })
+    // A success never trips it, whatever came before.
+    urls.answer = () => new Response("")
+    await ok("chat.postMessage", { channel: w.general, text: "fine" }, w.owner.token)
+    await urls.next(isEvent("message", "fine"))
+  })
+
+  it("tells the installer in a DM from the app's bot, once, with how to turn it back on", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = () => {
+      throw new DOMException("timed out", "TimeoutError")
+    }
+    await seedAttempts(w.teamId, app.id, 25, 25)
+    await failOne(w, "slow")
+    await turnedOff(w, app)
+    const messages = await eventually(async () => {
+      const found = await dmFromBot(w, app)
+      return found.length > 0 ? found : undefined
+    })
+    await settle()
+    expect(await dmFromBot(w, app)).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ user: app.botUserId, bot_id: app.botId })
+    expect(messages[0]!.text).toContain(`Campflare turned off event delivery for *Hooked* (${app.id})`)
+    expect(messages[0]!.text).toContain(
+      "100% of 26 attempts in the last 60 minutes failed; the last: no answer (http_timeout)",
+    )
+    expect(messages[0]!.text).toContain(`campflare admin app ${app.id} --request-url ${URL}`)
+  })
+
+  it("turns back on when the Request URL is set again and passes url_verification", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 19, 19)
+    await failOne(w, "last straw")
+    await turnedOff(w, app)
+
+    // Changing the events alone leaves it off; a URL that fails the challenge too.
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, events: "message.channels" }, w.owner.token)
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).not.toBeNull()
+    urls.answer = () => new Response("nope")
+    await expectError(
+      "campflare.apps.setEventSubscriptions",
+      { app: app.id, request_url: URL },
+      w.owner.token,
+      "url_verification_failed",
+    )
+    expect((await subscriptionsOf(app, w.owner.token)).disabled).not.toBeNull()
+
+    urls.answer = (h) =>
+      h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response("")
+    urls.hits.length = 0
+    const res = await ok<{ app: { event_subscriptions: Subscriptions } }>(
+      "campflare.apps.setEventSubscriptions",
+      { app: app.id, request_url: URL },
+      w.owner.token,
+    )
+    expect(res.app.event_subscriptions).toMatchObject({ request_url: URL, disabled: null })
+    await urls.next((h) => h.body.type === "url_verification")
+    await ok("chat.postMessage", { channel: w.general, text: "back on" }, w.owner.token)
+    await urls.next(isEvent("message", "back on"))
+  })
+
+  it("is cleared by removing the Request URL, and leaves Socket Mode alone", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = refuse
+    await seedAttempts(w.teamId, app.id, 19, 19)
+    await failOne(w, "down")
+    await turnedOff(w, app)
+    const link = await connect((await ok<{ url: string }>("apps.connections.open", {}, app.appToken)).url)
+    await link.next((f) => f.type === "hello")
+    await ok("chat.postMessage", { channel: w.general, text: "over the socket" }, w.owner.token)
+    await link.next((f) => f.type === "events_api")
+    link.close()
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: "" }, w.owner.token)
+    expect(await subscriptionsOf(app, w.owner.token)).toMatchObject({ request_url: null, disabled: null })
   })
 })

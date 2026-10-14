@@ -47,6 +47,10 @@ export interface AppRow {
   event_types: string | null
   /** Where clicks on the app's buttons are POSTed (migration 0013); NULL for none. */
   interactivity_request_url: string | null
+  /** When HTTP event delivery was turned off for failing (migration 0015), in seconds; NULL while on. */
+  event_delivery_disabled_at: number | null
+  /** Why it was turned off. */
+  event_delivery_disabled_reason: string | null
 }
 
 export interface TokenRow {

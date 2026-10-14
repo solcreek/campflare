@@ -3,8 +3,9 @@ import type { Env } from "./env"
 import { ids } from "./api/ids"
 import { appMentionOf, mentionedUsers, subscribed } from "./app-events"
 import type { AppRow } from "./db/rows"
+import { disabledReason, disableDelivery, tellInstaller } from "./delivery-disabled"
 import { createHealthTables, healthOf, recordAttempt, resetWindow, type DeliveryHealth } from "./delivery-health"
-import { postSigned, REQUEST_TIMEOUT_MS } from "./request-url"
+import { postSigned, REQUEST_TIMEOUT_MS, type PostResult } from "./request-url"
 
 // One TeamHub per workspace holds its live connections and fans events out.
 //
@@ -210,8 +211,10 @@ export class TeamHub extends DurableObject<Env> {
   private subscribersOf(teamId: string): Promise<Map<string, Subscriber>> {
     if (this.subscribers?.teamId !== teamId) {
       const apps = this.env.DB.prepare(
-        `SELECT id, bot_user_id, installer_user_id, signing_secret, event_request_url, event_types FROM apps
-         WHERE team_id = ? AND (event_request_url IS NOT NULL OR event_types IS NOT NULL)`,
+        // A Request URL turned off for failing is no Request URL to deliver to.
+        `SELECT id, bot_user_id, installer_user_id, signing_secret, event_types,
+           CASE WHEN event_delivery_disabled_at IS NULL THEN event_request_url END AS event_request_url
+         FROM apps WHERE team_id = ? AND (event_request_url IS NOT NULL OR event_types IS NOT NULL)`,
       )
         .bind(teamId)
         .all<Pick<AppRow, "id" | "bot_user_id" | "installer_user_id" | "signing_secret"> & EventColumns>()
@@ -243,11 +246,33 @@ export class TeamHub extends DurableObject<Env> {
   /**
    * An app's Request URL, subscriptions or secret changed: read them again for
    * the next event. `newUrlOf` is an app given a (newly verified) Request URL,
-   * whose failure count starts afresh.
+   * whose failure count starts afresh; `origin`, the server's, for the DM
+   * that tells its installer if it's turned off.
    */
-  async subscriptionsChanged(newUrlOf?: string): Promise<void> {
+  async subscriptionsChanged(newUrlOf?: string, origin?: string): Promise<void> {
     this.subscribers = undefined
     if (newUrlOf) resetWindow(this.ctx.storage.sql, newUrlOf)
+    if (origin) await this.ctx.storage.put("origin", origin)
+  }
+
+  /**
+   * The Request URL failed too often (see delivery-health.ts): turns HTTP
+   * delivery off for the app, drops its pending retries and tells its installer.
+   */
+  private async turnOff(
+    app: Subscriber & { url: string },
+    totals: { attempts: number; failures: number },
+    last: PostResult,
+  ) {
+    const off = await disableDelivery(this.env, app.appId, app.url, disabledReason(totals, last))
+    if (!off) return
+    this.subscribers = undefined
+    this.ctx.storage.sql.exec("DELETE FROM unacked WHERE app_id = ? AND transport = 'http'", app.appId)
+    resetWindow(this.ctx.storage.sql, app.appId)
+    const origin = (await this.ctx.storage.get<string>("origin")) ?? "http://localhost"
+    await tellInstaller(this.env, off, { origin, waitUntil: (p) => this.ctx.waitUntil(p) }).catch((error: unknown) =>
+      console.error("telling the installer failed", app.appId, error),
+    )
   }
 
   /** How an app's Request URL is doing, for campflare.apps.info. */
@@ -305,17 +330,15 @@ export class TeamHub extends DurableObject<Env> {
    * One attempt at a POST, counted towards the app's delivery health: done
    * when it's taken (2xx) or refused for good, else due again after a delay.
    */
-  private async attempt(
-    app: Subscriber & { url: string },
-    id: string,
-    body: string,
-    retry: number,
-    reason?: string,
-  ) {
+  private async attempt(app: Subscriber & { url: string }, id: string, body: string, retry: number, reason?: string) {
     const res = await postSigned(app.url, app.secret, body, {
       retry: retry ? { num: retry, reason: reason ?? "unknown_error" } : undefined,
     })
-    recordAttempt(this.ctx.storage.sql, app.appId, res)
+    const tripped = recordAttempt(this.ctx.storage.sql, app.appId, res)
+    if (tripped) {
+      await this.turnOff(app, tripped, res)
+      return 0
+    }
     if (res.ok || res.noRetry || retry >= MAX_RETRIES) {
       this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", id)
       return res.ok ? 1 : 0

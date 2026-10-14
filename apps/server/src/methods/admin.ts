@@ -283,6 +283,10 @@ function appSettings(app: AppRow) {
     event_subscriptions: {
       request_url: app.event_request_url,
       events: app.event_types ? (JSON.parse(app.event_types) as string[]) : null,
+      /** Turned off for failing too often, until the Request URL is set again. */
+      disabled: app.event_delivery_disabled_at
+        ? { at: app.event_delivery_disabled_at, reason: app.event_delivery_disabled_reason }
+        : null,
     },
     interactivity: { request_url: app.interactivity_request_url },
   }
@@ -348,7 +352,9 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
   const updated = (await first<AppRow>(
     ctx.env.DB,
     `UPDATE apps SET event_request_url = CASE WHEN ?1 THEN ?2 ELSE event_request_url END,
-       event_types = CASE WHEN ?3 THEN ?4 ELSE event_types END
+       event_types = CASE WHEN ?3 THEN ?4 ELSE event_types END,
+       event_delivery_disabled_at = CASE WHEN ?1 THEN NULL ELSE event_delivery_disabled_at END,
+       event_delivery_disabled_reason = CASE WHEN ?1 THEN NULL ELSE event_delivery_disabled_reason END
      WHERE id = ?5 RETURNING *`,
     url !== undefined ? 1 : 0,
     url || null,
@@ -356,8 +362,8 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
     events?.length ? JSON.stringify(events) : null,
     app.id,
   ))!
-  // A new URL's failures are counted afresh.
-  await hubOf(ctx).subscriptionsChanged(url ? app.id : undefined)
+  // A new URL (or the same one, verified again, turning delivery back on) has its failures counted afresh.
+  await hubOf(ctx).subscriptionsChanged(url ? app.id : undefined, url ? ctx.origin : undefined)
   return { app: await appOut(ctx, updated) }
 })
 
