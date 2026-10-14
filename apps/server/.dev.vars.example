@@ -16,6 +16,9 @@ HUDDLE_PUBLIC_URL=
 # Where the app is served: permalinks (/archives/...) redirect there. pnpm dev:all sets it
 # (the --web app, or http://localhost:5173 for pnpm web); set it here to point elsewhere.
 APP_URL=
+# "true": permalinks answer a page offering the desktop app (campflare://) and the
+# browser, instead of redirecting to APP_URL.
+OFFER_DESKTOP_APP=
 # Only for tests/live/images.live.test.ts (pnpm test:live), which runs the Worker with the real
 # Images binding: an account API token with Workers Scripts: Edit and Images: Edit (with CF_ACCOUNT_ID).
 IMAGES_API_TOKEN=

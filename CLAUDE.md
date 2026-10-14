@@ -355,7 +355,13 @@ so existence and access are the app's to find out (its not-found view). Without
 `APP_URL` it answers a page naming the route; a malformed channel id is a 404.
 `pnpm dev:all` passes `APP_URL` to wrangler (`--var`): the `--web` app, else
 `APP_URL` from `.dev.vars`, else `http://localhost:5173/` (`pnpm web`), or
-`--app-url`. Deployed, set it as a var or secret.
+`--app-url`. Deployed, set it as a var or secret. The desktop app's link is the
+permalink with its scheme changed, `campflare://<host>/archives/…`
+(`desktopLink()`; see **Desktop**). The page without `APP_URL` links to it;
+with `OFFER_DESKTOP_APP=true` the redirect becomes a page offering both (desktop
+app, browser), opt-in because it costs everyone a click. Neither page launches
+the app by itself (no script, no refresh): a scheme nobody registered would
+only show the browser's error.
 
 **Interactivity.** A click on a button in an app's message is
 `campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, members only): it

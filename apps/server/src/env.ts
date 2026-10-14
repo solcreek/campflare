@@ -25,4 +25,9 @@ export interface Env {
    * (/archives/...) redirect there, to the message's hash route. pnpm dev:all sets it.
    */
   APP_URL?: string
+  /**
+   * "true" (or "1"): permalinks answer a page offering the desktop app (a
+   * campflare:// link) and the web app, instead of redirecting to APP_URL.
+   */
+  OFFER_DESKTOP_APP?: string
 }
