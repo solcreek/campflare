@@ -332,6 +332,7 @@ campflare history '#dev' -n 50
 campflare search 'deploy in:#dev from:@bob after:2026-10-01'
 llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791990000.000100 --status "is thinking…"
                                                               # as a bot: one message that grows as stdin arrives
+campflare stop '#dev' 1791990000.000200                       # as a person: stop an app's reply mid-stream
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
