@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess } from "node:child_process"
+import { spawn, execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
@@ -21,20 +21,35 @@ function freePort(): Promise<number> {
   })
 }
 
-let child: ChildProcess | undefined
-let state: string | undefined
+export interface Server {
+  base: string
+  stop(): Promise<void>
+}
 
-export async function setup(project: TestProject) {
-  state = mkdtempSync(join(tmpdir(), "campflare-conformance-"))
-  execFileSync(wrangler, ["d1", "migrations", "apply", "campflare", "--local", "--persist-to", state], {
+/**
+ * Starts the Worker under `wrangler dev` with fresh state; BOOTSTRAP_SECRET and SIGNING_KEY are
+ * "conformance". `config` is another wrangler config (apps/server/wrangler.jsonc by default),
+ * `env` more environment for wrangler (credentials for remote bindings, say).
+ */
+export async function startServer({
+  config,
+  env,
+  timeoutMs = 30_000,
+}: { config?: string; env?: Record<string, string>; timeoutMs?: number } = {}): Promise<Server> {
+  const state = mkdtempSync(join(tmpdir(), "campflare-conformance-"))
+  const configArgs = config ? ["--config", config] : []
+  const childEnv = { ...process.env, ...env }
+  execFileSync(wrangler, ["d1", "migrations", "apply", "campflare", "--local", "--persist-to", state, ...configArgs], {
     cwd: server,
     stdio: "ignore",
+    env: childEnv,
   })
   const port = await freePort()
-  child = spawn(
+  const child = spawn(
     wrangler,
     [
       "dev",
+      ...configArgs,
       "--port",
       String(port),
       // Its own inspector port: suites started at once would otherwise race for 9229.
@@ -47,27 +62,41 @@ export async function setup(project: TestProject) {
       "--var",
       "SIGNING_KEY:conformance",
     ],
-    { cwd: server, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: server, stdio: ["ignore", "pipe", "pipe"], env: childEnv },
   )
   let log = ""
   child.stdout?.on("data", (d) => (log += d))
   child.stderr?.on("data", (d) => (log += d))
+  const stop = async () => {
+    child.kill("SIGTERM")
+    rmSync(state, { recursive: true, force: true })
+  }
   const base = `http://127.0.0.1:${port}`
-  for (let i = 0; ; i++) {
+  const end = Date.now() + timeoutMs
+  for (;;) {
     try {
       if ((await fetch(base)).ok) break
     } catch {
       // not up yet
     }
-    if (i > 120) throw new Error(`wrangler dev did not start:\n${log}`)
+    if (Date.now() > end || child.exitCode !== null) {
+      await stop()
+      throw new Error(`wrangler dev did not start:\n${log}`)
+    }
     await new Promise((r) => setTimeout(r, 250))
   }
-  project.provide("baseUrl", base)
+  return { base, stop }
+}
+
+let started: Server | undefined
+
+export async function setup(project: TestProject) {
+  started = await startServer()
+  project.provide("baseUrl", started.base)
 }
 
 export async function teardown() {
-  child?.kill("SIGTERM")
-  if (state) rmSync(state, { recursive: true, force: true })
+  await started?.stop()
 }
 
 declare module "vitest" {
