@@ -8,7 +8,7 @@ import "./methods/conversations"
 import "./methods/dnd"
 import "./methods/events"
 import "./methods/oauth"
-import { handleDownload, handleUpload } from "./methods/files"
+import { handleDownload, handleThumb, handleUpload } from "./methods/files"
 import "./huddle/methods"
 import { huddlePage, huddleScript } from "./huddle/page"
 import { readScribeTicket } from "./huddle/ticket"
@@ -37,16 +37,16 @@ app.use("/api/*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-T
 // Browser apps fetch url_private with their Bearer token (as Slack clients do) and
 // show the bytes as a blob: URL, since <img src> can't send a header. Credentials
 // are never cookies, so any origin may ask; it still needs the token.
-app.use(
-  "/files-pri/*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "HEAD"],
-    allowHeaders: ["Authorization", "Range", "If-None-Match", "If-Modified-Since"],
-    exposeHeaders: ["Content-Disposition", "Content-Length", "Content-Range", "ETag"],
-    maxAge: 86_400,
-  }),
-)
+const privateFiles = cors({
+  origin: "*",
+  allowMethods: ["GET", "HEAD"],
+  allowHeaders: ["Authorization", "Range", "If-None-Match", "If-Modified-Since"],
+  exposeHeaders: ["Content-Disposition", "Content-Length", "Content-Range", "ETag"],
+  maxAge: 86_400,
+})
+app.use("/files-pri/*", privateFiles)
+// Thumbnails (thumb_*) are fetched the same way.
+app.use("/files-tmb/*", privateFiles)
 // client.upload() POSTs the bytes with its Authorization header too; the URL itself is the capability.
 app.use("/upload/v1/*", cors({ origin: "*", allowMethods: ["POST"], allowHeaders: ["Authorization", "Content-Type"] }))
 
@@ -116,6 +116,10 @@ app.post("/upload/v1/:token", (c) => handleUpload(c.env, c.req.raw, c.req.param(
 /** url_private and url_private_download. */
 app.get("/files-pri/:teamFile/download/:name", (c) => handleDownload(c.env, c.req.raw, c.req.param("teamFile"), true))
 app.get("/files-pri/:teamFile/:name", (c) => handleDownload(c.env, c.req.raw, c.req.param("teamFile"), false))
+/** thumb_64 … thumb_1024. */
+app.get("/files-tmb/:teamFile/:name", (c) =>
+  handleThumb(c.env, c.req.raw, c.req.param("teamFile"), c.req.param("name")),
+)
 
 /** WebSocket URLs from apps.connections.open (Socket Mode) and rtm.connect. */
 app.get("/link/", async (c) => {

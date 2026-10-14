@@ -14,6 +14,9 @@
     },
   ],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "campflare-files" }],
+  // Cloudflare Images makes thumbnails (thumb_*) on first fetch, cached in FILES. Optional:
+  // without it, files carry no thumb_* and clients show the original.
+  "images": { "binding": "IMAGES" },
   "durable_objects": {
     "bindings": [
       { "name": "HUB", "class_name": "TeamHub" },

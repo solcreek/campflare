@@ -1,0 +1,265 @@
+import { SELF } from "cloudflare:test"
+import { env } from "cloudflare:workers"
+import { afterEach, describe, expect, it } from "vitest"
+import { imageSize } from "../src/api/media"
+import { fittedSize, setImagesOverride, thumbSizeOf, thumbSizes, thumbsJson } from "../src/api/thumbs"
+import type { FileRow } from "../src/db/rows"
+import { ok, workspace } from "./helpers"
+import { convert, makeGif, makePng } from "./images"
+
+// The Images binding runs locally (Miniflare resizes with sharp), so these
+// tests make real thumbnails; setImagesOverride() stands in for a failing
+// binding or none at all.
+
+afterEach(() => setImagesOverride(undefined))
+
+type FileJson = Record<string, unknown> & { id: string; url_private: string }
+
+async function share(token: string, channel: string, name: string, bytes: Uint8Array) {
+  const reserved = await ok<{ upload_url: string; file_id: string }>(
+    "files.getUploadURLExternal",
+    { filename: name, length: bytes.length },
+    token,
+  )
+  expect((await SELF.fetch(reserved.upload_url, { method: "POST", body: bytes })).status).toBe(200)
+  await ok("files.completeUploadExternal", { files: [{ id: reserved.file_id }], channel_id: channel }, token)
+  return (await ok<{ file: FileJson }>("files.info", { file: reserved.file_id }, token)).file
+}
+
+const get = (url: string, token: string, headers: Record<string, string> = {}) =>
+  SELF.fetch(url, { headers: { authorization: `Bearer ${token}`, ...headers } })
+
+async function sizeOf(res: Response) {
+  return imageSize(new Uint8Array(await res.arrayBuffer()))
+}
+
+const row = (over: Partial<FileRow>): FileRow =>
+  ({
+    id: "F1",
+    team_id: "T1",
+    name: "photo.png",
+    mimetype: "image/png",
+    width: 1600,
+    height: 1200,
+    ...over,
+  }) as FileRow
+
+describe("thumbnail sizes", () => {
+  it("follows Slack: the squares and thumb_360 always, larger ones only below the original", () => {
+    expect(thumbSizes(row({}))).toEqual([64, 80, 160, 360, 480, 720, 800, 960, 1024])
+    expect(thumbSizes(row({ width: 700, height: 300 }))).toEqual([64, 80, 160, 360, 480])
+    expect(thumbSizes(row({ width: 176, height: 226 }))).toEqual([64, 80, 160, 360])
+    expect(thumbSizes(row({ width: 1024, height: 768 }))).toEqual([64, 80, 160, 360, 480, 720, 800, 960])
+    expect(thumbSizes(row({ mimetype: "image/svg+xml" }))).toEqual([])
+    expect(thumbSizes(row({ mimetype: "application/pdf" }))).toEqual([])
+    expect(thumbSizes(row({ width: null, height: null }))).toEqual([])
+  })
+
+  it("scales down to fit, never up", () => {
+    expect(fittedSize(360, 1600, 1200)).toEqual({ width: 360, height: 270 })
+    expect(fittedSize(360, 600, 2400)).toEqual({ width: 90, height: 360 })
+    expect(fittedSize(360, 176, 226)).toEqual({ width: 176, height: 226 })
+    expect(fittedSize(360, 10_000, 1)).toEqual({ width: 360, height: 1 })
+  })
+
+  it("names thumbnails after the file, with _w and _h from 360 up", () => {
+    const json = thumbsJson("https://x.test", row({ name: "my photo.jpeg", mimetype: "image/jpeg" }), true)
+    expect(json.thumb_64).toBe("https://x.test/files-tmb/T1-F1/my%20photo_64.jpg")
+    expect(json.thumb_64_w).toBeUndefined()
+    expect(json.thumb_160_w).toBeUndefined()
+    expect(json).toMatchObject({ thumb_360_w: 360, thumb_360_h: 270, thumb_1024_w: 1024, thumb_1024_h: 768 })
+    expect(thumbsJson("https://x.test", row({ name: "диаграмма.gif", mimetype: "image/gif" }), true).thumb_80).toBe(
+      `https://x.test/files-tmb/T1-F1/${encodeURIComponent("диаграмма_80.png")}`,
+    )
+    expect(thumbsJson("https://x.test", row({ name: ".png" }), true).thumb_80).toBe(
+      "https://x.test/files-tmb/T1-F1/image_80.png",
+    )
+    expect(thumbsJson("https://x.test", row({}), false)).toEqual({})
+    expect(thumbSizeOf("a_b_360.png")).toBe(360)
+    expect(thumbSizeOf("a_361.png")).toBeUndefined()
+    expect(thumbSizeOf("a_360.svg")).toBeUndefined()
+  })
+})
+
+describe("thumbnails", () => {
+  it("are made on first fetch, kept in R2, and served like url_private", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const carol = await w.addUser("carol")
+    const { channel } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "photos", is_private: true },
+      w.owner.token,
+    )
+    await ok("conversations.invite", { channel: channel.id, users: bob.id }, w.owner.token)
+    const file = await share(w.owner.token, channel.id, "sunset.png", await makePng(1200, 900))
+    expect(file).toMatchObject({
+      original_w: 1200,
+      original_h: 900,
+      thumb_360_w: 360,
+      thumb_360_h: 270,
+      thumb_480_w: 480,
+      thumb_480_h: 360,
+      thumb_1024_w: 1024,
+      thumb_1024_h: 768,
+    })
+    for (const size of [64, 80, 160, 360, 480, 720, 800, 960, 1024]) {
+      expect(file[`thumb_${size}`]).toMatch(new RegExp(`/files-tmb/${w.teamId}-${file.id}/sunset_${size}\\.png$`))
+    }
+    // Message files carry them too.
+    const history = await ok<{ messages: { files: FileJson[] }[] }>(
+      "conversations.history",
+      { channel: channel.id },
+      bob.token,
+    )
+    expect(history.messages[0]!.files[0]!.thumb_360).toBe(file.thumb_360)
+    const listed = await ok<{ files: FileJson[] }>("files.list", { channel: channel.id }, bob.token)
+    expect(listed.files[0]!.thumb_720).toBe(file.thumb_720)
+
+    const url = file.thumb_360 as string
+    expect(await env.FILES.head(`${w.teamId}/${file.id}/thumb_360`)).toBeNull()
+    const first = await get(url, bob.token)
+    expect(first.status).toBe(200)
+    expect(first.headers.get("content-type")).toBe("image/png")
+    expect(first.headers.get("content-disposition")).toBe("inline; filename*=UTF-8''sunset_360.png")
+    expect(first.headers.get("content-security-policy")).toBe("sandbox")
+    expect(first.headers.get("x-content-type-options")).toBe("nosniff")
+    expect(await sizeOf(first)).toEqual({ width: 360, height: 270 })
+    const stored = await env.FILES.head(`${w.teamId}/${file.id}/thumb_360`)
+    expect(stored?.httpMetadata?.contentType).toBe("image/png")
+
+    // Served from R2 from now on: a broken binding no longer matters.
+    setImagesOverride(failingImages())
+    const again = await get(url, bob.token)
+    expect(await sizeOf(again)).toEqual({ width: 360, height: 270 })
+    const ranged = await get(url, bob.token, { range: "bytes=0-7" })
+    expect(ranged.status).toBe(206)
+    expect(ranged.headers.get("content-range")).toBe(`bytes 0-7/${stored!.size}`)
+    expect((await ranged.arrayBuffer()).byteLength).toBe(8)
+    const unchanged = await get(url, bob.token, { "if-none-match": stored!.httpEtag })
+    expect(unchanged.status).toBe(304)
+    setImagesOverride(undefined)
+
+    // The squares: 64 cropped, 80 padded.
+    expect(await sizeOf(await get(file.thumb_64 as string, bob.token))).toEqual({ width: 64, height: 64 })
+    expect(await sizeOf(await get(file.thumb_80 as string, bob.token))).toEqual({ width: 80, height: 80 })
+    expect(await sizeOf(await get(file.thumb_1024 as string, bob.token))).toEqual({ width: 1024, height: 768 })
+
+    // Who may see the file may see its thumbnails; nobody else.
+    expect((await get(url, carol.token)).status).toBe(404)
+    expect((await SELF.fetch(url)).status).toBe(401)
+    expect((await get(url, "xoxp-nope")).status).toBe(401)
+    // Sizes the file doesn't have, and names that aren't thumbnails.
+    const base = url.replace(/[^/]+$/, "")
+    for (const name of ["sunset_1100.png", "sunset_9999.png", "sunset.png", "sunset_360.svg"]) {
+      expect((await get(`${base}${name}`, bob.token)).status).toBe(404)
+    }
+    expect((await get(`${base.replace(file.id, "FNOPE")}sunset_360.png`, bob.token)).status).toBe(404)
+
+    // Deleting the file deletes its thumbnails.
+    await ok("files.delete", { file: file.id }, w.owner.token)
+    expect(await env.FILES.head(`${w.teamId}/${file.id}/thumb_360`)).toBeNull()
+    expect(await env.FILES.head(`${w.teamId}/${file.id}/thumb_64`)).toBeNull()
+  })
+
+  it("answer CORS for browser apps, as url_private does", async () => {
+    const w = await workspace()
+    const file = await share(w.owner.token, w.general, "pic.png", await makePng(500, 400))
+    const pre = await SELF.fetch(file.thumb_360 as string, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.example",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+      },
+    })
+    expect(pre.status).toBe(204)
+    expect(pre.headers.get("access-control-allow-origin")).toBe("*")
+    expect(pre.headers.get("access-control-allow-credentials")).toBeNull()
+    const res = await get(file.thumb_360 as string, w.owner.token, { origin: "https://app.example" })
+    expect(res.headers.get("access-control-allow-origin")).toBe("*")
+    expect(await sizeOf(res)).toEqual({ width: 360, height: 288 })
+  })
+
+  it("keep JPEG as JPEG, and give GIFs a PNG of the first frame", async () => {
+    const w = await workspace()
+    const png = await makePng(800, 600)
+    const jpeg = await share(w.owner.token, w.general, "plage.jpg", await convert(env.IMAGES!, png, "image/jpeg"))
+    expect(jpeg.thumb_480).toMatch(/plage_480\.jpg$/)
+    const res = await get(jpeg.thumb_480 as string, w.owner.token)
+    expect(res.headers.get("content-type")).toBe("image/jpeg")
+    expect(await sizeOf(res)).toEqual({ width: 480, height: 360 })
+
+    const gif = await share(w.owner.token, w.general, "animación.gif", makeGif(400, 300, 2))
+    expect(gif).toMatchObject({ original_w: 400, original_h: 300, thumb_360_w: 360, thumb_360_h: 270 })
+    expect(gif.thumb_480).toBeUndefined()
+    const thumb = await get(gif.thumb_360 as string, w.owner.token)
+    expect(thumb.headers.get("content-type")).toBe("image/png")
+    expect(await sizeOf(thumb)).toEqual({ width: 360, height: 270 })
+    // The original keeps its animation for clients that want it.
+    expect(new Uint8Array(await (await get(gif.url_private, w.owner.token)).arrayBuffer())).toEqual(
+      makeGif(400, 300, 2),
+    )
+  })
+
+  it("aren't offered for SVG or other files", async () => {
+    const w = await workspace()
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"/>')
+    const file = await share(w.owner.token, w.general, "logo.svg", svg)
+    expect(Object.keys(file).filter((k) => k.startsWith("thumb_"))).toEqual([])
+    const text = await share(w.owner.token, w.general, "notes.txt", new TextEncoder().encode("bonjour"))
+    expect(Object.keys(text).filter((k) => k.startsWith("thumb_"))).toEqual([])
+    const base = `https://campflare.test/files-tmb/${w.teamId}-${file.id}/logo_360.png`
+    expect((await get(base, w.owner.token)).status).toBe(404)
+  })
+
+  it("are off without the Images binding: no thumb_*, and the route finds nothing", async () => {
+    const w = await workspace()
+    const on = await share(w.owner.token, w.general, "a.png", await makePng(400, 300))
+    setImagesOverride(null)
+    const off = await ok<{ file: FileJson }>("files.info", { file: on.id }, w.owner.token)
+    expect(off.file).toMatchObject({ original_w: 400, original_h: 300 })
+    expect(Object.keys(off.file).filter((k) => k.startsWith("thumb_"))).toEqual([])
+    const history = await ok<{ messages: { files: FileJson[] }[] }>(
+      "conversations.history",
+      { channel: w.general },
+      w.owner.token,
+    )
+    expect(history.messages[0]!.files[0]!.thumb_360).toBeUndefined()
+    const listed = await ok<{ files: FileJson[] }>("files.list", {}, w.owner.token)
+    expect(listed.files[0]!.thumb_360).toBeUndefined()
+    expect((await get(on.thumb_360 as string, w.owner.token)).status).toBe(404)
+  })
+
+  it("fall back to the original, uncached, when Images fails on a file", async () => {
+    const w = await workspace()
+    const png = await makePng(600, 400)
+    const file = await share(w.owner.token, w.general, "broken.png", png)
+    setImagesOverride(failingImages())
+    const res = await get(file.thumb_360 as string, w.owner.token)
+    expect(res.status).toBe(200)
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(png)
+    expect(await env.FILES.head(`${w.teamId}/${file.id}/thumb_360`)).toBeNull()
+  })
+
+  it("answer 404 when the original is gone from R2", async () => {
+    const w = await workspace()
+    const file = await share(w.owner.token, w.general, "gone.png", await makePng(400, 300))
+    await env.FILES.delete(`${w.teamId}/${file.id}`)
+    expect((await get(file.thumb_360 as string, w.owner.token)).status).toBe(404)
+    expect((await get(file.url_private, w.owner.token)).status).toBe(404)
+  })
+})
+
+/** An Images binding that fails every transformation, as it does on a file it can't read. */
+function failingImages(): ImagesBinding {
+  const transformer = {
+    transform: () => transformer,
+    draw: () => transformer,
+    output: () => Promise.reject(new Error("ERROR 9412: Bad input")),
+  }
+  return {
+    info: () => Promise.reject(new Error("ERROR 9412: Bad input")),
+    input: () => transformer,
+  } as unknown as ImagesBinding
+}

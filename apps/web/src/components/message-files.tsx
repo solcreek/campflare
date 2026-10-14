@@ -1,4 +1,4 @@
-import { fileKind, fileLabel, fitImage, formatBytes, type MessageFile } from "@campflare/core"
+import { fileKind, fileLabel, fitImage, formatBytes, imageSource, type MessageFile } from "@campflare/core"
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, FileIcon, LoaderCircleIcon } from "lucide-react"
 import { type KeyboardEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -11,22 +11,33 @@ import { reportError } from "./message"
 /** The largest an inline image is drawn; bigger ones scale down to fit. */
 export const IMAGE_BOX = { width: 360, height: 240 }
 
-/** An object URL for a private file's bytes while the component is mounted; undefined until loaded. */
-export function usePrivateFile(url: string | undefined): { src?: string; failed: boolean } {
+/**
+ * An object URL for a private file's bytes while the component is mounted; undefined until
+ * loaded. If `url` fails, `fallback` (when different) is tried before giving up.
+ */
+export function usePrivateFile(url: string | undefined, fallback?: string): { src?: string; failed: boolean } {
   const workspace = useWorkspace()
   const [loaded, setLoaded] = useState<{ url: string; src?: string; failed: boolean }>()
   useEffect(() => {
     if (!url) return
     let mounted = true
-    workspace.files.acquire(url).then(
-      (src) => mounted && setLoaded({ url, src, failed: false }),
-      () => mounted && setLoaded({ url, failed: true }),
-    )
+    const held = [url]
+    workspace.files
+      .acquire(url)
+      .catch((error: unknown) => {
+        if (!fallback || fallback === url || !mounted) throw error
+        held.push(fallback)
+        return workspace.files.acquire(fallback)
+      })
+      .then(
+        (src) => mounted && setLoaded({ url, src, failed: false }),
+        () => mounted && setLoaded({ url, failed: true }),
+      )
     return () => {
       mounted = false
-      workspace.files.release(url)
+      for (const u of held) workspace.files.release(u)
     }
-  }, [workspace, url])
+  }, [workspace, url, fallback])
   return loaded && loaded.url === url ? loaded : { failed: false }
 }
 
@@ -61,13 +72,15 @@ function useDownload(file: MessageFile) {
 /**
  * An image in a message, drawn in a box of its final size from the start (original_w and
  * original_h), so nothing moves when it arrives. Its bytes are fetched only once it nears the
- * viewport: the server has no thumbnails, so each one is the whole file.
+ * viewport, from the smallest thumbnail that is sharp in that box on this screen; if the
+ * thumbnail fails, from the original.
  */
 function ImageFile({ file, onOpen }: { file: MessageFile; onOpen: () => void }) {
   const [ref, inView] = useInView<HTMLButtonElement>()
-  const { src, failed } = usePrivateFile(inView ? file.url_private : undefined)
-  if (failed) return <FileCard file={file} />
   const { width, height } = fitImage(file, IMAGE_BOX.width, IMAGE_BOX.height)
+  const url = imageSource(file, width, height, window.devicePixelRatio || 1)
+  const { src, failed } = usePrivateFile(inView ? url : undefined, file.url_private)
+  if (failed) return <FileCard file={file} />
   const label = fileLabel(file)
   return (
     <button

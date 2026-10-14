@@ -41,6 +41,30 @@ export function fitImage(f: MessageFile, maxWidth: number, maxHeight: number): {
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) }
 }
 
+/** Slack's fitted thumbnails (thumb_<n> with thumb_<n>_w/_h), smallest first. */
+const THUMBS = [360, 480, 720, 800, 960, 1024]
+
+/**
+ * The URL to draw an image from in a box of width×height CSS pixels: the smallest thumbnail
+ * (thumb_*) that covers it at `pixelRatio` device pixels per CSS pixel, else the original.
+ * GIFs always get the original, since their thumbnails don't move.
+ */
+export function imageSource(f: MessageFile, width: number, height: number, pixelRatio = 1): string | undefined {
+  if (f.mimetype === "image/gif") return f.url_private
+  // A pixel short still looks sharp, and rounding on either side can cost one.
+  const needW = Math.ceil(width * pixelRatio) - 1
+  const needH = Math.ceil(height * pixelRatio) - 1
+  for (const size of THUMBS) {
+    const url = f[`thumb_${size}`]
+    const w = f[`thumb_${size}_w`]
+    const h = f[`thumb_${size}_h`]
+    if (typeof url !== "string" || typeof w !== "number" || typeof h !== "number") continue
+    // Covers the box, or is already the original's full size.
+    if ((w >= needW && h >= needH) || (w === f.original_w && h === f.original_h)) return url
+  }
+  return f.url_private
+}
+
 /** Names clipboards give pasted content: "image.png" in Chromium and Firefox, "Pasted Graphic.png" from macOS apps. */
 const GENERIC_NAME = /^(image|blob|untitled|pasted graphic( \d+)?)?(\.[a-z0-9]+)?$/i
 
