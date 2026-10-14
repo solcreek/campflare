@@ -446,3 +446,124 @@ test("a click on an app's button reaches the app, and its answer replaces the me
     app.close()
   }
 })
+
+test("a button opens the app's modal; it's filled in, refused once, then submitted, and the app replies", async ({
+  browser,
+}) => {
+  // An app of its own, so this test and the one above don't share an Interactivity URL.
+  const created = await callAs<{ app: { id: string }; bot_token: string }>(
+    "campflare.apps.create",
+    { name: `Deployer ${Date.now().toString(36)}` },
+    stack.people.alex!,
+  )
+  const run = Date.now().toString(36)
+  const text = (t: string) => ({ type: "plain_text", text: t })
+  const form = {
+    type: "modal",
+    callback_id: "deploy",
+    title: text("Deploy"),
+    submit: text("Deploy"),
+    blocks: [
+      {
+        type: "input",
+        block_id: "note",
+        label: text("Release note"),
+        element: { type: "plain_text_input", action_id: "text" },
+      },
+      {
+        type: "input",
+        block_id: "env",
+        label: text("Environment"),
+        element: {
+          type: "static_select",
+          action_id: "pick",
+          options: [
+            { text: text("Production"), value: "prod" },
+            { text: text("Staging"), value: "staging" },
+          ],
+        },
+      },
+    ],
+  }
+  // The app: the button opens the form with the click's trigger_id; a short note is refused, else it says so in the channel.
+  const app = createServer((req, res) => {
+    let body = ""
+    req.on("data", (d: Buffer) => (body += d))
+    req.on("end", () => {
+      const payload = JSON.parse(new URLSearchParams(body).get("payload")!) as {
+        type: string
+        trigger_id: string
+        user: { name: string }
+        view?: {
+          state: { values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>> }
+        }
+      }
+      if (payload.type === "block_actions") {
+        res.end()
+        void callAs("views.open", { trigger_id: payload.trigger_id, view: form }, created.bot_token)
+        return
+      }
+      if (payload.type !== "view_submission") return void res.end()
+      const values = payload.view!.state.values
+      const note = values.note!.text!.value ?? ""
+      if (note.length < 5) {
+        res.setHeader("content-type", "application/json")
+        res.end(JSON.stringify({ response_action: "errors", errors: { note: "Say a bit more" } }))
+        return
+      }
+      res.end()
+      void callAs(
+        "chat.postMessage",
+        {
+          channel: "#general",
+          text: `Deploying ${run} to ${values.env!.pick!.selected_option!.value} for ${payload.user.name}: ${note}`,
+        },
+        created.bot_token,
+      )
+    })
+  })
+  await new Promise<void>((r) => app.listen(0, "127.0.0.1", r))
+  try {
+    const url = `http://127.0.0.1:${(app.address() as AddressInfo).port}/interactive`
+    await callAs("campflare.apps.setInteractivity", { app: created.app.id, request_url: url }, stack.people.alex!)
+    await callAs(
+      "chat.postMessage",
+      {
+        channel: "#general",
+        text: `Ready to deploy ${run}`,
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: `Ready to deploy ${run}` } },
+          { type: "actions", elements: [{ type: "button", action_id: "open", text: text("Deploy…") }] },
+        ],
+      },
+      created.bot_token,
+    )
+
+    const alex = await open(browser)
+    const ready = messages(alex)
+      .getByRole("article")
+      .filter({ hasText: `Ready to deploy ${run}` })
+    await ready.getByRole("button", { name: "Deploy…" }).click()
+    const dialog = alex.getByRole("dialog", { name: "Deploy" })
+    await expect(dialog).toBeVisible()
+    // Too short a note first: the app refuses it, and the note has the focus to fix it.
+    await dialog.getByRole("textbox", { name: "Release note" }).fill("ok")
+    await dialog.getByRole("combobox", { name: "Environment" }).selectOption("staging")
+    await dialog.getByRole("button", { name: "Deploy" }).click()
+    const note = dialog.getByRole("textbox", { name: "Release note" })
+    await expect(dialog.getByText("Say a bit more")).toBeVisible()
+    await expect(note).toHaveAttribute("aria-invalid", "true")
+    await expect(note).toBeFocused()
+    await note.fill("Ship it — 出荷 ✨")
+    await dialog.getByRole("button", { name: "Deploy" }).press("Enter")
+    await expect(dialog).toBeHidden()
+    await expect(
+      messages(alex)
+        .getByRole("article")
+        .filter({ hasText: `Deploying ${run} to staging for alex: Ship it — 出荷 ✨` }),
+    ).toBeVisible()
+  } finally {
+    await callAs("campflare.apps.setInteractivity", { app: created.app.id, request_url: "" }, stack.people.alex!)
+    app.close()
+  }
+})

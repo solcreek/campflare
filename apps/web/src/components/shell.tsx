@@ -4,6 +4,7 @@ import { useRoute } from "@/route"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
 import { ConversationView, ThreadPanel } from "./conversation"
 import { Sidebar } from "./sidebar"
+import { ViewDialog } from "./view-dialog"
 
 /** The signed-in app: sidebar, the open conversation, and its open thread. */
 export function Shell({ onSignOut }: { onSignOut: () => void }) {
@@ -50,6 +51,7 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
 
   return (
     <div className="flex h-svh">
+      <ViewDialog />
       <Sidebar active={route.channel} onSelect={(channel) => navigate({ channel })} onSignOut={onSignOut} />
       {route.channel ? (
         <ConversationView

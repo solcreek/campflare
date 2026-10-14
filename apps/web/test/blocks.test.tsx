@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
+import type { Handler } from "@campflare/core/testing"
 import { fakeServer, FakeSocket, hello } from "./server"
 
 afterEach(() => {
@@ -165,12 +166,113 @@ describe("buttons in messages", () => {
     ])
   })
 
-  it("keeps the buttons of a message only you see inert", async () => {
-    const { server, message } = await signedIn([{ ...fromApp, is_ephemeral: true }])
-    expect(message.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(true)
-    expect(message.getByRole("link", { name: "Docs" }).getAttribute("aria-disabled")).toBe("true")
-    message.getByRole("link", { name: "Docs" }).addEventListener("click", (e) => e.preventDefault())
-    message.getByRole("link", { name: "Docs" }).click()
-    expect(clicks(server)).toEqual([])
+  it("clicks the buttons of a message only you see: the server keeps an app's", async () => {
+    const { server, user, message } = await signedIn([{ ...fromApp, is_ephemeral: true }])
+    await user.click(message.getByRole("button", { name: "Approve" }))
+    await waitFor(() => expect(clicks(server)).toHaveLength(1))
+    expect(clicks(server)[0]).toMatchObject({ ts: TS, action_id: "approve" })
+  })
+})
+
+describe("menus and icon buttons in messages", () => {
+  const menus: Message = {
+    ...fromApp,
+    text: "Where to deploy?",
+    blocks: [
+      {
+        type: "section",
+        block_id: "pick",
+        text: { type: "mrkdwn", text: "Where to deploy?" },
+        accessory: {
+          type: "static_select",
+          action_id: "env",
+          placeholder: text("Environment"),
+          option_groups: [
+            { label: text("Live"), options: [{ text: text("Production"), value: "prod" }] },
+            { label: text("Test"), options: [{ text: text("Staging"), value: "staging" }] },
+          ],
+        },
+      },
+      {
+        type: "actions",
+        block_id: "more",
+        elements: [
+          { type: "users_select", action_id: "who", placeholder: text("Reviewer"), initial_user: "U2" },
+          { type: "channels_select", action_id: "where", placeholder: text("Channel") },
+          {
+            type: "overflow",
+            action_id: "menu",
+            options: [
+              { text: text("Silenciar"), value: "mute" },
+              { text: text("Archiver"), value: "archive" },
+            ],
+          },
+          { type: "icon_button", action_id: "trash", icon: "trash", text: text("Delete"), value: "d1" },
+        ],
+      },
+    ],
+  }
+
+  async function shown(handler?: Handler) {
+    const server = fakeServer({
+      "conversations.history": () => ({ messages: [menus] }),
+      "campflare.blocks.action": handler ?? (() => ({ delivered: "http" })),
+    })
+    const store = browserStore()
+    store.save({ url: "https://x.test", token: "xoxp-1" })
+    const user = userEvent.setup()
+    render(<App store={store} connect={server.connect} />)
+    await screen.findByRole("heading", { name: "general", level: 1 })
+    act(() => hello())
+    const message = within((await screen.findByText("Where to deploy?")).closest("article")!)
+    return { server, user, message }
+  }
+
+  it("sends the option, person or channel chosen in a select menu", async () => {
+    const { server, user, message } = await shown()
+    const env = message.getByRole("combobox", { name: "Environment" }) as HTMLSelectElement
+    expect([...env.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Live", "Test"])
+    await user.selectOptions(env, "staging")
+    await waitFor(() => expect(clicks(server)).toHaveLength(1))
+    expect(clicks(server)[0]).toEqual({ channel: "CGEN", ts: TS, block_id: "pick", action_id: "env", value: "staging" })
+    expect(env.value).toBe("staging")
+
+    // People and public channels come from the workspace; the app's initial_user is chosen to begin with.
+    const who = message.getByRole("combobox", { name: "Reviewer" }) as HTMLSelectElement
+    expect(who.value).toBe("U2")
+    expect([...who.options].map((o) => o.text)).toEqual(["Reviewer", "Alex Rivera", "Vincent Vega"])
+    await user.selectOptions(who, "U1")
+    const where = message.getByRole("combobox", { name: "Channel" }) as HTMLSelectElement
+    expect([...where.options].slice(1).map((o) => o.text)).toEqual(["#dev", "#general", "#random"])
+    await waitFor(() => expect(where.disabled).toBe(false))
+    await user.selectOptions(where, "CDEV")
+    await waitFor(() => expect(clicks(server)).toHaveLength(3))
+    expect(
+      clicks(server)
+        .slice(1)
+        .map((c) => c.value),
+    ).toEqual(["U1", "CDEV"])
+  })
+
+  it("puts a choice back when the app doesn't take it", async () => {
+    const { user, message } = await shown(() => new Error("app_unreachable"))
+    const env = message.getByRole("combobox", { name: "Environment" }) as HTMLSelectElement
+    await user.selectOptions(env, "prod")
+    expect(await message.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "The app didn't take that (app_unreachable).",
+    )
+    expect(env.value).toBe("")
+  })
+
+  it("offers an overflow menu's options, and clicks an icon button", async () => {
+    const { server, user, message } = await shown()
+    await user.click(message.getByRole("button", { name: "More actions" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Archiver" }))
+    await waitFor(() => expect(clicks(server)).toHaveLength(1))
+    expect(clicks(server)[0]).toMatchObject({ action_id: "menu", value: "archive" })
+    await user.click(message.getByRole("button", { name: "Delete" }))
+    await waitFor(() => expect(clicks(server)).toHaveLength(2))
+    expect(clicks(server)[1]).toMatchObject({ action_id: "trash", value: "d1" })
   })
 })

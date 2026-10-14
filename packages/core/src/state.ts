@@ -1,5 +1,6 @@
 import type { RealtimeEvent } from "@campflare/client"
 import type { Conversation, Message, Reaction, Self, User } from "./types"
+import type { View } from "./views"
 
 // The workspace as an app sees it, and one pure function that moves it on.
 // Every change, whether a Web API answer or an RTM event, is an Action, so the
@@ -29,6 +30,8 @@ export interface WorkspaceState {
   unread: Record<string, number>
   /** An app's transient status in a thread ("is thinking…"), by keyOf(channel, thread_ts). */
   statuses: Record<string, ThreadStatus>
+  /** Modals apps opened for you, bottom of the stack first: the last is shown. */
+  views: View[]
 }
 
 /**
@@ -63,6 +66,8 @@ export type Action =
   | { type: "discard"; channel: string; localTs: string }
   | { type: "read"; channel: string; ts: string }
   | { type: "event"; event: RealtimeEvent }
+  /** Your open views, as the server has them now (campflare.views.list, or an answer to a submit or close). */
+  | { type: "views"; views: View[] }
 
 export const initialState: WorkspaceState = {
   status: "idle",
@@ -74,6 +79,7 @@ export const initialState: WorkspaceState = {
   threads: {},
   unread: {},
   statuses: {},
+  views: [],
 }
 
 export const keyOf = (channel: string, ts: string) => `${channel}/${ts}`
@@ -143,6 +149,8 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
       return remove(state, action.channel, action.localTs)
     case "read":
       return markRead(state, action.channel, action.ts)
+    case "views":
+      return { ...state, views: action.views }
     case "event":
       return applyEvent(state, action.event)
   }
@@ -373,6 +381,8 @@ export function applyEvent(state: WorkspaceState, event: RealtimeEvent): Workspa
   switch (event.type) {
     case "message":
       return onMessage(state, event)
+    case "views_changed":
+      return Array.isArray(event.views) ? { ...state, views: event.views as View[] } : state
     case "assistant_thread_status_changed":
       return onStatus(state, event)
     case "reaction_added":

@@ -26,8 +26,9 @@ export function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id"
 
 /**
  * Block Kit blocks as stored: as given, with a block_id on every block and an
- * action_id on every element of an actions or context_actions block that
- * lacks one, as Slack fills them in, so a click can always say which it was.
+ * action_id on every interactive element that lacks one (an actions or
+ * context_actions block's elements, a section's accessory, an input's
+ * element), as Slack fills them in, so a click can always say which it was.
  */
 export function withBlockIds(blocks: unknown[]): unknown[] {
   return blocks.map((block) => {
@@ -35,14 +36,18 @@ export function withBlockIds(blocks: unknown[]): unknown[] {
     const b = { ...(block as Record<string, unknown>) }
     if (typeof b.block_id !== "string" || !b.block_id) b.block_id = shortId()
     if ((b.type === "actions" || b.type === "context_actions") && Array.isArray(b.elements)) {
-      b.elements = b.elements.map((element: unknown) => {
-        if (!element || typeof element !== "object" || Array.isArray(element)) return element
-        const e = element as Record<string, unknown>
-        return typeof e.action_id === "string" && e.action_id ? e : { ...e, action_id: shortId() }
-      })
+      b.elements = b.elements.map(withActionId)
     }
+    if (b.type === "section" && b.accessory) b.accessory = withActionId(b.accessory)
+    if (b.type === "input" && b.element) b.element = withActionId(b.element)
     return b
   })
+}
+
+function withActionId(element: unknown) {
+  if (!element || typeof element !== "object" || Array.isArray(element)) return element
+  const e = element as Record<string, unknown>
+  return typeof e.action_id === "string" && e.action_id ? e : { ...e, action_id: shortId() }
 }
 
 const ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -106,27 +111,89 @@ method("chat.postEphemeral", "actor", async (ctx) => {
 
 /**
  * An ephemeral message of the caller's content to one person; its ts.
- * Never stored: only the recipient's live clients see it.
+ * Never stored in D1: only the recipient's live clients see it. An app's,
+ * with blocks, is kept in the hub for a day so its buttons can be clicked.
  */
 export function sendEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, threadTs?: string): string {
   const ts = nextTs()
+  const message = ephemeralMessage(ctx, c, ts, threadTs)
+  publish(ctx, {
+    teamId: c.team_id,
+    audience: [user],
+    rtmOnly: true,
+    event: message,
+    ...(message.app_id && message.blocks ? { ephemeral: kept(c, ts, user, message) } : {}),
+  })
+  return ts
+}
+
+/** An ephemeral message of the caller's content, as RTM carries it: blocks and attachments as JSON, not strings. */
+function ephemeralMessage(ctx: Ctx<Actor>, c: ConversationRow, ts: string, threadTs?: string) {
+  const { text, blocks, attachments } = content(ctx)
+  return {
+    type: "message",
+    subtype: "ephemeral",
+    is_ephemeral: true,
+    ...authorOf(ctx),
+    text,
+    ...(blocks ? { blocks: JSON.parse(blocks) as unknown[] } : {}),
+    ...(attachments ? { attachments: JSON.parse(attachments) as unknown[] } : {}),
+    channel: c.id,
+    channel_type: channelType(c),
+    ts,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+  }
+}
+
+const kept = (c: ConversationRow, ts: string, userId: string, message: object | null) => ({
+  channelId: c.id,
+  ts,
+  userId,
+  message: message && JSON.stringify(message),
+})
+
+/** An app replaces its ephemeral message to a person (through a response_url): in place, never "(edited)". */
+export function replaceEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, ts: string, threadTs?: string) {
+  const message = ephemeralMessage(ctx, c, ts, threadTs)
+  const { channel: _channel, channel_type: _type, ...inner } = message
+  const now = `${(Date.now() / 1000).toFixed(6)}`
   publish(ctx, {
     teamId: c.team_id,
     audience: [user],
     rtmOnly: true,
     event: {
       type: "message",
-      subtype: "ephemeral",
-      is_ephemeral: true,
-      ...authorOf(ctx),
-      ...content(ctx),
+      subtype: "message_changed",
+      hidden: true,
       channel: c.id,
       channel_type: channelType(c),
-      ts,
-      ...(threadTs ? { thread_ts: threadTs } : {}),
+      ts: now,
+      event_ts: now,
+      message: inner,
     },
+    ephemeral: kept(c, ts, user, message.blocks ? message : null),
   })
-  return ts
+}
+
+/** An app deletes its ephemeral message to a person (through a response_url). */
+export function deleteEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, ts: string) {
+  const now = `${(Date.now() / 1000).toFixed(6)}`
+  publish(ctx, {
+    teamId: c.team_id,
+    audience: [user],
+    rtmOnly: true,
+    event: {
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: c.id,
+      channel_type: channelType(c),
+      ts: now,
+      event_ts: now,
+      deleted_ts: ts,
+    },
+    ephemeral: kept(c, ts, user, null),
+  })
 }
 
 async function ownMessage(ctx: Ctx<Actor>, verb: "update" | "delete") {
@@ -149,21 +216,31 @@ method("chat.update", "actor", async (ctx) => {
   return { channel: c.id, ts: message.ts, ...updated }
 })
 
-/** Replaces a message's content with the caller's, and announces the change. */
-export async function editMessage(ctx: Ctx<Actor>, c: ConversationRow, message: MessageRow) {
+/**
+ * Replaces a message's content with the caller's, and announces the change.
+ * An app replacing its message through a response_url (`quiet`) doesn't mark
+ * it edited: Slack shows no "(edited)" for those.
+ */
+export async function editMessage(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  message: MessageRow,
+  { quiet = false }: { quiet?: boolean } = {},
+) {
   const next = content(ctx, !message.files)
   const db = ctx.env.DB
   // The edit, the edited row, the audience and the reactions: one round trip.
   const [, edited, audience, reactions] = await db.batch([
     stmt(
       db,
-      `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments), edited_ts = ?, edited_user = ?
+      `UPDATE messages SET text = ?, blocks = ?, attachments = COALESCE(?, attachments),
+         edited_ts = COALESCE(?, edited_ts), edited_user = COALESCE(?, edited_user)
        WHERE channel_id = ? AND ts = ?`,
       next.text,
       next.blocks,
       next.attachments,
-      nextTs(),
-      ctx.auth.user.id,
+      quiet ? null : nextTs(),
+      quiet ? null : ctx.auth.user.id,
       c.id,
       message.ts,
     ),

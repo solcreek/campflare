@@ -41,7 +41,15 @@ export interface PublishInput {
   audience: string[] | "team"
   /** Client-state events (channel_marked and the like) that the Events API doesn't carry. */
   rtmOnly?: boolean
+  /**
+   * An app's ephemeral message to keep (its JSON), or forget (null), for a
+   * while: it isn't stored in D1, but a click on its buttons needs it.
+   */
+  ephemeral?: { channelId: string; ts: string; userId: string; message: string | null }
 }
+
+/** An app's ephemeral message stays clickable this long. */
+export const EPHEMERAL_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface PollInput {
   /** The user whose view to read. */
@@ -87,6 +95,18 @@ export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 /** Socket Mode: how long an envelope waits for its ack before it's sent again, and how often. */
 export const ACK_TIMEOUT_MS = 3000
 export const MAX_RETRIES = 3
+
+/** A trigger_id works once, for 3 seconds, as Slack's do; spent or expired, it's remembered 10 minutes more. */
+export const TRIGGER_TTL_MS = 3000
+const TRIGGER_MEMORY_MS = 10 * 60 * 1000
+/** Open views untouched this long are forgotten. */
+export const VIEW_TTL_MS = 24 * 60 * 60 * 1000
+
+/** A trigger_id handed to an app, and the person whose click (or submission) it came from. */
+export interface TriggerGrant {
+  id: string
+  userId: string
+}
 
 /** Events API over HTTP: retries come 1 s, 1 min and 5 min after a failure, as Slack's do ("immediately", 1, 5). */
 export const HTTP_RETRY_DELAYS_MS = [1_000, 60_000, 300_000]
@@ -172,34 +192,196 @@ export class TeamHub extends DurableObject<Env> {
       expires INTEGER NOT NULL,
       PRIMARY KEY (channel_id, thread_ts)
     )`)
+    // trigger_ids handed to apps with interactions: whom each opens a view for, until it's spent or expires.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS triggers (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      expires INTEGER NOT NULL,
+      used INTEGER NOT NULL
+    )`)
+    // Open views (modals): each person's stack, bottom first.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS views (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      external_id TEXT,
+      position INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      updated INTEGER NOT NULL
+    )`)
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS views_user ON views (user_id, position)")
+    // Apps' ephemeral messages with blocks, for a day: never in D1, but their buttons can be clicked.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS ephemerals (
+      channel_id TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      expires INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, ts, user_id)
+    )`)
   }
 
-  /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id. */
-  private interactions = new Map<string, () => void>()
+  /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id: called with the ack's payload. */
+  private interactions = new Map<string, (response?: unknown) => void>()
 
   /**
-   * Sends an interaction (block_actions) to one of an app's Socket Mode links
-   * and waits for its ack. Unlike events, it isn't kept or sent again: as on
-   * Slack, an app that doesn't ack within 3 seconds shows the person an error.
+   * Sends an interaction (block_actions, view_submission…) to one of an app's
+   * Socket Mode links and waits for its ack. Unlike events, it isn't kept or
+   * sent again: as on Slack, an app that doesn't ack within 3 seconds shows
+   * the person an error. Its trigger_id, if it carries one, is kept first
+   * (whichever way the interaction then goes), so the app can open a view
+   * with it. With `acceptsResponse` (view_submission), the ack's payload
+   * comes back as JSON: the app's response_action.
    */
-  async interact(appId: string, payload: Record<string, unknown>): Promise<"acked" | "timeout" | "no_link"> {
+  async interact(
+    appId: string,
+    payload: Record<string, unknown>,
+    { trigger, acceptsResponse = false }: { trigger?: TriggerGrant; acceptsResponse?: boolean } = {},
+  ): Promise<{ status: "acked" | "timeout" | "no_link"; response?: string }> {
+    if (trigger) this.grantTrigger(appId, trigger)
     const ws = this.nextLink(appId)
-    if (!ws) return "no_link"
+    if (!ws) return { status: "no_link" }
     const envelopeId = ids.envelope()
-    const acked = new Promise<boolean>((resolve) => {
+    const acked = new Promise<{ response?: unknown } | undefined>((resolve) => {
       const timer = setTimeout(() => {
         this.interactions.delete(envelopeId)
-        resolve(false)
+        resolve(undefined)
       }, ACK_TIMEOUT_MS)
-      this.interactions.set(envelopeId, () => {
+      this.interactions.set(envelopeId, (response) => {
         clearTimeout(timer)
         this.interactions.delete(envelopeId)
-        resolve(true)
+        resolve({ response })
       })
     })
-    const sent = send(ws, { envelope_id: envelopeId, payload, type: "interactive", accepts_response_payload: false })
-    if (!sent) this.interactions.get(envelopeId)?.()
-    return !sent ? "no_link" : (await acked) ? "acked" : "timeout"
+    const sent = send(ws, {
+      envelope_id: envelopeId,
+      payload,
+      type: "interactive",
+      accepts_response_payload: acceptsResponse,
+    })
+    if (!sent) {
+      this.interactions.get(envelopeId)?.()
+      return { status: "no_link" }
+    }
+    const ack = await acked
+    if (!ack) return { status: "timeout" }
+    return { status: "acked", ...(ack.response !== undefined ? { response: JSON.stringify(ack.response) } : {}) }
+  }
+
+  /** Keeps a trigger_id for TRIGGER_TTL_MS, for one views.open or views.push by the app it went to. */
+  private grantTrigger(appId: string, grant: TriggerGrant) {
+    const now = Date.now()
+    // Spent and expired ones are kept a while, to tell an app which it was.
+    this.ctx.storage.sql.exec("DELETE FROM triggers WHERE expires < ?", now - TRIGGER_MEMORY_MS)
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO triggers (id, app_id, user_id, expires, used) VALUES (?, ?, ?, ?, 0)",
+      grant.id,
+      appId,
+      grant.userId,
+      now + TRIGGER_TTL_MS,
+    )
+  }
+
+  /** Spends a trigger_id: the person it opens a view for, or why it can't. */
+  async takeTrigger(id: string, appId: string): Promise<{ userId: string } | { error: string }> {
+    const row = this.ctx.storage.sql
+      .exec<{ app_id: string; user_id: string; expires: number; used: number }>(
+        "SELECT app_id, user_id, expires, used FROM triggers WHERE id = ?",
+        id,
+      )
+      .toArray()[0]
+    if (!row || row.app_id !== appId) return { error: "invalid_trigger_id" }
+    if (row.used) return { error: "exchanged_trigger_id" }
+    if (row.expires < Date.now()) return { error: "expired_trigger_id" }
+    this.ctx.storage.sql.exec("UPDATE triggers SET used = 1 WHERE id = ?", id)
+    return { userId: row.user_id }
+  }
+
+  private keepEphemeral({ channelId, ts, userId, message }: NonNullable<PublishInput["ephemeral"]>) {
+    const now = Date.now()
+    this.ctx.storage.sql.exec("DELETE FROM ephemerals WHERE expires < ?", now)
+    if (message === null) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM ephemerals WHERE channel_id = ? AND ts = ? AND user_id = ?",
+        channelId,
+        ts,
+        userId,
+      )
+      return
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO ephemerals (channel_id, ts, user_id, message, expires) VALUES (?, ?, ?, ?, ?)",
+      channelId,
+      ts,
+      userId,
+      message,
+      now + EPHEMERAL_TTL_MS,
+    )
+  }
+
+  /** An app's ephemeral message to a person, as JSON, while it's kept. */
+  async ephemeral(channelId: string, ts: string, userId: string): Promise<string | undefined> {
+    return this.ctx.storage.sql
+      .exec<{ message: string }>(
+        "SELECT message FROM ephemerals WHERE channel_id = ? AND ts = ? AND user_id = ? AND expires >= ?",
+        channelId,
+        ts,
+        userId,
+        Date.now(),
+      )
+      .toArray()[0]?.message
+  }
+
+  /** A person's open views, bottom of the stack first, each as the JSON of a ViewRecord. */
+  async viewStack(userId: string): Promise<string[]> {
+    return this.ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM views WHERE user_id = ? ORDER BY position", userId)
+      .toArray()
+      .map((r) => r.body)
+  }
+
+  /** Whose stack holds a view, found by its id or (for its app) its external_id. */
+  async findView(by: { id?: string; externalId?: string; appId?: string }): Promise<string | undefined> {
+    const row = by.id
+      ? this.ctx.storage.sql.exec<{ user_id: string }>("SELECT user_id FROM views WHERE id = ?", by.id).toArray()[0]
+      : this.ctx.storage.sql
+          .exec<{ user_id: string }>(
+            "SELECT user_id FROM views WHERE external_id = ? AND app_id = ?",
+            by.externalId ?? "",
+            by.appId ?? "",
+          )
+          .toArray()[0]
+    return row?.user_id
+  }
+
+  /**
+   * Replaces a person's stack of views (empty closes them all) and tells
+   * their clients, which show the top one: a `views_changed` event with the
+   * stack, over RTM only. Views nobody touched for a day are forgotten.
+   */
+  async saveViews(teamId: string, userId: string, stack: string[], shown: string): Promise<void> {
+    const now = Date.now()
+    this.ctx.storage.sql.exec("DELETE FROM views WHERE user_id = ? OR updated < ?", userId, now - VIEW_TTL_MS)
+    stack.forEach((body, position) => {
+      const view = (JSON.parse(body) as { view: { id: string; app_id: string; external_id?: string } }).view
+      this.ctx.storage.sql.exec(
+        "INSERT INTO views (id, user_id, app_id, external_id, position, body, updated) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        view.id,
+        userId,
+        view.app_id,
+        view.external_id || null,
+        position,
+        body,
+        now,
+      )
+    })
+    await this.publish({
+      teamId,
+      audience: [userId],
+      rtmOnly: true,
+      event: { type: "views_changed", views: JSON.parse(shown) as unknown },
+    })
   }
 
   /** Counts one use of a response_url: false once it has had `max`. Expired ones are forgotten. */
@@ -555,6 +737,7 @@ export class TeamHub extends DurableObject<Env> {
 
   async publish(input: PublishInput): Promise<number> {
     const { event, audience } = input
+    if (input.ephemeral) this.keepEphemeral(input.ephemeral)
     const eventTs = (event.event_ts as string | undefined) ?? `${(Date.now() / 1000).toFixed(6)}`
     const body = { ...event, event_ts: eventTs }
     // Serialised once, for the log and every RTM link.
@@ -736,7 +919,7 @@ export class TeamHub extends DurableObject<Env> {
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string") return
-    let frame: { type?: string; id?: unknown; envelope_id?: string }
+    let frame: { type?: string; id?: unknown; envelope_id?: string; payload?: unknown }
     try {
       frame = JSON.parse(message) as typeof frame
     } catch {
@@ -745,7 +928,7 @@ export class TeamHub extends DurableObject<Env> {
     // A Socket Mode ack: the envelope arrived, so it isn't sent again; an interaction's clicker hears it was taken.
     if (frame.envelope_id) {
       this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", frame.envelope_id)
-      this.interactions.get(frame.envelope_id)?.()
+      this.interactions.get(frame.envelope_id)?.(frame.payload)
     }
     if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong", reply_to: frame.id }))
   }

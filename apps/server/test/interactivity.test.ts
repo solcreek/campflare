@@ -244,10 +244,10 @@ describe("campflare.blocks.action over HTTP", () => {
     expect((await click()).error).toBe("interactivity_not_enabled")
   })
 
-  it("lets only members of the conversation click, and only on an app's message", async () => {
+  it("lets anyone who can read the conversation click, and only on an app's message", async () => {
     const { w, app, ts, click } = await setup()
     const carol = await w.addUser("carol")
-    // A public channel Carol isn't in: she may read it, but not click.
+    // A public channel Carol isn't in: she may read it, so she may click, as on Slack.
     const { channel: dev } = await ok<{ channel: { id: string } }>(
       "conversations.create",
       { name: "dev" },
@@ -259,7 +259,8 @@ describe("campflare.blocks.action over HTTP", () => {
       app.botToken,
       { json: true },
     )
-    expect((await click({ channel: dev.id, ts: there.ts }, carol.token)).error).toBe("not_in_channel")
+    expect(await click({ channel: dev.id, ts: there.ts }, carol.token)).toEqual({ ok: true, delivered: "http" })
+    expect((await urls.next(isAction)).body).toMatchObject({ user: { id: carol.id }, channel: { id: dev.id } })
     // A private channel is invisible to non-members.
     const { channel } = await ok<{ channel: { id: string } }>(
       "conversations.create",
@@ -306,6 +307,168 @@ describe("campflare.blocks.action over HTTP", () => {
       is_ephemeral: false,
       thread_ts: ts,
     })
+  })
+})
+
+describe("select menus, overflow menus and icon buttons", () => {
+  const option = (text: string, value: string) => ({ text: { type: "plain_text", text }, value })
+  const MENUS = [
+    {
+      type: "section",
+      block_id: "pick",
+      text: { type: "mrkdwn", text: "Which environment?" },
+      accessory: {
+        type: "static_select",
+        action_id: "env",
+        placeholder: { type: "plain_text", text: "Choose" },
+        option_groups: [
+          { label: { type: "plain_text", text: "Live" }, options: [option("Production", "prod")] },
+          { label: { type: "plain_text", text: "Test" }, options: [option("Staging", "staging")] },
+        ],
+      },
+    },
+    {
+      type: "actions",
+      block_id: "more",
+      elements: [
+        { type: "users_select", action_id: "who", placeholder: { type: "plain_text", text: "Assign" } },
+        { type: "conversations_select", action_id: "where" },
+        { type: "channels_select", action_id: "channel", initial_channel: "C0" },
+        { type: "overflow", action_id: "menu", options: [option("Mute", "mute"), option("Señal", "senal")] },
+        {
+          type: "icon_button",
+          action_id: "trash",
+          icon: "trash",
+          text: { type: "plain_text", text: "Delete" },
+          value: "del-1",
+        },
+        { type: "datepicker", action_id: "when" },
+      ],
+    },
+  ]
+
+  async function menus() {
+    const s = await setup()
+    const posted = await ok<{ ts: string }>(
+      "chat.postMessage",
+      { channel: s.w.general, text: "Which environment?", blocks: MENUS },
+      s.app.botToken,
+      { json: true },
+    )
+    const choose = (args: Record<string, unknown>, token = s.bob.token) =>
+      call("campflare.blocks.action", { channel: s.w.general, ts: posted.ts, ...args }, token)
+    return { ...s, ts: posted.ts, choose }
+  }
+
+  it("delivers a static_select choice as selected_option, in the action and in state.values", async () => {
+    const { choose } = await menus()
+    expect((await choose({ action_id: "env", value: "staging" })).ok).toBe(true)
+    const body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "static_select",
+        block_id: "pick",
+        action_id: "env",
+        selected_option: option("Staging", "staging"),
+        placeholder: { type: "plain_text", text: "Choose" },
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({
+      values: { pick: { env: { type: "static_select", selected_option: option("Staging", "staging") } } },
+    })
+    expect((await choose({ action_id: "env", value: "qa" })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "env" })).error).toBe("invalid_value")
+  })
+
+  it("delivers people and conversations chosen, if they were there to choose", async () => {
+    const { w, bob, choose } = await menus()
+    expect((await choose({ action_id: "who", value: w.owner.id })).ok).toBe(true)
+    let body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "users_select",
+        block_id: "more",
+        action_id: "who",
+        selected_user: w.owner.id,
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({ values: { more: { who: { type: "users_select", selected_user: w.owner.id } } } })
+
+    expect((await choose({ action_id: "where", value: w.general })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toMatchObject([{ type: "conversations_select", selected_conversation: w.general }])
+
+    expect((await choose({ action_id: "channel", value: w.general })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toMatchObject([
+      { type: "channels_select", selected_channel: w.general, initial_channel: "C0" },
+    ])
+
+    // Nobody, a private channel Bob isn't in, a DM as a channel: not on offer.
+    const { channel: secret } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "secret", is_private: true },
+      w.owner.token,
+    )
+    const { channel: dm } = await ok<{ channel: { id: string } }>(
+      "conversations.open",
+      { users: w.owner.id },
+      bob.token,
+    )
+    expect((await choose({ action_id: "who", value: "UNOBODY" })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "where", value: secret.id })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "channel", value: dm.id })).error).toBe("invalid_value")
+    expect((await choose({ action_id: "where", value: dm.id })).ok).toBe(true)
+    expect((await choose({ action_id: "who" })).error).toBe("invalid_value")
+  })
+
+  it("delivers an overflow choice and an icon button click; other elements aren't clickable yet", async () => {
+    const { choose } = await menus()
+    expect((await choose({ action_id: "menu", value: "senal" })).ok).toBe(true)
+    let body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "overflow",
+        block_id: "more",
+        action_id: "menu",
+        selected_option: option("Señal", "senal"),
+        action_ts: expect.any(String),
+      },
+    ])
+    expect(body.state).toEqual({ values: {} })
+    expect((await choose({ action_id: "trash" })).ok).toBe(true)
+    body = (await urls.next(isAction)).body
+    expect(body.actions).toEqual([
+      {
+        type: "icon_button",
+        block_id: "more",
+        action_id: "trash",
+        icon: "trash",
+        text: { type: "plain_text", text: "Delete" },
+        value: "del-1",
+        action_ts: expect.any(String),
+      },
+    ])
+    expect((await choose({ action_id: "when" })).error).toBe("action_not_supported")
+  })
+
+  it("gives a section's accessory an action_id when it has none", async () => {
+    const { w, app } = await setup()
+    const posted = await ok<{ message: { blocks: { accessory?: { action_id: string } }[] } }>(
+      "chat.postMessage",
+      {
+        channel: w.general,
+        text: "x",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "x" }, accessory: { type: "overflow", options: [] } },
+        ],
+      },
+      app.botToken,
+      { json: true },
+    )
+    expect(posted.message.blocks[0]!.accessory!.action_id).toMatch(/^[A-Za-z0-9]{5}$/)
   })
 })
 
@@ -390,6 +553,92 @@ describe("campflare.blocks.action over Socket Mode", () => {
   }, 10_000)
 })
 
+describe("buttons on an ephemeral message", () => {
+  /** The app says something with buttons to Bob alone; his live client has it. */
+  async function ephemeral() {
+    const s = await setup()
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, s.bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
+    const { message_ts } = await ok<{ message_ts: string }>(
+      "chat.postEphemeral",
+      { channel: s.w.general, user: s.bob.id, text: "Only you: open the pull request?", blocks: BLOCKS },
+      s.app.botToken,
+      { json: true },
+    )
+    const shown = await rtm.next((f) => f.subtype === "ephemeral")
+    return { ...s, rtm, ts: message_ts, shown }
+  }
+
+  it("arrive as blocks, and a click reaches the app as an ephemeral container without the message", async () => {
+    const { w, app, bob, rtm, ts, shown } = await ephemeral()
+    expect(shown).toMatchObject({ ts, is_ephemeral: true, app_id: app.id, blocks: BLOCKS })
+    expect(shown).not.toHaveProperty("attachments")
+    expect(await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)).toEqual({
+      ok: true,
+      delivered: "http",
+    })
+    const hit = await urls.next(isAction)
+    expect(hit.body).toMatchObject({
+      type: "block_actions",
+      container: { type: "message", message_ts: ts, channel_id: w.general, is_ephemeral: true },
+      channel: { id: w.general, name: "general" },
+      actions: [{ type: "button", action_id: "approve", value: "pr-42" }],
+    })
+    expect(hit.body).not.toHaveProperty("message")
+    // Nobody else has it to click.
+    expect(
+      (await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, w.owner.token)).error,
+    ).toBe("message_not_found")
+    rtm.close()
+  })
+
+  it("is replaced, or deleted, for the clicker alone, through the response_url", async () => {
+    const { w, bob, rtm, ts } = await ephemeral()
+    await ok("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)
+    const responseUrl = (await urls.next(isAction)).body.response_url as string
+    const done = [{ type: "section", block_id: "done", text: { type: "mrkdwn", text: "Approved" } }]
+    expect((await respond(responseUrl, { replace_original: true, text: "Approved", blocks: done })).body).toEqual({
+      ok: true,
+    })
+    const changed = await rtm.next((f) => f.subtype === "message_changed")
+    expect(changed).toMatchObject({
+      channel: w.general,
+      message: { ts, text: "Approved", is_ephemeral: true, blocks: done },
+    })
+    expect(changed.message).not.toHaveProperty("edited")
+    // The replacement has no buttons left: nothing to click.
+    expect(
+      (await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)).error,
+    ).toBe("action_not_found")
+    expect((await history(w)).map((m) => m.ts)).not.toContain(ts)
+    expect((await respond(responseUrl, { delete_original: true })).body).toEqual({ ok: true })
+    expect(await rtm.next((f) => f.subtype === "message_deleted")).toMatchObject({ deleted_ts: ts })
+    rtm.close()
+  })
+
+  it("stays clickable after a replacement that keeps buttons, and for a day only", async () => {
+    const { w, bob, rtm, ts } = await ephemeral()
+    await ok("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)
+    const responseUrl = (await urls.next(isAction)).body.response_url as string
+    await respond(responseUrl, { replace_original: true, text: "Sure?", blocks: BLOCKS })
+    await rtm.next((f) => f.subtype === "message_changed")
+    const click = () => call("campflare.blocks.action", { channel: w.general, ts, action_id: "reject" }, bob.token)
+    expect((await click()).ok).toBe(true)
+    expect((await urls.next(isAction)).body.actions).toMatchObject([{ action_id: "reject" }])
+    const now = Date.now()
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 25 * 60 * 60 * 1000)
+    try {
+      expect((await click()).error).toBe("message_not_found")
+    } finally {
+      later.mockRestore()
+    }
+    rtm.close()
+  })
+})
+
+const history = async (w: Workspace, token = w.owner.token) =>
+  (await ok<{ messages: Record<string, unknown>[] }>("conversations.history", { channel: w.general }, token)).messages
+
 describe("response_url", () => {
   async function clicked() {
     const s = await setup()
@@ -397,9 +646,6 @@ describe("response_url", () => {
     const responseUrl = (await urls.next(isAction)).body.response_url as string
     return { ...s, responseUrl }
   }
-
-  const history = async (w: Workspace, token = w.owner.token) =>
-    (await ok<{ messages: Record<string, unknown>[] }>("conversations.history", { channel: w.general }, token)).messages
 
   it("replaces the original message", async () => {
     const { w, app, ts, responseUrl, bob } = await clicked()
@@ -411,9 +657,11 @@ describe("response_url", () => {
     })
     const [latest] = await history(w)
     expect(latest).toMatchObject({ ts, text: "Approved", bot_id: app.botId, blocks: [{ type: "section" }] })
-    expect(await rtm.next((f) => f.subtype === "message_changed")).toMatchObject({
-      message: { ts, text: "Approved" },
-    })
+    // As on Slack, an app's replacement isn't an edit: no "(edited)".
+    expect(latest).not.toHaveProperty("edited")
+    const changed = await rtm.next((f) => f.subtype === "message_changed")
+    expect(changed).toMatchObject({ message: { ts, text: "Approved" } })
+    expect(changed.message).not.toHaveProperty("edited")
     rtm.close()
   })
 

@@ -27,7 +27,7 @@ function TextOf({ value }: { value: unknown }) {
   return t.type === "mrkdwn" ? <Mrkdwn text={t.text} /> : <p className="whitespace-pre-wrap">{t.text}</p>
 }
 
-function BlockView({ block }: { block: MessageBlock }) {
+export function BlockView({ block }: { block: MessageBlock }) {
   switch (block.type) {
     case "markdown":
       return typeof block.text === "string" ? <Markdown text={block.text} /> : null

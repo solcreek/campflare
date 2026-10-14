@@ -410,28 +410,67 @@ app, browser), opt-in because it costs everyone a click. Neither page launches
 the app by itself (no script, no refresh): a scheme nobody registered would
 only show the browser's error.
 
-**Interactivity.** A click on a button in an app's message is
-`campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, members only): it
-finds the element in the stored blocks (`actionOf()` in `src/interactivity.ts`;
-`button`, or `feedback_buttons` with `value` naming the button) and sends the
-app that posted the message `block_actions` in Slack's shape. Over Socket Mode
-first: `TeamHub.interact()` sends an `interactive` envelope on one link and
-waits up to 3 s for its ack, in memory, never kept or resent. Else a signed
-form POST (`payload=<json>`, `postSigned()` with a content type) to
-`apps.interactivity_request_url` (migration 0013,
-`campflare.apps.setInteractivity`, not challenged). No retries: a miss is the
-clicker's `app_unreachable`, as Slack shows an error. Stored blocks get a
-`block_id`, and actions elements an `action_id`, when the poster gave none
-(`withBlockIds()` in `methods/chat.ts`), as Slack fills them in. The
-`response_url` is `/actions/<signed claims>` (team, channel, ts, thread, app,
-clicker; `purpose` sets it apart from WebSocket tickets signed with the same
-key), 30 minutes, 5 uses counted in the hub's `response_urls` table.
-`handleResponseUrl()` acts as the app's bot through chat's own
-`editMessage`/`deleteMessage`/`postMessage`/`sendEphemeral`:
-`replace_original`, `delete_original`, `response_type: in_channel`, else
-ephemeral to the clicker over RTM. `trigger_id` is generated, but there is no
-`views.open`. In the app, `MessageBlocks` (`apps/web/src/components/message-blocks.tsx`)
-renders what core's `interactiveBlocks()` finds and calls `workspace.click()`.
+**Interactivity.** A click on a button, or a choice in a select menu, in an
+app's message is `campflare.blocks.action` (`src/methods/blocks.ts`; xoxp;
+anyone who can read the conversation, as on Slack, not only members): it finds
+the element in the stored blocks (`actionOf()` in `src/interactivity.ts`:
+actions/context_actions elements and a section's accessory; `button`,
+`icon_button`, `feedback_buttons` with `value` naming the button,
+`static_select`/`overflow` with `value` an option's, `users_select`/
+`conversations_select`/`channels_select` with `value` the id, checked by
+`requireChoices()` in one batch) and sends the app that posted the message
+`block_actions` in Slack's shape, a select's choice in `state.values` too.
+`deliverInteraction()` sends it: over Socket Mode first, `TeamHub.interact()`
+sends an `interactive` envelope on one link and waits up to 3 s for its ack, in
+memory, never kept or resent; else a signed form POST (`payload=<json>`,
+`postSigned()` with a content type) to `apps.interactivity_request_url`
+(migration 0013, `campflare.apps.setInteractivity`, not challenged). No
+retries: a miss is the clicker's `app_unreachable`, as Slack shows an error.
+Stored blocks get a `block_id`, and interactive elements (actions elements, a
+section's accessory, an input's element) an `action_id`, when the poster gave
+none (`withBlockIds()` in `methods/chat.ts`), as Slack fills them in. The
+`response_url` is `/actions/<signed claims>` (team, channel, ts, thread,
+ephemeral, app, clicker; `purpose` sets it apart from WebSocket tickets signed
+with the same key), 30 minutes, 5 uses counted in the hub's `response_urls`
+table. `handleResponseUrl()` acts as the app's bot through chat's own
+`editMessage` (`quiet`: no "(edited)", as on Slack)/`deleteMessage`/
+`postMessage`/`sendEphemeral`: `replace_original`, `delete_original`,
+`response_type: in_channel`, else ephemeral to the clicker over RTM.
+Ephemeral messages aren't in D1: an app's with blocks is kept in the hub's
+`ephemerals` table for a day (`PublishInput.ephemeral`, written by `publish()`
+before it sends), so a click finds it when D1 doesn't (`inEphemeral()`:
+`is_ephemeral` container, no `message`), and its response_url replaces or
+deletes it for the clicker alone (`replaceEphemeral`/`deleteEphemeral`, RTM
+`message_changed`/`message_deleted`). In the app, `BlockActions`
+(`apps/web/src/components/message-blocks.tsx`) renders what core's
+`interactiveBlocks()` finds (selects as native `<select>`s, people and channels
+from the workspace; overflow as a menu) and calls `workspace.click()`.
+
+**Modals.** `trigger_id`s stay random and Slack-shaped; `TeamHub.interact()`
+records each (hub `triggers`: app, person, 3 s, single use) before the
+interaction goes out, and `views.open`/`views.push` (`src/methods/views.ts`,
+xoxb) spend one (`takeTrigger`: `invalid_trigger_id`, `exchanged_trigger_id`,
+`expired_trigger_id`). Views live in the hub's `views` table, one stack per
+person (bottom first, 3 at most, forgotten after a day untouched); every change
+is `saveViews()`, which also sends the person's clients an RTM-only
+`views_changed` with the whole stack. `src/views.ts` checks a view as Slack does
+(`viewInput()`: modal, title, submit with inputs, unique block_ids) and builds
+Slack's `state.values` from what a client says each input holds (`formState()`:
+`{ block_id: { action_id: value | values } }`, missing ones keep their initial
+value, empty required ones are errors). The person's side is
+`campflare.views.list`/`submit`/`close` (xoxp). `submit` answers required-field
+errors itself; else `view_submission` with `acceptsResponse` (Socket Mode
+`accepts_response_payload: true`; the ack's `payload`, or the Request URL's
+JSON body, comes back) and applies its `response_action` (`errors`, `update`,
+`push`, `clear`, none closes the view) to the stack as it is after the ack, as
+the app may have changed it meanwhile. `close` pops the view and those on it
+(all, with `clear_on_close`) and sends `view_closed` in `waitUntil` when the
+view has `notify_on_close`. `campflare.blocks.action` with `view_id` is a click
+in a view: `container.type: "view"`, the view with its state so far. Core keeps
+`state.views` from `views_changed` (and `campflare.views.list` after load and
+each reconnect), with `submitView`/`closeView`/`clickInView` and `formField()`
+describing inputs; the app's `ViewDialog` (`components/view-dialog.tsx`) shows
+the top one as a Dialog. CLI: `campflare view list|submit|close|click`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
