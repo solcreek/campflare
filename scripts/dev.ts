@@ -122,6 +122,10 @@ if (seeded) {
     `CAMPFLARE_APP_TOKEN=${seeded.appToken}`,
     `SLACK_USER_TOKEN=${seeded.owner}`,
     `SLACK_APP_TOKEN=${seeded.appToken}`,
+    `SLACK_BOT_TOKEN=${seeded.botToken}`,
+    // An app that takes events over HTTP: campflare admin app $CAMPFLARE_APP_ID --request-url <url>
+    ...(seeded.appId ? [`CAMPFLARE_APP_ID=${seeded.appId}`] : []),
+    ...(seeded.signingSecret ? [`SLACK_SIGNING_SECRET=${seeded.signingSecret}`] : []),
     ...Object.entries(seeded.people).map(([name, token]) => `CAMPFLARE_TOKEN_${name.toUpperCase()}=${token}`),
   )
 }
