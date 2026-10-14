@@ -11,7 +11,7 @@ export interface Profile {
   appToken?: string
   /**
    * How `token` was obtained: "oauth" from `login --oauth`, so the CLI revokes
-   * it when it forgets it (logout, or a login over it); "token" (or absent, in
+   * it when it forgets it (logout, or a re-login: same server and user); "token" (or absent, in
    * older configs) given by hand, perhaps shared with scripts, so never revoked.
    */
   via?: "oauth" | "token"

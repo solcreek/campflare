@@ -3,6 +3,7 @@ import {
   createClient,
   follow,
   listen,
+  serverRoot,
   type ApiArgs,
   type Client,
   type RealtimeEvent,
@@ -12,7 +13,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util"
 import { activeProfile, loadConfig, saveConfig, type Profile } from "./config"
 import { messageLine, plain, time } from "./format"
 import { UsageError, type Io } from "./io"
-import { oauthLogin, revokeToken } from "./oauth"
+import { oauthLogin, revokeToken, tokenOwner } from "./oauth"
 import { resolveConversation, resolveUser, type Conversation, type User } from "./resolve"
 
 const HELP = `campflare — the command line for Campflare (and any Slack-compatible API)
@@ -22,6 +23,8 @@ Usage: campflare <command> [options]
 Account
   login --url <server> --token <xoxp-…> [--app-token <xapp-…>] [--profile <name>]
   login --url <server> --oauth [--port N]   sign in through the browser instead
+                                 a login over a profile from --oauth revokes its old token only
+                                 when it's a re-login (same server and user); else it's kept
   logout [--profile <name>]      forget the profile; revokes a token from login --oauth
   bootstrap --url <server> --secret <s> --team <name> --user <handle> [--email <e>]
   whoami                         who the token belongs to
@@ -110,17 +113,48 @@ async function readStdin(io: Io): Promise<string | undefined> {
   return text?.replace(/\n$/, "")
 }
 
-/**
- * A login wrote over `old`: its token, if it came from `login --oauth` and isn't the new one,
- * is revoked rather than left working with nothing that knows it. Best effort.
- */
-async function revokeReplaced(io: Io, old: Profile | undefined, token: string) {
-  if (old?.via !== "oauth" || !old.token || old.token === token) return
-  const res = await revokeToken(io, old.url, old.token)
-  if (!res.revoked) {
-    io.stderr(`Couldn't revoke the previous token at ${old.url} (${res.reason}); it works until revoked there\n`)
+/** A server however it was typed: "https://X.test/api/" is "https://x.test/". */
+function serverKey(url: string): string {
+  try {
+    return new URL(serverRoot(url)).href
+  } catch {
+    return url
   }
 }
+
+const sameServer = (a: string, b: string) => serverKey(a) === serverKey(b)
+
+/**
+ * A login wrote over `old`, now signed in at `url` as `who`. The old token, if it came from
+ * `login --oauth`, is revoked when this was a re-login: the same server and the same person in
+ * the same workspace, so nothing would know the old one any more. Signed in anywhere else, it
+ * is kept (another machine or a script may use it) and the person is told how to end it.
+ * Best effort: a server that doesn't answer is a reason on stderr, never a failed login.
+ */
+async function replaceProfile(io: Io, old: Profile | undefined, url: string, token: string, who: AuthTest) {
+  if (old?.via !== "oauth" || !old.token || old.token === token) return
+  const owner = sameServer(old.url, url) ? await tokenOwner(io, old.url, old.token) : undefined
+  if (owner === "rejected") return // already ended there
+  if (owner && "user_id" in owner && owner.user_id === who.user_id && owner.team_id === who.team_id) {
+    const res = await revokeToken(io, old.url, old.token)
+    if (!res.revoked) {
+      io.stderr(`Couldn't revoke the previous token at ${old.url} (${res.reason}); it works until revoked there\n`)
+    }
+    return
+  }
+  const whose = owner && "user_id" in owner ? ` for @${owner.user} in ${owner.team}` : ""
+  const why = !owner
+    ? "this login is to another server"
+    : "user_id" in owner
+      ? "this login is another user or workspace"
+      : `couldn't ask whose it is: ${owner.unknown}`
+  io.stderr(
+    `Didn't revoke the previous token of this profile (from login --oauth at ${old.url}${whose}; ${why}): ` +
+      "it still works. To end it, log in there and run `campflare token list`, then `campflare token revoke <id>`\n",
+  )
+}
+
+type AuthTest = { ok: boolean; user: string; team: string; user_id: string; team_id: string }
 
 type Command = (argv: string[], io: Io) => Promise<number | void>
 
@@ -143,7 +177,7 @@ const commands: Record<string, Command> = {
     const token = values.oauth ? await oauthLogin(io, url!, { port }) : (str(values.token) ?? io.env.CAMPFLARE_TOKEN)
     if (!url || !token) throw new UsageError("login needs --url and --token (or --oauth)")
     const client = createClient({ url, token, fetch: io.fetch })
-    const who = await client.call<{ ok: boolean; user: string; team: string }>("auth.test")
+    const who = await client.call<AuthTest>("auth.test")
     const name = str(values.profile) ?? "default"
     const config = await loadConfig(io)
     const old = config.profiles[name]
@@ -156,7 +190,7 @@ const commands: Record<string, Command> = {
     config.current = name
     await saveConfig(io, config)
     io.stdout(`Logged in to ${who.team} as @${who.user} (profile ${name})\n`)
-    await revokeReplaced(io, old, token)
+    await replaceProfile(io, old, url, token, who)
   },
 
   async logout(argv, io) {
@@ -196,8 +230,8 @@ const commands: Record<string, Command> = {
     const res = await createClient({ url, fetch: io.fetch }).call<{
       ok: boolean
       token: string
-      team: { name: string }
-      user: { name: string }
+      team: { id: string; name: string }
+      user: { id: string; name: string }
     }>("campflare.bootstrap", {
       secret: str(values.secret),
       team_name: str(values.team),
@@ -212,7 +246,8 @@ const commands: Record<string, Command> = {
     config.current = name
     await saveConfig(io, config)
     io.stdout(`Created ${res.team.name}; logged in as @${res.user.name} (profile ${name})\n`)
-    await revokeReplaced(io, old, res.token)
+    const who = { ok: true, user: res.user.name, team: res.team.name, user_id: res.user.id, team_id: res.team.id }
+    await replaceProfile(io, old, url, res.token, who)
   },
 
   async profiles(argv, io) {

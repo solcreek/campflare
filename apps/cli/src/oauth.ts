@@ -66,8 +66,50 @@ function callback(server: Server): Promise<URLSearchParams> {
   })
 }
 
-/** How long revoking waits for the server before the CLI forgets the token anyway. */
+/** How long revoking (or asking whose a token is) waits for the server before the CLI carries on. */
 export const REVOKE_TIMEOUT_MS = 5000
+
+type Answer<T> = { ok: true; value: T } | { ok: false; code?: string; reason: string }
+
+/** One Web API call with a token, bounded in time and never throwing: the answer, or why there's none. */
+async function callWithin<T>(
+  io: Io,
+  url: string,
+  token: string,
+  method: string,
+  timeoutMs: number,
+): Promise<Answer<T>> {
+  const fetch = io.fetch ?? globalThis.fetch
+  const abort = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<Answer<T>>((resolve) => {
+    timer = setTimeout(() => {
+      abort.abort()
+      resolve({ ok: false, reason: `no answer in ${timeoutMs / 1000} s` })
+    }, timeoutMs)
+  })
+  const client = createClient({
+    url,
+    token,
+    maxRetries: 0,
+    fetch: (input, init) => fetch(input, { ...init, signal: abort.signal }),
+  })
+  const call = client.call<T & { ok: boolean }>(method).then(
+    (value): Answer<T> => ({ ok: true, value }),
+    (err: unknown): Answer<T> =>
+      err instanceof ApiError
+        ? { ok: false, code: err.code, reason: err.code }
+        : { ok: false, reason: err instanceof Error ? err.message : String(err) },
+  )
+  try {
+    return await Promise.race([call, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** The server no longer takes the token: as good as revoked. */
+const rejected = (code?: string) => code === "invalid_auth" || code === "token_revoked"
 
 /**
  * auth.revoke for a token the CLI is about to forget. Best effort: never
@@ -80,36 +122,30 @@ export async function revokeToken(
   token: string,
   timeoutMs = REVOKE_TIMEOUT_MS,
 ): Promise<{ revoked: true } | { revoked: false; reason: string }> {
-  const fetch = io.fetch ?? globalThis.fetch
-  const abort = new AbortController()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<{ revoked: false; reason: string }>((resolve) => {
-    timer = setTimeout(() => {
-      abort.abort()
-      resolve({ revoked: false, reason: `no answer in ${timeoutMs / 1000} s` })
-    }, timeoutMs)
-  })
-  const client = createClient({
-    url,
-    token,
-    maxRetries: 0,
-    fetch: (input, init) => fetch(input, { ...init, signal: abort.signal }),
-  })
-  const call = client.call("auth.revoke").then(
-    () => ({ revoked: true }) as const,
-    (err: unknown) => {
-      if (err instanceof ApiError) {
-        if (err.code === "invalid_auth" || err.code === "token_revoked") return { revoked: true } as const
-        return { revoked: false, reason: err.code } as const
-      }
-      return { revoked: false, reason: err instanceof Error ? err.message : String(err) } as const
-    },
-  )
-  try {
-    return await Promise.race([call, timeout])
-  } finally {
-    clearTimeout(timer)
-  }
+  const res = await callWithin(io, url, token, "auth.revoke", timeoutMs)
+  return res.ok || rejected(res.code) ? { revoked: true } : { revoked: false, reason: res.reason }
+}
+
+export interface TokenOwner {
+  team: string
+  team_id: string
+  user: string
+  user_id: string
+}
+
+/**
+ * Whose a token is (auth.test), the same best-effort way: the owner, "rejected"
+ * when the server no longer takes it, or why it couldn't tell.
+ */
+export async function tokenOwner(
+  io: Io,
+  url: string,
+  token: string,
+  timeoutMs = REVOKE_TIMEOUT_MS,
+): Promise<TokenOwner | "rejected" | { unknown: string }> {
+  const res = await callWithin<TokenOwner>(io, url, token, "auth.test", timeoutMs)
+  if (res.ok) return res.value
+  return rejected(res.code) ? "rejected" : { unknown: res.reason }
 }
 
 /** Runs the browser sign-in against a server and returns the new user token. */

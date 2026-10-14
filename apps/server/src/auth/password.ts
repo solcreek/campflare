@@ -72,8 +72,12 @@ export function checkPassword(password: string): string {
 
 /**
  * Sets (or replaces) a user's password. It ends the person's sign-ins in the
- * browser (their Better Auth sessions) and forgets wrong guesses at their
- * email. Their tokens stay: those are apps they installed, revoked one by one.
+ * browser (their Better Auth sessions), revokes what MCP clients were granted
+ * through them (Better Auth's access and refresh tokens; consent stays, so a
+ * client the person trusts signs in again without being asked), and forgets
+ * wrong guesses at their email. JWT access tokens are not stored anywhere:
+ * /mcp refuses those issued before `passwords.updated` (src/mcp/index.ts).
+ * Their xoxp tokens stay: those are apps they installed, revoked one by one.
  */
 export async function setPassword(
   env: Env,
@@ -81,6 +85,8 @@ export async function setPassword(
   password: string,
 ): Promise<void> {
   const hash = await hashPassword(checkPassword(password))
+  // The Better Auth user linked to this Campflare user (one per person, src/auth/sign-in.ts).
+  const linked = `SELECT "userId" FROM "account" WHERE "providerId" = ? AND "accountId" = ?`
   await env.DB.batch([
     stmt(
       env.DB,
@@ -90,13 +96,9 @@ export async function setPassword(
       hash,
       nowSeconds(),
     ),
-    stmt(
-      env.DB,
-      `DELETE FROM "session" WHERE "userId" IN
-         (SELECT "userId" FROM "account" WHERE "providerId" = ? AND "accountId" = ?)`,
-      CAMPFLARE_PROVIDER,
-      user.id,
-    ),
+    stmt(env.DB, `DELETE FROM "oauthAccessToken" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
+    stmt(env.DB, `DELETE FROM "oauthRefreshToken" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
+    stmt(env.DB, `DELETE FROM "session" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
     ...(user.email ? [forgetEmail(env.DB, normalizeEmail(user.email))] : []),
   ])
 }
