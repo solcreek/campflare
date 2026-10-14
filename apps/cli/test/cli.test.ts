@@ -321,6 +321,95 @@ describe("workspace", () => {
   })
 })
 
+describe("buttons", () => {
+  it("lists a message's buttons, clicks one, and sets the app's Interactivity URL", async () => {
+    const cli = await loggedIn()
+    await cli.run("admin", "add-app", "Deploy", "--json")
+    const app = JSON.parse(cli.out) as { app: { id: string }; bot_token: string }
+    const bot = memoryIo({ env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: app.bot_token } })
+    const blocks = [
+      {
+        type: "actions",
+        block_id: "decide",
+        elements: [
+          { type: "button", action_id: "approve", text: { type: "plain_text", text: "Approve" }, value: "pr-42" },
+        ],
+      },
+      {
+        type: "context_actions",
+        block_id: "rate",
+        elements: [
+          {
+            type: "feedback_buttons",
+            action_id: "feedback",
+            positive_button: { text: { type: "plain_text", text: "Good" }, value: "up" },
+            negative_button: { text: { type: "plain_text", text: "Bad" }, value: "down" },
+          },
+        ],
+      },
+    ]
+    expect(
+      await bot.run("api", "chat.postMessage", "channel=#general", "text=Ship it?", `blocks=${JSON.stringify(blocks)}`),
+    ).toBe(0)
+    const { ts } = JSON.parse(bot.out) as { ts: string }
+
+    cli.clear()
+    expect(await cli.run("click", "#general", ts)).toBe(0)
+    expect(cli.out).toBe(
+      "approve  Approve  --value pr-42  --block decide\n" +
+        "feedback  Good  --value up  --block rate\n" +
+        "feedback  Bad  --value down  --block rate\n",
+    )
+    cli.clear()
+    expect(await cli.run("click", "#general", ts, "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toHaveLength(3)
+
+    cli.clear()
+    expect(await cli.run("click", "#general", ts, "approve")).toBe(1)
+    expect(cli.err).toBe("error: interactivity_not_enabled\n")
+
+    // An app listening here takes the click.
+    const payloads: Record<string, unknown>[] = []
+    const listener = createServer((req, res) => {
+      let body = ""
+      req.on("data", (d: Buffer) => (body += d))
+      req.on("end", () => {
+        payloads.push(JSON.parse(new URLSearchParams(body).get("payload")!) as Record<string, unknown>)
+        res.end()
+      })
+    })
+    await new Promise<void>((r) => listener.listen(0, "127.0.0.1", r))
+    const url = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/interactive`
+    try {
+      cli.clear()
+      expect(await cli.run("admin", "app", app.app.id, "--interactivity-url", url)).toBe(0)
+      expect(cli.out).toContain(`Interactivity URL: ${url}\n`)
+      cli.clear()
+      expect(await cli.run("click", "#general", ts, "feedback", "--value", "down", "--block", "rate")).toBe(0)
+      expect(cli.out).toBe("Clicked: the app took it (HTTP)\n")
+      expect(payloads[0]).toMatchObject({ type: "block_actions", actions: [{ action_id: "feedback", value: "down" }] })
+      cli.clear()
+      expect(await cli.run("click", "#general", ts, "approve", "--json")).toBe(0)
+      expect(JSON.parse(cli.out)).toEqual({ ok: true, delivered: "http" })
+      cli.clear()
+      expect(await cli.run("admin", "app", app.app.id, "--interactivity-url", "", "--json")).toBe(0)
+      expect(JSON.parse(cli.out)).toMatchObject({ app: { interactivity: { request_url: null } } })
+    } finally {
+      listener.close()
+    }
+
+    // A message without buttons, one that isn't there, and missing arguments.
+    cli.clear()
+    await cli.run("send", "#general", "--json", "plain")
+    const plain = (JSON.parse(cli.out) as { ts: string }).ts
+    cli.clear()
+    expect(await cli.run("click", "#general", plain)).toBe(0)
+    expect(cli.out).toBe("No buttons in that message\n")
+    expect(await cli.run("click", "#general", "1000000000.000001")).toBe(2)
+    expect(await cli.run("click", "#general")).toBe(2)
+  })
+})
+
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 10))
 }

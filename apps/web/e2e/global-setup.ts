@@ -26,6 +26,8 @@ export interface Stack {
   apiUrl: string
   /** The seeded people's user tokens, by handle. */
   people: Record<string, string>
+  /** The seeded app (installed by alex): its id and bot token. */
+  app: { id: string; botToken: string }
 }
 
 export default async function setup(_config: FullConfig) {
@@ -64,7 +66,12 @@ export default async function setup(_config: FullConfig) {
   ) as Record<string, string>
   const people: Record<string, string> = { alex: env.CAMPFLARE_TOKEN! }
   for (const [k, v] of Object.entries(env)) if (k.startsWith("CAMPFLARE_TOKEN_")) people[k.slice(16).toLowerCase()] = v
-  const stack: Stack = { appUrl: `http://localhost:${webPort}`, apiUrl: `http://localhost:${apiPort}`, people }
+  const stack: Stack = {
+    appUrl: `http://localhost:${webPort}`,
+    apiUrl: `http://localhost:${apiPort}`,
+    people,
+    app: { id: env.CAMPFLARE_APP_ID!, botToken: env.SLACK_BOT_TOKEN! },
+  }
   process.env.CAMPFLARE_E2E = JSON.stringify(stack)
 
   return async () => {

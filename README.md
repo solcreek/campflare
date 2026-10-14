@@ -119,8 +119,9 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                              |
 | dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                   |
 | realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                          |
+| interactivity         | `block_actions` for `button`s and `feedback_buttons`, over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                                    |
 | other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                      |
-| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`                                               |
+| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`                      |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -185,6 +186,35 @@ after 1 s, 1 min and 5 min, with `X-Slack-Retry-Num` and
 `X-Slack-Retry-Reason` (`http_error`, `http_timeout`, `connection_failed`);
 an answer with `X-Slack-No-Retry: 1` stops them. An app with a live Socket
 Mode link gets its events there instead, as on Slack.
+
+### Interactivity
+
+Buttons in an app's messages work as on Slack. A person clicks an `actions`
+block's `button`, or a `context_actions` block's `feedback_buttons` (👍/👎),
+in the app or with `campflare click <#channel> <ts> [action_id]` (without an
+action_id it lists the message's buttons). Under both is
+`campflare.blocks.action` (`channel`, `ts`, `action_id`, `block_id`, and
+`value` naming a feedback button), Campflare's own method, since Slack's
+clients use an internal one. Only members of the conversation can click.
+
+The app whose bot posted the message gets `block_actions` in Slack's shape
+(`user`, `team`, `channel`, `container`, `message`, `actions[]`,
+`response_url`, `trigger_id`): an `interactive` envelope over Socket Mode when
+it has a link, else a signed form POST (`payload=<json>`) to its
+Interactivity Request URL:
+
+```sh
+campflare admin app A0123 --interactivity-url https://helper.example/slack/events
+```
+
+(`campflare.apps.setInteractivity`, `app`, `request_url`; not challenged, as
+on Slack). Clicks aren't retried: an app that doesn't ack, or answer 2xx,
+within 3 seconds gives the clicker `app_unreachable`. The `response_url` takes
+the app's answer for 30 minutes, 5 times: `replace_original`,
+`delete_original`, `response_type: "in_channel"`, or by default a message only
+the clicker sees (ephemeral). Posted as the app's bot, in the clicked message's
+thread unless `thread_ts` says otherwise. `trigger_id` is generated, but
+`views.open` (modals) isn't there yet.
 
 ### The event log
 

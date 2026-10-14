@@ -6,6 +6,7 @@ import { audienceFrom, audienceStatement } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { knownExtras, messageJson } from "../api/shapes"
+import { withBlockIds } from "./chat"
 
 // Slack's text streaming: chat.startStream posts a message an app then grows
 // with chat.appendStream and finishes with chat.stopStream.
@@ -49,7 +50,7 @@ function chunkContent(chunk: unknown): string | Block[] | undefined {
       return chunk.text
     case "blocks":
       if (!Array.isArray(chunk.blocks) || !chunk.blocks.every(isObject)) throw new CampflareError("invalid_chunks")
-      return chunk.blocks
+      return withBlockIds(chunk.blocks) as Block[]
     case "task_update":
       if (typeof chunk.id !== "string" || typeof chunk.title !== "string" || !TASK_STATUSES.has(String(chunk.status)))
         throw new CampflareError("invalid_chunks")
@@ -106,7 +107,7 @@ function closingBlocks(ctx: Ctx<Actor>): Block[] {
   if (blocks === undefined) return []
   if (!Array.isArray(blocks) || !blocks.every(isObject)) throw new CampflareError("invalid_blocks")
   if (blocks.length > MAX_BLOCKS) throw new CampflareError("msg_blocks_too_many")
-  return blocks
+  return withBlockIds(blocks) as Block[]
 }
 
 function botApp(ctx: Ctx<Actor>) {

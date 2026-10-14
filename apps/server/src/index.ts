@@ -4,6 +4,7 @@ import type { Env } from "./env"
 import "./methods/admin"
 import "./methods/assistant"
 import "./methods/auth"
+import "./methods/blocks"
 import "./methods/chat"
 import "./methods/chat-stream"
 import "./methods/conversations"
@@ -20,6 +21,7 @@ import "./methods/users"
 import { mountAuth } from "./auth/routes"
 import { handlePermalink } from "./permalinks"
 import { handleMcp } from "./mcp"
+import { handleResponseUrl } from "./interactivity"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
@@ -111,6 +113,11 @@ app.get("/huddle/scribe/:ticket", async (c) => {
 
 /** The remote MCP server (Streamable HTTP). */
 app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUntil(p)))
+
+/** response_urls handed to apps with a click (block_actions): the app's answer. */
+app.post("/actions/:token", (c) =>
+  handleResponseUrl(c.env, c.req.raw, c.req.param("token"), (p) => c.executionCtx.waitUntil(p)),
+)
 
 /** Upload URLs handed out by files.getUploadURLExternal. */
 app.post("/upload/v1/:token", (c) => handleUpload(c.env, c.req.raw, c.req.param("token")))

@@ -340,6 +340,29 @@ so existence and access are the app's to find out (its not-found view). Without
 `APP_URL` from `.dev.vars`, else `http://localhost:5173/` (`pnpm web`), or
 `--app-url`. Deployed, set it as a var or secret.
 
+**Interactivity.** A click on a button in an app's message is
+`campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, members only): it
+finds the element in the stored blocks (`actionOf()` in `src/interactivity.ts`;
+`button`, or `feedback_buttons` with `value` naming the button) and sends the
+app that posted the message `block_actions` in Slack's shape. Over Socket Mode
+first: `TeamHub.interact()` sends an `interactive` envelope on one link and
+waits up to 3 s for its ack, in memory, never kept or resent. Else a signed
+form POST (`payload=<json>`, `postSigned()` with a content type) to
+`apps.interactivity_request_url` (migration 0013,
+`campflare.apps.setInteractivity`, not challenged). No retries: a miss is the
+clicker's `app_unreachable`, as Slack shows an error. Stored blocks get a
+`block_id`, and actions elements an `action_id`, when the poster gave none
+(`withBlockIds()` in `methods/chat.ts`), as Slack fills them in. The
+`response_url` is `/actions/<signed claims>` (team, channel, ts, thread, app,
+clicker; `purpose` sets it apart from WebSocket tickets signed with the same
+key), 30 minutes, 5 uses counted in the hub's `response_urls` table.
+`handleResponseUrl()` acts as the app's bot through chat's own
+`editMessage`/`deleteMessage`/`postMessage`/`sendEphemeral`:
+`replace_original`, `delete_original`, `response_type: in_channel`, else
+ephemeral to the clicker over RTM. `trigger_id` is generated, but there is no
+`views.open`. In the app, `MessageBlocks` (`apps/web/src/components/message-blocks.tsx`)
+renders what core's `interactiveBlocks()` finds and calls `workspace.click()`.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, tokens and apps (an app is

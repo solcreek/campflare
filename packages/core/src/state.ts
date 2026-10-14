@@ -315,7 +315,8 @@ function onMessage(state: WorkspaceState, event: RealtimeEvent): WorkspaceState 
     const m = event.message as Message
     // An edit to a message never loaded would file it out of its place in history.
     if (!state.messages[keyOf(channel, m.ts)]) return state
-    return upsert(state, { ...m, channel })
+    // The changed message is whole: blocks or attachments it doesn't have were taken out (an app replacing its buttons).
+    return upsert(state, { blocks: undefined, attachments: undefined, ...m, channel })
   }
   if (subtype === "message_deleted") return remove(state, channel, event.deleted_ts as string)
   const { type: _type, channel_type: _channelType, event_ts: _eventTs, ...fields } = event

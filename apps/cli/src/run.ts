@@ -37,6 +37,9 @@ Messages
   search <query> [-n 20] [--page N] [--newest] [--json]
   react <#channel|id> <ts> <emoji> [--remove]
   edit <#channel|id> <ts> <text>      delete <#channel|id> <ts>
+  click <#channel|id> <ts> [action_id] [--block <id>] [--value <v>]
+                                   click a button in an app's message (Campflare);
+                                   without an action_id, lists the message's buttons
 
 Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
@@ -56,9 +59,10 @@ Workspace
 Admin (Campflare only)
   admin add-user <handle> [--email <e>] [--name <real name>] [--admin]
   admin add-app <name>             a bot token, a Socket Mode app token and a signing secret
-  admin app <app id> [--request-url <url>] [--events <a,b>]
+  admin app <app id> [--request-url <url>] [--events <a,b>] [--interactivity-url <url>]
                                    an app's settings; set where its events are POSTed
-                                   (checked with url_verification; '' stops) and which
+                                   (checked with url_verification; '' stops) and which,
+                                   and where clicks on its buttons are POSTed ('' stops)
   token create [--label <l>]   token list   token revoke <id>
 
 Global: --profile <name>, --json. Exit codes: 0 ok, 1 API error, 2 usage.`
@@ -73,7 +77,42 @@ type AppSettings = {
     bot_user_id: string
     signing_secret: string
     event_subscriptions: { request_url: string | null; events: string[] | null }
+    interactivity: { request_url: string | null }
   }
+}
+
+/** What a click can be on: a button, or one of a feedback_buttons pair. */
+interface Clickable {
+  block_id: string
+  action_id: string
+  label: string
+  value?: string
+}
+
+type BlockJson = { type?: string; block_id?: string; elements?: Record<string, unknown>[] }
+
+const labelOf = (text: unknown) =>
+  text && typeof text === "object" && "text" in text ? String((text as { text: unknown }).text) : ""
+
+/** The buttons in a message's actions and context_actions blocks, as `click` takes them. */
+export function clickables(blocks: unknown): Clickable[] {
+  if (!Array.isArray(blocks)) return []
+  const found: Clickable[] = []
+  for (const block of blocks as BlockJson[]) {
+    if ((block?.type !== "actions" && block?.type !== "context_actions") || !Array.isArray(block.elements)) continue
+    for (const e of block.elements) {
+      const ids = { block_id: String(block.block_id ?? ""), action_id: String(e.action_id ?? "") }
+      if (e.type === "button") {
+        found.push({ ...ids, label: labelOf(e.text), ...(typeof e.value === "string" ? { value: e.value } : {}) })
+      } else if (e.type === "feedback_buttons") {
+        for (const key of ["positive_button", "negative_button"] as const) {
+          const b = e[key] as { text?: unknown; value?: string } | undefined
+          if (b) found.push({ ...ids, label: labelOf(b.text), value: String(b.value ?? "") })
+        }
+      }
+    }
+  }
+  return found
 }
 
 const COMMON: ParseArgsConfig["options"] = {
@@ -503,6 +542,40 @@ const commands: Record<string, Command> = {
     })
   },
 
+  async click(argv, io) {
+    const { values, positionals } = parse(argv, { block: { type: "string" }, value: { type: "string" } })
+    const [target, ts, actionId] = positionals
+    if (!target || !ts) throw new UsageError("click needs a conversation and a message ts (and an action_id)")
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    if (!actionId) {
+      const res = await s.client.call<{ ok: boolean; messages: { ts: string; blocks?: unknown }[] }>(
+        "conversations.history",
+        { channel, latest: ts, inclusive: true, limit: 1 },
+      )
+      const message = res.messages.find((m) => m.ts === ts)
+      if (!message) throw new UsageError(`no message ${ts} in ${target} (a reply? give its action_id)`)
+      const found = clickables(message.blocks)
+      if (values.json) return s.print(found)
+      if (found.length === 0) io.stdout("No buttons in that message\n")
+      for (const c of found) {
+        io.stdout(
+          `${c.action_id}  ${c.label}${c.value !== undefined ? `  --value ${c.value}` : ""}  --block ${c.block_id}\n`,
+        )
+      }
+      return
+    }
+    const res = await s.client.call<{ ok: boolean; delivered: string }>("campflare.blocks.action", {
+      channel,
+      ts,
+      action_id: actionId,
+      block_id: str(values.block),
+      value: str(values.value),
+    })
+    if (values.json) return s.print(res)
+    io.stdout(`Clicked: the app took it (${res.delivered === "socket" ? "Socket Mode" : "HTTP"})\n`)
+  },
+
   async edit(argv, io) {
     const { values, positionals } = parse(argv)
     const [target, ts, ...words] = positionals
@@ -685,6 +758,7 @@ const commands: Record<string, Command> = {
       admin: { type: "boolean" },
       "request-url": { type: "string" },
       events: { type: "string" },
+      "interactivity-url": { type: "string" },
     })
     const s = await session(io, values)
     if (sub === "add-user") {
@@ -722,19 +796,25 @@ const commands: Record<string, Command> = {
       if (!app) throw new UsageError("admin app needs an app id (from admin add-app)")
       const url = str(values["request-url"])
       const events = str(values.events)
-      const res =
-        url === undefined && events === undefined
-          ? await s.client.call<AppSettings>("campflare.apps.info", { app })
-          : await s.client.call<AppSettings>("campflare.apps.setEventSubscriptions", {
-              app,
-              ...(url === undefined ? {} : { request_url: url }),
-              ...(events === undefined ? {} : { events }),
-            })
+      const interactivity = str(values["interactivity-url"])
+      let res: AppSettings | undefined
+      if (url !== undefined || events !== undefined) {
+        res = await s.client.call<AppSettings>("campflare.apps.setEventSubscriptions", {
+          app,
+          ...(url === undefined ? {} : { request_url: url }),
+          ...(events === undefined ? {} : { events }),
+        })
+      }
+      if (interactivity !== undefined) {
+        res = await s.client.call<AppSettings>("campflare.apps.setInteractivity", { app, request_url: interactivity })
+      }
+      res ??= await s.client.call<AppSettings>("campflare.apps.info", { app })
       if (values.json) return s.print(res)
       const { id, name, bot_user_id, signing_secret, event_subscriptions: subs } = res.app
       io.stdout(
         `App ${id} (${name}), bot user ${bot_user_id}\nSigning secret: ${signing_secret}\n` +
-          `Request URL: ${subs.request_url ?? "none (Socket Mode only)"}\nEvents: ${subs.events?.join(", ") ?? "all"}\n`,
+          `Request URL: ${subs.request_url ?? "none (Socket Mode only)"}\nEvents: ${subs.events?.join(", ") ?? "all"}\n` +
+          `Interactivity URL: ${res.app.interactivity.request_url ?? "none (Socket Mode only)"}\n`,
       )
     } else {
       throw new UsageError("admin commands: add-user, add-app, app")

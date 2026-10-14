@@ -9,8 +9,8 @@ const TTL_MS = 60_000
 
 export type Ticket = Omit<Connection, "connectedAt"> & { nonce: string; expires: number }
 
-const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-const unb64url = (s: string) => atob(s.replace(/-/g, "+").replace(/_/g, "/"))
+export const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+export const unb64url = (s: string) => atob(s.replace(/-/g, "+").replace(/_/g, "/"))
 
 export async function issueTicket(key: string, conn: Omit<Connection, "connectedAt">): Promise<string> {
   const ticket: Ticket = { ...conn, nonce: randomSecret(12), expires: Date.now() + TTL_MS }

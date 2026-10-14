@@ -151,6 +151,55 @@ export class TeamHub extends DurableObject<Env> {
       ctx.storage.sql.exec("ALTER TABLE unacked ADD COLUMN transport TEXT NOT NULL DEFAULT 'socket'")
       ctx.storage.sql.exec("ALTER TABLE unacked ADD COLUMN reason TEXT")
     }
+    // Interactivity: how often each response_url (by its nonce) has been used, until it expires.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS response_urls (
+      nonce TEXT PRIMARY KEY,
+      uses INTEGER NOT NULL,
+      expires INTEGER NOT NULL
+    )`)
+  }
+
+  /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id. */
+  private interactions = new Map<string, () => void>()
+
+  /**
+   * Sends an interaction (block_actions) to one of an app's Socket Mode links
+   * and waits for its ack. Unlike events, it isn't kept or sent again: as on
+   * Slack, an app that doesn't ack within 3 seconds shows the person an error.
+   */
+  async interact(appId: string, payload: Record<string, unknown>): Promise<"acked" | "timeout" | "no_link"> {
+    const ws = this.nextLink(appId)
+    if (!ws) return "no_link"
+    const envelopeId = ids.envelope()
+    const acked = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.interactions.delete(envelopeId)
+        resolve(false)
+      }, ACK_TIMEOUT_MS)
+      this.interactions.set(envelopeId, () => {
+        clearTimeout(timer)
+        this.interactions.delete(envelopeId)
+        resolve(true)
+      })
+    })
+    const sent = send(ws, { envelope_id: envelopeId, payload, type: "interactive", accepts_response_payload: false })
+    if (!sent) this.interactions.get(envelopeId)?.()
+    return !sent ? "no_link" : (await acked) ? "acked" : "timeout"
+  }
+
+  /** Counts one use of a response_url: false once it has had `max`. Expired ones are forgotten. */
+  async useResponseUrl(nonce: string, expires: number, max: number): Promise<boolean> {
+    const now = Date.now()
+    this.ctx.storage.sql.exec("DELETE FROM response_urls WHERE expires < ?", now)
+    const [row] = this.ctx.storage.sql
+      .exec<{ uses: number }>(
+        `INSERT INTO response_urls (nonce, uses, expires) VALUES (?, 1, ?)
+         ON CONFLICT (nonce) DO UPDATE SET uses = uses + 1 RETURNING uses`,
+        nonce,
+        expires,
+      )
+      .toArray()
+    return row!.uses <= max
   }
 
   /** The workspace's apps with event subscriptions, read from D1 once per hub lifetime and dropped on a change. */
@@ -242,12 +291,9 @@ export class TeamHub extends DurableObject<Env> {
 
   /** One attempt at a POST: done when it's taken (2xx) or refused for good, else due again after a delay. */
   private async attempt(url: string, secret: string, id: string, body: string, retry: number, reason?: string) {
-    const res = await postSigned(
-      url,
-      secret,
-      body,
-      retry ? { num: retry, reason: reason ?? "unknown_error" } : undefined,
-    )
+    const res = await postSigned(url, secret, body, {
+      retry: retry ? { num: retry, reason: reason ?? "unknown_error" } : undefined,
+    })
     if (res.ok || res.noRetry || retry >= MAX_RETRIES) {
       this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", id)
       return res.ok ? 1 : 0
@@ -586,8 +632,11 @@ export class TeamHub extends DurableObject<Env> {
     } catch {
       return
     }
-    // A Socket Mode ack: the envelope arrived, so it isn't sent again.
-    if (frame.envelope_id) this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", frame.envelope_id)
+    // A Socket Mode ack: the envelope arrived, so it isn't sent again; an interaction's clicker hears it was taken.
+    if (frame.envelope_id) {
+      this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", frame.envelope_id)
+      this.interactions.get(frame.envelope_id)?.()
+    }
     if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong", reply_to: frame.id }))
   }
 

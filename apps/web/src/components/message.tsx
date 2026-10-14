@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
 import { MessageBody } from "./message-body"
+import { MessageBlocks } from "./message-blocks"
 import { MessageFiles } from "./message-files"
 import { Emoji, Mrkdwn } from "./mrkdwn"
 
@@ -182,6 +183,7 @@ export function MessageItem({ message, grouped, inThread, onOpenThread, highligh
         {(message.files?.length ?? 0) > 0 && (
           <MessageFiles files={message.files!} uploading={message.pending && !message.failed} />
         )}
+        <MessageBlocks message={message} />
         {message.failed && (
           <div role="alert" className="mt-1 flex items-center gap-2 text-sm text-destructive">
             Not sent ({message.failed}).

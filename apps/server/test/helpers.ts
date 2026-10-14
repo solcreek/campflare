@@ -166,6 +166,7 @@ export interface RequestUrlHit {
   headers: Headers
   /** The raw body, as signed. */
   raw: string
+  /** The JSON: the body, or a form's `payload`. */
   body: Record<string, unknown>
 }
 
@@ -205,7 +206,11 @@ export function fakeRequestUrls() {
   }
   setRequestUrlFetch(async (input, init) => {
     const raw = String(init?.body ?? "")
-    const hit = { url: String(input), headers: new Headers(init?.headers), raw, body: JSON.parse(raw) }
+    const headers = new Headers(init?.headers)
+    // Interactivity POSTs a form whose `payload` is the JSON; events are JSON.
+    const form = headers.get("content-type") === "application/x-www-form-urlencoded"
+    const body = JSON.parse(form ? (new URLSearchParams(raw).get("payload") ?? "null") : raw)
+    const hit = { url: String(input), headers, raw, body }
     hits.push(hit)
     const waiter = waiters.find((w) => w.test(hit))
     if (waiter) {

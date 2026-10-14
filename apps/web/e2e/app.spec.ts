@@ -1,4 +1,6 @@
 import { type Browser, expect, type Page, test } from "@playwright/test"
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { sunsetPng } from "../../../scripts/seed.ts"
 import type { Stack } from "./global-setup"
 
@@ -17,6 +19,18 @@ const sidebarItem = (page: Page, name: string) =>
   page
     .getByRole("navigation", { name: /Channels|Direct messages/ })
     .getByRole("button", { name: new RegExp(`^${name}( \\d+ unread)?$`) })
+
+/** Calls a Web API method on the stack's server with a token; fails the test on ok: false. */
+async function callAs<T = Record<string, unknown>>(method: string, args: Record<string, unknown>, token: string) {
+  const res = await fetch(`${stack.apiUrl}/api/${method}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(args),
+  })
+  const body = (await res.json()) as T & { ok: boolean; error?: string }
+  if (!body.ok) throw new Error(`${method} failed: ${body.error}`)
+  return body
+}
 
 /** The open conversation's messages (a thread panel has its own log). */
 const messages = (page: Page) => page.getByRole("region").getByRole("log", { name: "Messages" })
@@ -364,4 +378,71 @@ test("a permalink opened signed out signs in through the browser first, then lan
   await expect(page.getByRole("status", { name: "Connected" })).toBeVisible()
   await expect(messages(page).locator('article[aria-current="true"]')).toContainText(`Lien direct ${run}`)
   expect(new URL(page.url()).hash).toBe(`#/${general}?msg=${posted.ts}`)
+})
+
+test("a click on an app's button reaches the app, and its answer replaces the message", async ({ browser }) => {
+  // The app: takes block_actions at its Interactivity URL and answers through the response_url.
+  const app = createServer((req, res) => {
+    let body = ""
+    req.on("data", (d: Buffer) => (body += d))
+    req.on("end", () => {
+      res.end()
+      const payload = JSON.parse(new URLSearchParams(body).get("payload")!) as {
+        user: { name: string }
+        actions: { value: string }[]
+        response_url: string
+      }
+      void fetch(payload.response_url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          replace_original: true,
+          text: `Approved ${payload.actions[0]!.value} by ${payload.user.name}`,
+        }),
+      })
+    })
+  })
+  await new Promise<void>((r) => app.listen(0, "127.0.0.1", r))
+  try {
+    const url = `http://127.0.0.1:${(app.address() as AddressInfo).port}/interactive`
+    await callAs("campflare.apps.setInteractivity", { app: stack.app.id, request_url: url }, stack.people.alex!)
+    const run = Date.now().toString(36)
+    await callAs(
+      "chat.postMessage",
+      {
+        channel: "#general",
+        text: `Open the pull request ${run}?`,
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: `Open the pull request ${run}?` } },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                action_id: "approve",
+                text: { type: "plain_text", text: "Approve" },
+                value: `pr-${run}`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      },
+      stack.app.botToken,
+    )
+
+    const alex = await open(browser)
+    const question = messages(alex)
+      .getByRole("article")
+      .filter({ hasText: `Open the pull request ${run}?` })
+    await question.getByRole("button", { name: "Approve" }).click()
+    const answered = messages(alex)
+      .getByRole("article")
+      .filter({ hasText: `Approved pr-${run} by alex` })
+    await expect(answered).toBeVisible()
+    await expect(answered.getByRole("button", { name: "Approve" })).toHaveCount(0)
+  } finally {
+    await callAs("campflare.apps.setInteractivity", { app: stack.app.id, request_url: "" }, stack.people.alex!)
+    app.close()
+  }
 })

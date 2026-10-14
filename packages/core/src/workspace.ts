@@ -1,4 +1,5 @@
 import { ApiError, listen, type ApiResult, type Client, type Listener, type RealtimeEvent } from "@campflare/client"
+import type { Click } from "./blocks"
 import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
 import { type Action, initialState, isReply, keyOf, reduce, type WorkspaceState } from "./state"
 import type { Conversation, Message, User } from "./types"
@@ -53,6 +54,12 @@ export interface Workspace {
   remove(channel: string, ts: string): Promise<void>
   /** Adds your reaction, or takes it back if it's there. */
   toggleReaction(channel: string, ts: string, name: string): Promise<void>
+  /**
+   * Clicks a button in an app's message (campflare.blocks.action). Resolves
+   * once the app has taken it; what the app does about it (a replaced
+   * message, an ephemeral reply) arrives as events.
+   */
+  click(channel: string, ts: string, click: Click): Promise<void>
   /** Marks a conversation read up to its newest loaded message. */
   markRead(channel: string): Promise<void>
   join(channel: string): Promise<void>
@@ -327,6 +334,16 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     }
   }
 
+  async function click(channel: string, ts: string, { blockId, actionId, value }: Click) {
+    await client.call("campflare.blocks.action", {
+      channel,
+      ts,
+      block_id: blockId,
+      action_id: actionId,
+      ...(value !== undefined ? { value } : {}),
+    })
+  }
+
   async function markRead(channel: string) {
     const keys = state.timelines[channel]?.keys ?? []
     const newest = keys
@@ -393,6 +410,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     edit,
     remove,
     toggleReaction,
+    click,
     markRead,
     join,
     createChannel,

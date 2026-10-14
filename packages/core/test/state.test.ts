@@ -279,6 +279,19 @@ describe("reduce", () => {
     expect(s).toBe(before)
   })
 
+  it("drops the blocks and attachments an edit leaves out, and keeps the rest", () => {
+    const blocks = [{ type: "actions", block_id: "b", elements: [] }]
+    let s = run(ready, history([{ ...msg("0000000200.000000"), blocks, attachments: [{ text: "a" }], reply_count: 2 }]))
+    s = reduce(
+      s,
+      event({ channel: "C1", subtype: "message_changed", message: { ts: "0000000200.000000", text: "Approved" } }),
+    )
+    const edited = s.messages[keyOf("C1", "0000000200.000000")]!
+    expect(edited).toMatchObject({ text: "Approved", reply_count: 2 })
+    expect(edited.blocks).toBeUndefined()
+    expect(edited.attachments).toBeUndefined()
+  })
+
   it("counts live messages from others as unread until read", () => {
     let s = run(ready, event({ channel: "C1", ts: "0000000200.000000", user: "U2" }))
     expect(s.unread.C1).toBe(1)

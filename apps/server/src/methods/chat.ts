@@ -8,7 +8,7 @@ import {
   type NewMessage,
 } from "../db/messages"
 import { stmt } from "../db/query"
-import type { MessageRow, ReactionRow } from "../db/rows"
+import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
 import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
@@ -16,7 +16,7 @@ import { nextTs } from "../api/ids"
 import { loadExtras, messageJson, permalink } from "../api/shapes"
 
 /** Who a message is from: the person, or the bot with its app. */
-function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
+export function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
   const { user, app, kind } = ctx.auth
   if (kind === "bot" && app) {
     return { user_id: user.id, bot_id: app.bot_id, app_id: app.id, username: ctx.args.str("username") ?? null }
@@ -24,8 +24,36 @@ function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app
   return { user_id: user.id }
 }
 
+/**
+ * Block Kit blocks as stored: as given, with a block_id on every block and an
+ * action_id on every element of an actions or context_actions block that
+ * lacks one, as Slack fills them in, so a click can always say which it was.
+ */
+export function withBlockIds(blocks: unknown[]): unknown[] {
+  return blocks.map((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return block
+    const b = { ...(block as Record<string, unknown>) }
+    if (typeof b.block_id !== "string" || !b.block_id) b.block_id = shortId()
+    if ((b.type === "actions" || b.type === "context_actions") && Array.isArray(b.elements)) {
+      b.elements = b.elements.map((element: unknown) => {
+        if (!element || typeof element !== "object" || Array.isArray(element)) return element
+        const e = element as Record<string, unknown>
+        return typeof e.action_id === "string" && e.action_id ? e : { ...e, action_id: shortId() }
+      })
+    }
+    return b
+  })
+}
+
+const ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+/** A short random id like Slack's generated block and action ids ("aZ3kQ"). */
+function shortId(): string {
+  return [...crypto.getRandomValues(new Uint8Array(5))].map((b) => ID_CHARS[b % ID_CHARS.length]).join("")
+}
+
 /** text, blocks and attachments as given; at least one must say something. */
-function content(ctx: Ctx<Actor>, required = true) {
+export function content(ctx: Ctx<Actor>, required = true) {
   const text = ctx.args.str("text") ?? ""
   const blocks = ctx.args.json<unknown>("blocks", "invalid_blocks")
   const attachments = ctx.args.json<unknown>("attachments", "invalid_attachments")
@@ -38,7 +66,7 @@ function content(ctx: Ctx<Actor>, required = true) {
   if (Array.isArray(blocks) && blocks.length > 50) throw new CampflareError("invalid_blocks")
   return {
     text,
-    blocks: hasBlocks ? JSON.stringify(blocks) : null,
+    blocks: hasBlocks ? JSON.stringify(withBlockIds(blocks)) : null,
     attachments: hasAttachments ? JSON.stringify(attachments) : null,
   }
 }
@@ -73,8 +101,15 @@ method("chat.postEphemeral", "actor", async (ctx) => {
   const user = ctx.args.req("user", "user_not_in_channel")
   const members = await audienceOf(ctx, c.id)
   if (!members.includes(user)) throw new CampflareError("user_not_in_channel")
+  return { message_ts: sendEphemeral(ctx, c, user, ctx.args.ts("thread_ts")) }
+})
+
+/**
+ * An ephemeral message of the caller's content to one person; its ts.
+ * Never stored: only the recipient's live clients see it.
+ */
+export function sendEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, threadTs?: string): string {
   const ts = nextTs()
-  // Ephemeral messages are never stored: only the recipient's live clients see them.
   publish(ctx, {
     teamId: c.team_id,
     audience: [user],
@@ -88,11 +123,11 @@ method("chat.postEphemeral", "actor", async (ctx) => {
       channel: c.id,
       channel_type: channelType(c),
       ts,
-      ...(ctx.args.ts("thread_ts") ? { thread_ts: ctx.args.ts("thread_ts") } : {}),
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     },
   })
-  return { message_ts: ts }
-})
+  return ts
+}
 
 async function ownMessage(ctx: Ctx<Actor>, verb: "update" | "delete") {
   const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
@@ -110,6 +145,12 @@ async function ownMessage(ctx: Ctx<Actor>, verb: "update" | "delete") {
 method("chat.update", "actor", async (ctx) => {
   const { c, message } = await ownMessage(ctx, "update")
   requireNotArchived(c)
+  const updated = await editMessage(ctx, c, message)
+  return { channel: c.id, ts: message.ts, ...updated }
+})
+
+/** Replaces a message's content with the caller's, and announces the change. */
+export async function editMessage(ctx: Ctx<Actor>, c: ConversationRow, message: MessageRow) {
   const next = content(ctx, !message.files)
   const db = ctx.env.DB
   // The edit, the edited row, the audience and the reactions: one round trip.
@@ -137,11 +178,17 @@ method("chat.update", "actor", async (ctx) => {
     audience: audienceFrom(audience!),
     extras: await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]),
   })
-  return { channel: c.id, ts: message.ts, text: updated.text, message: json }
-})
+  return { text: updated.text, message: json }
+}
 
 method("chat.delete", "actor", async (ctx) => {
   const { c, message } = await ownMessage(ctx, "delete")
+  await deleteMessage(ctx, c, message)
+  return { channel: c.id, ts: message.ts }
+})
+
+/** Deletes a message (a thread head with replies stays as a tombstone), and announces it. */
+export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message: MessageRow) {
   const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
@@ -192,8 +239,7 @@ method("chat.delete", "actor", async (ctx) => {
       },
     })
   }
-  return { channel: c.id, ts: message.ts }
-})
+}
 
 /**
  * After a reply goes, the parent's reply count, latest reply and repliers
