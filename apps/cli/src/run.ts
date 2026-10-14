@@ -38,8 +38,16 @@ Messages
   react <#channel|id> <ts> <emoji> [--remove]
   edit <#channel|id> <ts> <text>      delete <#channel|id> <ts>
   click <#channel|id> <ts> [action_id] [--block <id>] [--value <v>]
-                                   click a button in an app's message (Campflare);
-                                   without an action_id, lists the message's buttons
+        [--option <value>] [--user <@person>] [--conversation <#channel>]
+                                   click a button, or choose in a select menu, in an app's
+                                   message (Campflare); without an action_id, lists what's
+                                   clickable and how; an ephemeral message's needs its action_id
+  view list [--json]               the modals apps opened for you, their inputs and buttons
+  view submit <view id> [--value block_id.action_id=value]…
+                                   fill in and submit the top one (repeat --value for
+                                   checkboxes and multi-selects; @names and #names resolve)
+  view close <view id>             close it (and those opened on it)
+  view click <view id> <action_id> [--block <id>] [--value|--option|--user|--conversation …]
   stop <#channel|id> <ts>          stop an app's reply that is still streaming (Campflare);
                                    the app's next append is answered stopped_by_user
 
@@ -87,38 +95,180 @@ type AppSettings = {
   }
 }
 
-/** What a click can be on: a button, or one of a feedback_buttons pair. */
+/**
+ * What a click can be on: a button (an icon button too), one of a
+ * feedback_buttons pair, or a select menu, which takes an option (`options`)
+ * or a person or conversation (`takes`).
+ */
 interface Clickable {
   block_id: string
   action_id: string
+  type: string
   label: string
   value?: string
+  options?: string[]
+  takes?: "user" | "conversation"
 }
 
-type BlockJson = { type?: string; block_id?: string; elements?: Record<string, unknown>[] }
+type ElementJson = Record<string, unknown>
+type BlockJson = { type?: string; block_id?: string; elements?: ElementJson[]; accessory?: ElementJson }
 
 const labelOf = (text: unknown) =>
   text && typeof text === "object" && "text" in text ? String((text as { text: unknown }).text) : ""
 
-/** The buttons in a message's actions and context_actions blocks, as `click` takes them. */
+/** A select's or an element's options, those in groups included, by value. */
+function optionValues(e: ElementJson): string[] {
+  const groups = Array.isArray(e.option_groups) ? (e.option_groups as { options?: unknown }[]) : []
+  const options = [e.options, ...groups.map((g) => g.options)].flatMap((o) => (Array.isArray(o) ? o : []))
+  return options.map((o) => String((o as { value?: unknown }).value ?? ""))
+}
+
+const TAKES: Record<string, "user" | "conversation"> = {
+  users_select: "user",
+  conversations_select: "conversation",
+  channels_select: "conversation",
+}
+
+/** The clickable elements of blocks (actions and context_actions blocks, sections' accessories), as `click` takes them. */
 export function clickables(blocks: unknown): Clickable[] {
   if (!Array.isArray(blocks)) return []
   const found: Clickable[] = []
   for (const block of blocks as BlockJson[]) {
-    if ((block?.type !== "actions" && block?.type !== "context_actions") || !Array.isArray(block.elements)) continue
-    for (const e of block.elements) {
-      const ids = { block_id: String(block.block_id ?? ""), action_id: String(e.action_id ?? "") }
-      if (e.type === "button") {
+    const elements =
+      block?.type === "actions" || block?.type === "context_actions"
+        ? (block.elements ?? [])
+        : block?.type === "section" && block.accessory
+          ? [block.accessory]
+          : []
+    for (const e of elements) {
+      const type = String(e.type)
+      const ids = { block_id: String(block.block_id ?? ""), action_id: String(e.action_id ?? ""), type }
+      if (type === "button" || type === "icon_button") {
         found.push({ ...ids, label: labelOf(e.text), ...(typeof e.value === "string" ? { value: e.value } : {}) })
-      } else if (e.type === "feedback_buttons") {
+      } else if (type === "feedback_buttons") {
         for (const key of ["positive_button", "negative_button"] as const) {
           const b = e[key] as { text?: unknown; value?: string } | undefined
           if (b) found.push({ ...ids, label: labelOf(b.text), value: String(b.value ?? "") })
         }
+      } else if (type === "static_select" || type === "overflow") {
+        found.push({ ...ids, label: labelOf(e.placeholder), options: optionValues(e) })
+      } else if (TAKES[type]) {
+        found.push({ ...ids, label: labelOf(e.placeholder), takes: TAKES[type] })
       }
     }
   }
   return found
+}
+
+/** How to click one, as `click` (or `view click`) takes it. */
+function clickLine(c: Clickable): string {
+  const how =
+    c.options !== undefined
+      ? `  --option ${c.options.join("|")}`
+      : c.takes === "user"
+        ? "  --user <@person>"
+        : c.takes === "conversation"
+          ? "  --conversation <#channel>"
+          : c.value !== undefined
+            ? `  --value ${c.value}`
+            : ""
+  const menu = c.type.endsWith("select") || c.type === "overflow" ? `(${c.type})` : ""
+  return `${c.action_id}  ${[c.label, menu].filter(Boolean).join(" ")}${how}  --block ${c.block_id}\n`
+}
+
+const CLICK_OPTIONS: ParseArgsConfig["options"] = {
+  block: { type: "string" },
+  value: { type: "string" },
+  option: { type: "string" },
+  user: { type: "string" },
+  conversation: { type: "string" },
+}
+
+const via = (delivered: string | undefined) => (delivered === "socket" ? "Socket Mode" : "HTTP")
+
+/** An open view (modal), as campflare.views.list gives it. */
+interface ViewJson {
+  id: string
+  title?: unknown
+  callback_id?: string
+  app_id?: string
+  submit?: unknown
+  blocks?: BlockJson[]
+}
+
+/** Inputs whose value is a person, or a conversation: `view submit` resolves @names and #names for them. */
+const INPUT_TAKES: Record<string, "user" | "conversation"> = {
+  ...TAKES,
+  multi_users_select: "user",
+  multi_conversations_select: "conversation",
+  multi_channels_select: "conversation",
+}
+
+type InputBlock = BlockJson & { label?: unknown; optional?: boolean; element?: ElementJson }
+
+/** A view for people and agents: its title, its inputs and how to fill each, its buttons, how to submit. */
+function describeView(view: ViewJson, top: boolean): string {
+  const lines = [
+    `${view.id}  ${labelOf(view.title)}  (${view.callback_id || "no callback_id"})${top ? "  [shown]" : ""}`,
+  ]
+  for (const block of (view.blocks ?? []) as InputBlock[]) {
+    if (block.type !== "input" || !block.element) continue
+    const e = block.element
+    const type = String(e.type)
+    const options = optionValues(e)
+    const takes = INPUT_TAKES[type]
+    const hint =
+      options.length > 0
+        ? `  one of ${options.join("|")}`
+        : takes
+          ? `  a ${takes === "user" ? "@person" : "#channel"}`
+          : ""
+    lines.push(
+      `  --value ${block.block_id}.${String(e.action_id)}=…  ${labelOf(block.label)} (${type}${block.optional ? ", optional" : ""})${hint}`,
+    )
+  }
+  for (const c of clickables(view.blocks)) lines.push(`  view click ${view.id} ${clickLine(c).trimEnd()}`)
+  if (top && view.submit) lines.push(`  submit: campflare view submit ${view.id} --value block.action=value …`)
+  return `${lines.join("\n")}\n`
+}
+
+/**
+ * `--value block.action=value` pairs as campflare.views.submit takes them:
+ * repeated for checkboxes and multi-selects; @names and #names resolved for
+ * inputs that take a person or a conversation.
+ */
+async function formValues(s: Session, view: ViewJson, pairs: string[]) {
+  const elements = new Map<string, string>()
+  for (const block of (view.blocks ?? []) as InputBlock[]) {
+    if (block.type === "input" && block.element) {
+      elements.set(`${block.block_id}.${String(block.element.action_id)}`, String(block.element.type))
+    }
+  }
+  const given: Record<string, Record<string, string | string[]>> = {}
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=")
+    const key = eq > 0 ? pair.slice(0, eq) : ""
+    const dot = key.indexOf(".")
+    if (dot <= 0) throw new UsageError(`expected --value block_id.action_id=value, got ${pair}`)
+    const [blockId, actionId] = [key.slice(0, dot), key.slice(dot + 1)]
+    let value = pair.slice(eq + 1)
+    const takes = INPUT_TAKES[elements.get(key) ?? ""]
+    if (takes === "user" && value) value = await resolveUser(s.client, value, s.self)
+    if (takes === "conversation" && value) value = await s.conversation(value)
+    const inputs = (given[blockId] ??= {})
+    const before = inputs[actionId]
+    inputs[actionId] = before === undefined ? value : [before, value].flat()
+  }
+  return given
+}
+
+/** What a click chooses: --value or --option as given, --user and --conversation resolved to ids. */
+async function clickValue(s: Session, values: Values): Promise<string | undefined> {
+  const user = str(values.user)
+  if (user) return resolveUser(s.client, user, s.self)
+  const conversation = str(values.conversation)
+  if (conversation) return s.conversation(conversation)
+  return str(values.option) ?? str(values.value)
 }
 
 const COMMON: ParseArgsConfig["options"] = {
@@ -559,7 +709,7 @@ const commands: Record<string, Command> = {
   },
 
   async click(argv, io) {
-    const { values, positionals } = parse(argv, { block: { type: "string" }, value: { type: "string" } })
+    const { values, positionals } = parse(argv, CLICK_OPTIONS)
     const [target, ts, actionId] = positionals
     if (!target || !ts) throw new UsageError("click needs a conversation and a message ts (and an action_id)")
     const s = await session(io, values)
@@ -574,11 +724,7 @@ const commands: Record<string, Command> = {
       const found = clickables(message.blocks)
       if (values.json) return s.print(found)
       if (found.length === 0) io.stdout("No buttons in that message\n")
-      for (const c of found) {
-        io.stdout(
-          `${c.action_id}  ${c.label}${c.value !== undefined ? `  --value ${c.value}` : ""}  --block ${c.block_id}\n`,
-        )
-      }
+      for (const c of found) io.stdout(clickLine(c))
       return
     }
     const res = await s.client.call<{ ok: boolean; delivered: string }>("campflare.blocks.action", {
@@ -586,10 +732,70 @@ const commands: Record<string, Command> = {
       ts,
       action_id: actionId,
       block_id: str(values.block),
-      value: str(values.value),
+      value: await clickValue(s, values),
     })
     if (values.json) return s.print(res)
-    io.stdout(`Clicked: the app took it (${res.delivered === "socket" ? "Socket Mode" : "HTTP"})\n`)
+    io.stdout(`Clicked: the app took it (${via(res.delivered)}); if it opened a view: campflare view list\n`)
+  },
+
+  async view(argv, io) {
+    const [sub, ...rest] = argv
+    if (!sub || !["list", "submit", "close", "click"].includes(sub)) {
+      throw new UsageError("view takes list, submit, close or click")
+    }
+    const { values, positionals } = parse(rest, { ...CLICK_OPTIONS, value: { type: "string", multiple: true } })
+    const s = await session(io, values)
+    const list = async () => (await s.client.call<{ ok: boolean; views: ViewJson[] }>("campflare.views.list")).views
+    if (sub === "list") {
+      const views = await list()
+      if (values.json) return s.print(views)
+      if (views.length === 0) io.stdout("No views open\n")
+      views.forEach((v, i) => io.stdout(describeView(v, i === views.length - 1)))
+      return
+    }
+    const [viewId, actionId] = positionals
+    if (!viewId) throw new UsageError(`view ${sub ?? ""} needs a view id (campflare view list shows them)`.trim())
+    if (sub === "submit") {
+      const view = (await list()).find((v) => v.id === viewId)
+      if (!view) throw new UsageError(`no open view ${viewId} (campflare view list shows them)`)
+      const given = await formValues(s, view, [values.value ?? []].flat().map(String))
+      const res = await s.client.call<{
+        ok: boolean
+        views: ViewJson[]
+        errors?: Record<string, string>
+        delivered?: string
+      }>("campflare.views.submit", { view_id: viewId, values: JSON.stringify(given) })
+      if (values.json) {
+        s.print(res)
+        return res.errors ? 1 : 0
+      }
+      if (res.errors) {
+        for (const [block, message] of Object.entries(res.errors)) io.stderr(`${block}: ${message}\n`)
+        return 1
+      }
+      const top = res.views.at(-1)
+      io.stdout(
+        `Submitted: the app took it (${via(res.delivered)})${top ? `; now showing ${top.id} ${labelOf(top.title)}` : ""}\n`,
+      )
+      return
+    }
+    if (sub === "close") {
+      const res = await s.client.call<{ ok: boolean; views: ViewJson[] }>("campflare.views.close", { view_id: viewId })
+      if (values.json) return s.print(res)
+      const top = res.views.at(-1)
+      io.stdout(`Closed${top ? `; now showing ${top.id} ${labelOf(top.title)}` : ""}\n`)
+      return
+    }
+    // click
+    if (!actionId) throw new UsageError("view click needs a view id and an action_id")
+    const res = await s.client.call<{ ok: boolean; delivered: string }>("campflare.blocks.action", {
+      view_id: viewId,
+      action_id: actionId,
+      block_id: str(values.block),
+      value: await clickValue(s, { ...values, value: [values.value ?? []].flat()[0] as string | undefined }),
+    })
+    if (values.json) return s.print(res)
+    io.stdout(`Clicked: the app took it (${via(res.delivered)})\n`)
   },
 
   async stop(argv, io) {

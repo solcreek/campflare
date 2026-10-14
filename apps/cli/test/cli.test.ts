@@ -404,7 +404,7 @@ describe("buttons", () => {
       expect(cli.out).toContain(`Interactivity URL: ${url}\n`)
       cli.clear()
       expect(await cli.run("click", "#general", ts, "feedback", "--value", "down", "--block", "rate")).toBe(0)
-      expect(cli.out).toBe("Clicked: the app took it (HTTP)\n")
+      expect(cli.out).toBe("Clicked: the app took it (HTTP); if it opened a view: campflare view list\n")
       expect(payloads[0]).toMatchObject({ type: "block_actions", actions: [{ action_id: "feedback", value: "down" }] })
       cli.clear()
       expect(await cli.run("click", "#general", ts, "approve", "--json")).toBe(0)
@@ -425,6 +425,189 @@ describe("buttons", () => {
     expect(cli.out).toBe("No buttons in that message\n")
     expect(await cli.run("click", "#general", "1000000000.000001")).toBe(2)
     expect(await cli.run("click", "#general")).toBe(2)
+  })
+})
+
+describe("select menus and modals", () => {
+  it("chooses in a select, then opens, fills in and submits the modal the app opens", async () => {
+    const cli = await loggedIn()
+    await cli.run("admin", "add-app", "Forms", "--json")
+    const app = JSON.parse(cli.out) as { app: { id: string }; bot_token: string }
+    const text = (t: string) => ({ type: "plain_text", text: t })
+    const option = (t: string, value: string) => ({ text: text(t), value })
+    const form = {
+      type: "modal",
+      callback_id: "deploy",
+      title: text("Deploy"),
+      submit: text("Go"),
+      blocks: [
+        {
+          type: "input",
+          block_id: "note",
+          label: text("Note"),
+          element: { type: "plain_text_input", action_id: "text" },
+        },
+        {
+          type: "input",
+          block_id: "who",
+          label: text("Reviewer"),
+          element: { type: "users_select", action_id: "pick" },
+        },
+        {
+          type: "input",
+          block_id: "checks",
+          label: text("Checks"),
+          optional: true,
+          element: { type: "checkboxes", action_id: "boxes", options: [option("Migrar", "m"), option("Prüfen", "p")] },
+        },
+      ],
+    }
+    // The app: opens the form on "open", refuses a short note, else closes it.
+    const payloads: Record<string, unknown>[] = []
+    const listener = createServer((req, res) => {
+      let body = ""
+      req.on("data", (d: Buffer) => (body += d))
+      req.on("end", () => {
+        const payload = JSON.parse(new URLSearchParams(body).get("payload")!) as Record<string, unknown> & {
+          trigger_id: string
+          actions?: { action_id: string }[]
+          view?: { state: { values: { note: { text: { value: string } } } } }
+        }
+        payloads.push(payload)
+        if (payload.type === "view_submission") {
+          const short = payload.view!.state.values.note.text.value.length < 3
+          res.setHeader("content-type", "application/json")
+          res.end(short ? JSON.stringify({ response_action: "errors", errors: { note: "Too short" } }) : "")
+          return
+        }
+        res.end()
+        if (payload.actions?.[0]?.action_id !== "open") return
+        void fetch(`${baseUrl}/api/views.open`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${app.bot_token}`, "content-type": "application/json" },
+          body: JSON.stringify({ trigger_id: payload.trigger_id, view: form }),
+        })
+      })
+    })
+    await new Promise<void>((r) => listener.listen(0, "127.0.0.1", r))
+    const url = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/interactive`
+    try {
+      expect(await cli.run("admin", "app", app.app.id, "--interactivity-url", url)).toBe(0)
+      const bot = memoryIo({ env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: app.bot_token } })
+      const blocks = [
+        {
+          type: "section",
+          block_id: "env",
+          text: { type: "mrkdwn", text: "Where?" },
+          accessory: {
+            type: "static_select",
+            action_id: "pick",
+            placeholder: text("Environment"),
+            options: [option("Production", "prod"), option("Staging", "staging")],
+          },
+        },
+        {
+          type: "actions",
+          block_id: "more",
+          elements: [
+            { type: "users_select", action_id: "who" },
+            { type: "channels_select", action_id: "where" },
+            { type: "button", action_id: "open", text: text("Deploy…") },
+          ],
+        },
+      ]
+      expect(
+        await bot.run("api", "chat.postMessage", "channel=#general", "text=Where?", `blocks=${JSON.stringify(blocks)}`),
+      ).toBe(0)
+      const { ts } = JSON.parse(bot.out) as { ts: string }
+
+      cli.clear()
+      expect(await cli.run("click", "#general", ts)).toBe(0)
+      expect(cli.out).toBe(
+        "pick  Environment (static_select)  --option prod|staging  --block env\n" +
+          "who  (users_select)  --user <@person>  --block more\n" +
+          "where  (channels_select)  --conversation <#channel>  --block more\n" +
+          "open  Deploy…  --block more\n",
+      )
+      expect(await cli.run("click", "#general", ts, "pick", "--option", "staging")).toBe(0)
+      expect(await cli.run("click", "#general", ts, "who", "--user", "@me")).toBe(0)
+      expect(await cli.run("click", "#general", ts, "where", "--conversation", "#general")).toBe(0)
+      expect(payloads.map((p) => (p.actions as Record<string, unknown>[])[0])).toMatchObject([
+        { type: "static_select", selected_option: { value: "staging" } },
+        { type: "users_select", selected_user: expect.stringMatching(/^U/) },
+        { type: "channels_select", selected_channel: expect.stringMatching(/^C/) },
+      ])
+
+      cli.clear()
+      expect(await cli.run("view", "list")).toBe(0)
+      expect(cli.out).toBe("No views open\n")
+      expect(await cli.run("click", "#general", ts, "open")).toBe(0)
+      let views: { id: string }[] = []
+      for (let i = 0; i < 100 && views.length === 0; i++) {
+        cli.clear()
+        await cli.run("view", "list", "--json")
+        views = JSON.parse(cli.out) as { id: string }[]
+        if (views.length === 0) await new Promise((r) => setTimeout(r, 20))
+      }
+      const id = views[0]!.id
+      cli.clear()
+      expect(await cli.run("view", "list")).toBe(0)
+      expect(cli.out).toBe(
+        `${id}  Deploy  (deploy)  [shown]\n` +
+          "  --value note.text=…  Note (plain_text_input)\n" +
+          "  --value who.pick=…  Reviewer (users_select)  a @person\n" +
+          "  --value checks.boxes=…  Checks (checkboxes, optional)  one of m|p\n" +
+          `  submit: campflare view submit ${id} --value block.action=value …\n`,
+      )
+
+      cli.clear()
+      expect(await cli.run("view", "submit", id, "--value", "note.text=ok", "--value", "who.pick=@me")).toBe(1)
+      expect(cli.err).toBe("note: Too short\n")
+      cli.clear()
+      expect(await cli.run("view", "submit", id, "--value", "who.pick=@me")).toBe(1)
+      expect(cli.err).toBe("note: Please complete this required field.\n")
+      cli.clear()
+      const args = ["--value", "note.text=Ship it", "--value", "who.pick=@me"]
+      expect(
+        await cli.run("view", "submit", id, ...args, "--value", "checks.boxes=m", "--value", "checks.boxes=p"),
+      ).toBe(0)
+      expect(cli.out).toBe("Submitted: the app took it (HTTP)\n")
+      expect(payloads.at(-1)).toMatchObject({
+        type: "view_submission",
+        view: {
+          state: {
+            values: {
+              note: { text: { value: "Ship it" } },
+              who: { pick: { selected_user: expect.stringMatching(/^U/) } },
+              checks: { boxes: { selected_options: [{ value: "m" }, { value: "p" }] } },
+            },
+          },
+        },
+      })
+
+      // Opened again, then closed.
+      expect(await cli.run("click", "#general", ts, "open")).toBe(0)
+      for (let i = 0; i < 100; i++) {
+        cli.clear()
+        await cli.run("view", "list", "--json")
+        views = JSON.parse(cli.out) as { id: string }[]
+        if (views.length > 0) break
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      cli.clear()
+      expect(await cli.run("view", "close", views[0]!.id)).toBe(0)
+      expect(cli.out).toBe("Closed\n")
+      expect(await cli.run("view", "submit", views[0]!.id)).toBe(2)
+      expect(await cli.run("view", "submit", "V1", "--value", "nodot=1")).toBe(2)
+      expect(await cli.run("view")).toBe(2)
+      expect(await cli.run("view", "close")).toBe(2)
+      expect(await cli.run("view", "click", "V1")).toBe(2)
+      cli.clear()
+      expect(await cli.run("view", "click", "V1", "x")).toBe(1)
+      expect(cli.err).toBe("error: not_found\n")
+    } finally {
+      listener.close()
+    }
   })
 })
 
