@@ -146,6 +146,28 @@ The hub's SQLite also holds:
   wakes. RPC return values must be serialisable, so events cross as JSON strings.
 - `unacked`: Socket Mode envelopes until their `envelope_id` is acked; the DO
   `alarm()` resends overdue ones (3 s, up to 3 retries) on the app's next link.
+  Rows with `transport = 'http'` are Events API POSTs (keyed by `event_id`)
+  that failed, with the `reason`; `alarm()` retries them too (below).
+
+Apps get events through `callbacksFor()` in `hub.ts`: the `event_callback`, plus
+`app_mention` (`src/app-events.ts`) when a new message mentions the app's bot
+user in a conversation the bot is in (not edits, not the bot's own messages).
+RTM and the event log never carry `app_mention`.
+
+**Events API over HTTP.** An app with a Request URL (migration 0009:
+`apps.signing_secret`, `event_request_url`, `event_types`) and no live Socket
+Mode link gets each `event_callback` POSTed by the hub (`src/request-url.ts`),
+signed `X-Slack-Signature: v0=HMAC-SHA256(secret, "v0:<ts>:<body>")` with
+`X-Slack-Request-Timestamp`, 3 s timeout; a failure is retried after 1 s,
+1 min, 5 min (`HTTP_RETRY_DELAYS_MS`) with `X-Slack-Retry-Num`/`-Reason`, and
+`X-Slack-No-Retry: 1` stops it. The hub reads the workspace's subscribed apps
+from D1 once per lifetime (`subscribersOf()`), so publishing costs no query;
+`campflare.apps.setEventSubscriptions` (`src/methods/admin.ts`) verifies a URL
+with `url_verification`, saves, and calls `hub.subscriptionsChanged()` to drop
+that cache. `event_types` filters Socket Mode as well (`subscribed()`;
+`message.channels`/`groups`/`im`/`mpim` by `channel_type`). Tests replace
+outbound POSTs with `setRequestUrlFetch()`; `fakeRequestUrls()` and
+`validSignature()` in `test/helpers.ts` record them and check signatures.
 
 **Files.** `files.getUploadURLExternal` reserves a row and returns a signed
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;

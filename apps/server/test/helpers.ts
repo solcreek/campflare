@@ -1,4 +1,5 @@
 import { SELF } from "cloudflare:test"
+import { setRequestUrlFetch } from "../src/request-url"
 
 export const ORIGIN = "https://campflare.test"
 
@@ -60,7 +61,14 @@ export interface Workspace {
   /** Adds a person; returns their id and token. */
   addUser(name: string, opts?: Record<string, unknown>): Promise<{ id: string; token: string }>
   /** Creates an app installed by the owner. */
-  addApp(name: string): Promise<{ id: string; botUserId: string; botId: string; botToken: string; appToken: string }>
+  addApp(name: string): Promise<{
+    id: string
+    botUserId: string
+    botId: string
+    botToken: string
+    appToken: string
+    signingSecret: string
+  }>
 }
 
 export async function workspace(name = `team${++teams}`): Promise<Workspace> {
@@ -92,6 +100,7 @@ export async function workspace(name = `team${++teams}`): Promise<Workspace> {
         app: { id: string; bot_user_id: string; bot_id: string }
         bot_token: string
         app_token: string
+        signing_secret: string
       }>("campflare.apps.create", { name: appName }, owner.token)
       return {
         id: r.app.id,
@@ -99,6 +108,7 @@ export async function workspace(name = `team${++teams}`): Promise<Workspace> {
         botId: r.app.bot_id,
         botToken: r.bot_token,
         appToken: r.app_token,
+        signingSecret: r.signing_secret,
       }
     },
   }
@@ -150,3 +160,76 @@ export async function connect(url: string) {
 
 /** Events reach the hub after the response (waitUntil); give them a moment. */
 export const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms))
+
+export interface RequestUrlHit {
+  url: string
+  headers: Headers
+  /** The raw body, as signed. */
+  raw: string
+  body: Record<string, unknown>
+}
+
+/**
+ * Stands in for apps' Request URLs (setRequestUrlFetch): records every POST
+ * the server makes and answers with `answer`, by default as a well-behaved app
+ * does (url_verification's challenge echoed as JSON, everything else 200).
+ * Call restore() when done.
+ */
+export function fakeRequestUrls() {
+  const hits: RequestUrlHit[] = []
+  const waiters: { test: (h: RequestUrlHit) => boolean; resolve: (h: RequestUrlHit) => void }[] = []
+  const fake = {
+    hits,
+    answer: (hit: RequestUrlHit): Response | Promise<Response> =>
+      hit.body.type === "url_verification" ? Response.json({ challenge: hit.body.challenge }) : new Response(""),
+    /** The first POST (already made or yet to come) that passes `test`, taken off `hits`. */
+    next(test: (h: RequestUrlHit) => boolean = () => true, timeoutMs = 2000): Promise<RequestUrlHit> {
+      const seen = hits.find(test)
+      if (seen) {
+        hits.splice(hits.indexOf(seen), 1)
+        return Promise.resolve(seen)
+      }
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no matching POST; got ${JSON.stringify(hits)}`)), timeoutMs)
+        waiters.push({
+          test,
+          resolve: (h) => {
+            clearTimeout(timer)
+            hits.splice(hits.indexOf(h), 1)
+            resolve(h)
+          },
+        })
+      })
+    },
+    restore: () => setRequestUrlFetch(undefined),
+  }
+  setRequestUrlFetch(async (input, init) => {
+    const raw = String(init?.body ?? "")
+    const hit = { url: String(input), headers: new Headers(init?.headers), raw, body: JSON.parse(raw) }
+    hits.push(hit)
+    const waiter = waiters.find((w) => w.test(hit))
+    if (waiter) {
+      waiters.splice(waiters.indexOf(waiter), 1)
+      waiter.resolve(hit)
+    }
+    return fake.answer(hit)
+  })
+  return fake
+}
+
+/** Slack's request signature check, written from its spec, independently of the server's signing. */
+export async function validSignature(hit: RequestUrlHit, secret: string): Promise<boolean> {
+  const timestamp = hit.headers.get("x-slack-request-timestamp")
+  if (!timestamp || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) return false
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  )
+  const given = hit.headers.get("x-slack-signature") ?? ""
+  if (!given.startsWith("v0=")) return false
+  const mac = new Uint8Array((given.slice(3).match(/../g) ?? []).map((h) => Number.parseInt(h, 16)))
+  return crypto.subtle.verify("HMAC", key, mac, new TextEncoder().encode(`v0:${timestamp}:${hit.raw}`))
+}

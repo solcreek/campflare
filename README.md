@@ -106,9 +106,9 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                    |
 | users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                              |
 | dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                   |
-| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`                                                                                                                                                     |
+| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                          |
 | other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                      |
-| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`                                                                                          |
+| admin (`campflare.*`) | `bootstrap`, `users.create`, `users.deactivate`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`                                               |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -140,6 +140,39 @@ run). WebSocket URLs carry a signed, 60-second, single-use ticket.
 An envelope that isn't acknowledged within 3 seconds is sent again, up to
 three times, on the app's next link, with `retry_attempt` counting up and
 `retry_reason: "timeout"`; its `event_id` stays the same.
+
+Apps also get `app_mention` alongside `message` when a new message (a post,
+a thread reply, a file share; not an edit, not the bot's own) mentions their
+bot user in a conversation the bot is in.
+
+### The Events API over HTTP
+
+An app without a live Socket Mode link can have its events POSTed instead, as
+Slack's Events API does, so apps built for Request URLs (Bolt's HTTP receiver,
+frameworks without a Socket Mode client) work unchanged:
+
+```sh
+campflare admin add-app "Helper"     # prints the app's signing secret too
+campflare admin app A0123 --request-url https://helper.example/slack/events --events app_mention,message.channels
+```
+
+`campflare.apps.setEventSubscriptions` (`app`, `request_url`, `events`) sends
+Slack's `url_verification` challenge first and saves the URL only if it is
+echoed; an empty `request_url` stops HTTP delivery. `events` limits what the
+app receives (over Socket Mode too): event types, with `message.channels`,
+`message.groups`, `message.im` and `message.mpim` for messages by kind of
+conversation; empty means every event the app can see. `campflare.apps.info`
+shows the settings and the signing secret. Request URLs are https, or http on
+`localhost` for an app in development.
+
+Each event is an `event_callback` (`event_id`, `event_time`, `team_id`,
+`api_app_id`, `authorizations`) signed as Slack signs it: `X-Slack-Signature:
+v0=` HMAC-SHA256 of `v0:<timestamp>:<body>` under the signing secret, with
+`X-Slack-Request-Timestamp`. Anything but a 2xx within 3 seconds is retried
+after 1 s, 1 min and 5 min, with `X-Slack-Retry-Num` and
+`X-Slack-Retry-Reason` (`http_error`, `http_timeout`, `connection_failed`);
+an answer with `X-Slack-No-Retry: 1` stops them. An app with a live Socket
+Mode link gets its events there instead, as on Slack.
 
 ### The event log
 
@@ -281,7 +314,6 @@ client and CLI bundles. The Worker is bundled by wrangler.
   (tokens carry scopes, but no method checks them yet).
 - Signing in with a password, passkey or email link, and choosing a workspace
   when one person is in several.
-- Events API over HTTP (request URLs); Socket Mode and RTM only so far.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom

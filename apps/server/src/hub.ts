@@ -1,6 +1,9 @@
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "./env"
 import { ids } from "./api/ids"
+import { appMentionOf, mentionedUsers, subscribed } from "./app-events"
+import type { AppRow } from "./db/rows"
+import { postSigned, REQUEST_TIMEOUT_MS } from "./request-url"
 
 // One TeamHub per workspace holds its live connections and fans events out.
 //
@@ -83,6 +86,21 @@ export const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 export const ACK_TIMEOUT_MS = 3000
 export const MAX_RETRIES = 3
 
+/** Events API over HTTP: retries come 1 s, 1 min and 5 min after a failure, as Slack's do ("immediately", 1, 5). */
+export const HTTP_RETRY_DELAYS_MS = [1_000, 60_000, 300_000]
+
+type EventColumns = Pick<AppRow, "event_request_url" | "event_types">
+
+/** An app with a Request URL or a subscription list. */
+interface Subscriber {
+  appId: string
+  botUserId: string
+  installerUserId: string
+  secret: string
+  url: string | null
+  types?: string[]
+}
+
 export class TeamHub extends DurableObject<Env> {
   private roundRobin = new Map<string, number>()
   /** Open polls, woken by each new event to look again. */
@@ -115,7 +133,9 @@ export class TeamHub extends DurableObject<Env> {
       channel_id TEXT NOT NULL,
       kind TEXT NOT NULL
     )`)
-    // Socket Mode envelopes sent and not yet acknowledged.
+    // Deliveries not yet acknowledged: Socket Mode envelopes waiting for their
+    // ack, and Events API POSTs to a Request URL that failed (keyed by event_id),
+    // with why, for the retry's X-Slack-Retry-Reason.
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS unacked (
       envelope_id TEXT PRIMARY KEY,
       app_id TEXT NOT NULL,
@@ -123,6 +143,55 @@ export class TeamHub extends DurableObject<Env> {
       attempts INTEGER NOT NULL DEFAULT 0,
       due INTEGER NOT NULL
     )`)
+    const columns = ctx.storage.sql
+      .exec<{ name: string }>("PRAGMA table_info(unacked)")
+      .toArray()
+      .map((c) => c.name)
+    if (!columns.includes("transport")) {
+      ctx.storage.sql.exec("ALTER TABLE unacked ADD COLUMN transport TEXT NOT NULL DEFAULT 'socket'")
+      ctx.storage.sql.exec("ALTER TABLE unacked ADD COLUMN reason TEXT")
+    }
+  }
+
+  /** The workspace's apps with event subscriptions, read from D1 once per hub lifetime and dropped on a change. */
+  private subscribers?: { teamId: string; apps: Promise<Map<string, Subscriber>> }
+
+  private subscribersOf(teamId: string): Promise<Map<string, Subscriber>> {
+    if (this.subscribers?.teamId !== teamId) {
+      const apps = this.env.DB.prepare(
+        `SELECT id, bot_user_id, installer_user_id, signing_secret, event_request_url, event_types FROM apps
+         WHERE team_id = ? AND (event_request_url IS NOT NULL OR event_types IS NOT NULL)`,
+      )
+        .bind(teamId)
+        .all<Pick<AppRow, "id" | "bot_user_id" | "installer_user_id" | "signing_secret"> & EventColumns>()
+        .then(
+          ({ results }) =>
+            new Map(
+              results.map((r) => [
+                r.id,
+                {
+                  appId: r.id,
+                  botUserId: r.bot_user_id,
+                  installerUserId: r.installer_user_id,
+                  secret: r.signing_secret,
+                  url: r.event_request_url,
+                  types: r.event_types ? (JSON.parse(r.event_types) as string[]) : undefined,
+                },
+              ]),
+            ),
+        )
+      // A failed read is tried again by the next event, not remembered.
+      apps.catch(() => {
+        if (this.subscribers?.apps === apps) this.subscribers = undefined
+      })
+      this.subscribers = { teamId, apps }
+    }
+    return this.subscribers.apps
+  }
+
+  /** An app's Request URL or subscriptions changed: read them again for the next event. */
+  async subscriptionsChanged(): Promise<void> {
+    this.subscribers = undefined
   }
 
   /** The next connection of an app, in turn: Slack spreads an app's events across its links. */
@@ -153,19 +222,91 @@ export class TeamHub extends DurableObject<Env> {
     if (current === null || current > at) await this.ctx.storage.setAlarm(at)
   }
 
-  /** Resends envelopes whose ack is overdue, as Slack does: retry_attempt counts up, retry_reason "timeout". */
+  /**
+   * POSTs an event_callback to an app's Request URL. It's kept (by event_id)
+   * before the attempt, so a hub that stops mid-request still retries it.
+   */
+  private async post(app: Subscriber & { url: string }, payload: { event_id: string }): Promise<number> {
+    const due = Date.now() + REQUEST_TIMEOUT_MS + HTTP_RETRY_DELAYS_MS[0]!
+    const body = JSON.stringify(payload)
+    this.ctx.storage.sql.exec(
+      "INSERT INTO unacked (envelope_id, app_id, envelope, due, transport) VALUES (?, ?, ?, ?, 'http')",
+      payload.event_id,
+      app.appId,
+      body,
+      due,
+    )
+    await this.scheduleAlarm(due)
+    return this.attempt(app.url, app.secret, payload.event_id, body, 0)
+  }
+
+  /** One attempt at a POST: done when it's taken (2xx) or refused for good, else due again after a delay. */
+  private async attempt(url: string, secret: string, id: string, body: string, retry: number, reason?: string) {
+    const res = await postSigned(
+      url,
+      secret,
+      body,
+      retry ? { num: retry, reason: reason ?? "unknown_error" } : undefined,
+    )
+    if (res.ok || res.noRetry || retry >= MAX_RETRIES) {
+      this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", id)
+      return res.ok ? 1 : 0
+    }
+    const due = Date.now() + HTTP_RETRY_DELAYS_MS[retry]!
+    this.ctx.storage.sql.exec("UPDATE unacked SET reason = ?, due = ? WHERE envelope_id = ?", res.reason, due, id)
+    await this.scheduleAlarm(due)
+    return 0
+  }
+
+  /** Retries a POST at the app's current Request URL; one removed since takes its pending events with it. */
+  private async retryPost(
+    row: { envelope_id: string; app_id: string; envelope: string; reason?: string | null },
+    retry: number,
+    now: number,
+  ) {
+    const teamId = (JSON.parse(row.envelope) as { team_id: string }).team_id
+    const app = (await this.subscribersOf(teamId)).get(row.app_id)
+    if (!app?.url) {
+      this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", row.envelope_id)
+      return
+    }
+    // Due again in case this attempt never finishes; a finished one sets its own.
+    const next = HTTP_RETRY_DELAYS_MS[retry] ?? HTTP_RETRY_DELAYS_MS.at(-1)!
+    this.ctx.storage.sql.exec(
+      "UPDATE unacked SET attempts = ?, due = ? WHERE envelope_id = ?",
+      retry,
+      now + REQUEST_TIMEOUT_MS + next,
+      row.envelope_id,
+    )
+    await this.attempt(app.url, app.secret, row.envelope_id, row.envelope, retry, row.reason ?? undefined)
+  }
+
+  /**
+   * Resends what is overdue, as Slack does. Socket Mode: the envelope again
+   * with retry_attempt counting up and retry_reason "timeout". HTTP: the same
+   * event_callback with X-Slack-Retry-Num and X-Slack-Retry-Reason.
+   */
   override async alarm(): Promise<void> {
     const now = Date.now()
     const due = this.ctx.storage.sql
-      .exec<{ envelope_id: string; app_id: string; envelope: string; attempts: number }>(
-        "SELECT envelope_id, app_id, envelope, attempts FROM unacked WHERE due <= ?",
-        now,
-      )
+      .exec<{
+        envelope_id: string
+        app_id: string
+        envelope: string
+        attempts: number
+        transport: string
+        reason: string | null
+      }>("SELECT envelope_id, app_id, envelope, attempts, transport, reason FROM unacked WHERE due <= ?", now)
       .toArray()
+    const posts: Promise<unknown>[] = []
     for (const row of due) {
       const attempts = row.attempts + 1
       if (attempts > MAX_RETRIES) {
         this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", row.envelope_id)
+        continue
+      }
+      if (row.transport === "http") {
+        posts.push(this.retryPost(row, attempts, now))
         continue
       }
       const envelope = {
@@ -184,6 +325,7 @@ export class TeamHub extends DurableObject<Env> {
       const ws = this.nextLink(row.app_id)
       if (ws) send(ws, envelope)
     }
+    await Promise.all(posts)
     const next = this.ctx.storage.sql
       .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM unacked")
       .toArray()[0]?.due
@@ -328,41 +470,31 @@ export class TeamHub extends DurableObject<Env> {
       }
     }
 
+    if (input.rtmOnly) return delivered
+
+    const subscribers = await this.subscribersOf(input.teamId)
     for (const [appId, links] of apps) {
-      const ws = this.nextLink(appId)!
-      const conn = links.find((l) => l.ws === ws)?.conn ?? links[0]!.conn
-      // Authorized as the installer when the event is theirs to see, else as the bot.
-      const asInstaller = conn.installerUserId && (audience === "team" || audience.includes(conn.installerUserId))
-      const envelope = {
-        envelope_id: ids.envelope(),
-        type: "events_api",
-        accepts_response_payload: false,
-        retry_attempt: 0,
-        retry_reason: "",
-        payload: {
-          token: "",
-          team_id: input.teamId,
-          context_team_id: input.teamId,
-          context_enterprise_id: null,
-          api_app_id: appId,
-          event: body,
-          type: "event_callback",
-          event_id: ids.event(),
-          event_time: Math.floor(Number(eventTs)),
-          authorizations: [
-            {
-              enterprise_id: null,
-              team_id: input.teamId,
-              user_id: asInstaller ? conn.installerUserId : conn.botUserId,
-              is_bot: !asInstaller,
-              is_enterprise_install: false,
-            },
-          ],
-          is_ext_shared_channel: false,
-        },
+      // Every link of an app has the same installer and bot.
+      const { installerUserId, botUserId } = links[0]!.conn
+      const types = subscribers.get(appId)?.types
+      for (const payload of callbacksFor(input, body, { appId, installerUserId, botUserId })) {
+        if (!subscribed(types, payload.event)) continue
+        delivered += await this.deliver(this.nextLink(appId)!, appId, socketEnvelope(payload))
       }
-      delivered += await this.deliver(ws, appId, envelope)
     }
+
+    // The Events API over HTTP, for apps with a Request URL and no Socket Mode link: as on Slack,
+    // a connected app gets its events over the socket instead.
+    const posts: Promise<number>[] = []
+    for (const app of subscribers.values()) {
+      const { url } = app
+      if (!url || this.ctx.getWebSockets(`app:${app.appId}`).length > 0) continue
+      if (!sees([app.installerUserId, app.botUserId])) continue
+      for (const payload of callbacksFor(input, body, app)) {
+        if (subscribed(app.types, payload.event)) posts.push(this.post({ ...app, url }, payload))
+      }
+    }
+    for (const n of await Promise.all(posts)) delivered += n
     return delivered
   }
 
@@ -465,6 +597,76 @@ export class TeamHub extends DurableObject<Env> {
     } catch {
       // already closed
     }
+  }
+}
+
+interface AppView {
+  appId: string
+  installerUserId?: string
+  botUserId?: string
+}
+
+/**
+ * What one app receives for a published event, as event_callbacks: the event,
+ * and app_mention when it's a new message mentioning the app's bot user in a
+ * conversation the bot is in (never for the bot's own message).
+ */
+function callbacksFor(input: PublishInput, body: Record<string, unknown>, app: AppView) {
+  const { teamId, audience } = input
+  // Authorized as the installer when the event is theirs to see, else as the bot.
+  const asInstaller = app.installerUserId && (audience === "team" || audience.includes(app.installerUserId))
+  const callbacks = [
+    callbackOf(teamId, app.appId, body, {
+      userId: (asInstaller ? app.installerUserId : app.botUserId) ?? "",
+      isBot: !asInstaller,
+    }),
+  ]
+  const bot = app.botUserId
+  if (bot && body.user !== bot && (audience === "team" || audience.includes(bot)) && mentionedUsers(body).has(bot)) {
+    callbacks.push(callbackOf(teamId, app.appId, appMentionOf(body), { userId: bot, isBot: true }))
+  }
+  return callbacks
+}
+
+/** Slack's event_callback: an event as the Events API wraps it for one app. */
+function callbackOf(
+  teamId: string,
+  appId: string,
+  event: Record<string, unknown>,
+  authorized: { userId: string; isBot: boolean },
+) {
+  return {
+    token: "",
+    team_id: teamId,
+    context_team_id: teamId,
+    context_enterprise_id: null,
+    api_app_id: appId,
+    event,
+    type: "event_callback",
+    event_id: ids.event(),
+    event_time: Math.floor(Number(event.event_ts)),
+    authorizations: [
+      {
+        enterprise_id: null,
+        team_id: teamId,
+        user_id: authorized.userId,
+        is_bot: authorized.isBot,
+        is_enterprise_install: false,
+      },
+    ],
+    is_ext_shared_channel: false,
+  }
+}
+
+/** A Socket Mode envelope around an event_callback. */
+function socketEnvelope(payload: ReturnType<typeof callbackOf>) {
+  return {
+    envelope_id: ids.envelope(),
+    type: "events_api",
+    accepts_response_payload: false,
+    retry_attempt: 0,
+    retry_reason: "",
+    payload,
   }
 }
 

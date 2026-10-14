@@ -151,4 +151,25 @@ describe("@slack/socket-mode", () => {
     expect(received).toHaveLength(20)
     expect(p95).toBeLessThan(500)
   })
+
+  it("receives app_mention when a message mentions the app's bot", async () => {
+    const socket = new SocketModeClient({
+      appToken: app.appToken,
+      logLevel: LogLevel.ERROR,
+      clientOptions: { slackApiUrl },
+    })
+    const mentions: Record<string, unknown>[] = []
+    socket.on("app_mention", async ({ event, ack }: { event: Record<string, unknown>; ack: () => Promise<void> }) => {
+      await ack()
+      mentions.push(event)
+    })
+    await socket.start()
+    const text = `<@${app.botUserId}> are you there?`
+    const posted = await bob.client.chat.postMessage({ channel: general, text })
+    for (let i = 0; i < 200 && mentions.length === 0; i++) await new Promise((r) => setTimeout(r, 10))
+    await socket.disconnect()
+    expect(mentions).toEqual([
+      expect.objectContaining({ type: "app_mention", user: bob.id, text, ts: posted.ts, channel: general }),
+    ])
+  })
 })

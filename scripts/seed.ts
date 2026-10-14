@@ -8,6 +8,9 @@ export interface Seeded {
   /** An app installed by the owner: its Socket Mode token (xapp-) and bot token (xoxb-). */
   appToken: string
   botToken: string
+  /** That app's id and signing secret, for the Events API over HTTP (absent in seeds from before it). */
+  appId?: string
+  signingSecret?: string
   /** Everyone else's user tokens, by handle. */
   people: Record<string, string>
   channels: Record<string, string>
@@ -53,7 +56,7 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
     people[name] = { id: r.user.id, token: r.token }
   }
   const { vincent, minjun, ada } = people as Record<"vincent" | "minjun" | "ada", { id: string; token: string }>
-  const app = await call<{ app_token: string; bot_token: string }>(
+  const app = await call<{ app: { id: string }; app_token: string; bot_token: string; signing_secret: string }>(
     "campflare.apps.create",
     { name: "Campflare Dev App" },
     me,
@@ -131,6 +134,8 @@ export async function seed(baseUrl: string, secret: string, teamName = "Campflar
     owner: me,
     appToken: app.app_token,
     botToken: app.bot_token,
+    appId: app.app.id,
+    signingSecret: app.signing_secret,
     people: Object.fromEntries(Object.entries(people).map(([k, v]) => [k, v.token])),
     channels: { general, dev, random, world },
   }

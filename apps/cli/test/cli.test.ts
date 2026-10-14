@@ -1,3 +1,5 @@
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { describe, expect, it } from "vitest"
 import { baseUrl, loggedIn, memoryIo } from "./harness"
 
@@ -259,8 +261,38 @@ describe("workspace", () => {
   it("adds apps and calls raw API methods", async () => {
     const cli = await loggedIn()
     expect(await cli.run("admin", "add-app", "Deploy", "Bot")).toBe(0)
-    expect(cli.out).toMatch(/Bot token: xoxb-\S+\nApp token: xapp-\S+/)
+    expect(cli.out).toMatch(/Bot token: xoxb-\S+\nApp token: xapp-\S+\nSigning secret: [0-9a-f]{32}\n/)
+    cli.clear()
     expect(await cli.run("admin", "add-app", "Other", "--json")).toBe(0)
+    const other = JSON.parse(cli.out) as { app: { id: string }; signing_secret: string }
+
+    // Its settings, and a Request URL checked with url_verification by an app listening here.
+    const listener = createServer((req, res) => {
+      let body = ""
+      req.on("data", (d: Buffer) => (body += d))
+      req.on("end", () => res.end((JSON.parse(body) as { challenge?: string }).challenge ?? ""))
+    })
+    await new Promise<void>((r) => listener.listen(0, "127.0.0.1", r))
+    const url = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/events`
+    try {
+      cli.clear()
+      expect(await cli.run("admin", "app", other.app.id)).toBe(0)
+      expect(cli.out).toContain(
+        `Signing secret: ${other.signing_secret}\nRequest URL: none (Socket Mode only)\nEvents: all`,
+      )
+      cli.clear()
+      expect(await cli.run("admin", "app", other.app.id, "--request-url", url, "--events", "app_mention")).toBe(0)
+      expect(cli.out).toContain(`Request URL: ${url}\nEvents: app_mention\n`)
+      cli.clear()
+      expect(await cli.run("admin", "app", other.app.id, "--request-url", "", "--json")).toBe(0)
+      expect(JSON.parse(cli.out)).toMatchObject({ app: { event_subscriptions: { request_url: null } } })
+      cli.clear()
+      expect(await cli.run("admin", "app", other.app.id, "--request-url", "https://campflare.invalid/x")).toBe(1)
+      expect(cli.err).toMatch(/^error: url_verification_failed \[ERROR\] no answer from the Request URL/)
+      expect(await cli.run("admin", "app")).toBe(2)
+    } finally {
+      listener.close()
+    }
     expect(await cli.run("admin", "add-user", "carol", "--json")).toBe(0)
     expect(await cli.run("admin", "add-user")).toBe(2)
     expect(await cli.run("admin", "add-app")).toBe(2)
