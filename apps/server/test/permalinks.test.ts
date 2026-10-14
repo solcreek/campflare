@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test"
 import { describe, expect, it } from "vitest"
-import { handlePermalink, permalinkRoute, unpackTs } from "../src/permalinks"
+import { desktopLink, handlePermalink, offersDesktop, permalinkRoute, unpackTs } from "../src/permalinks"
 import { ok, ORIGIN, workspace } from "./helpers"
 
 type Posted = { ts: string }
@@ -59,11 +59,60 @@ describe("permalinkRoute", () => {
 
   it("says where to look when the server doesn't know where its app is", async () => {
     const url = new URL(`${ORIGIN}/archives/C1/p1700000000000100`)
-    const res = handlePermalink(undefined, url, "C1", "p1700000000000100")
+    const res = handlePermalink({}, url, "C1", "p1700000000000100")
     expect(res.status).toBe(200)
     expect(res.headers.get("content-type")).toContain("text/html")
     const html = await res.text()
     expect(html).toContain("APP_URL")
     expect(html).toContain("<code>#/C1?msg=1700000000.000100</code>")
+    // The desktop app can open it all the same.
+    expect(html).toContain('href="campflare://campflare.test/archives/C1/p1700000000000100"')
+  })
+})
+
+describe("the desktop app's links", () => {
+  it("are the permalink with the scheme changed, rebuilt from its valid parts", () => {
+    expect(desktopLink("chat.example.com", "C1", "p1700000000000200", "1700000000.000100")).toBe(
+      "campflare://chat.example.com/archives/C1/p1700000000000200?thread_ts=1700000000.000100&cid=C1",
+    )
+    // The port stays: it is part of which server.
+    expect(desktopLink("localhost:8787", "C1", "p1700000000000100")).toBe(
+      "campflare://localhost:8787/archives/C1/p1700000000000100",
+    )
+    expect(desktopLink("x.test", "C1", "p1700000000000100", "1700000000.000100")).toBe(
+      "campflare://x.test/archives/C1/p1700000000000100",
+    )
+    expect(desktopLink("x.test", "C1", "p1700000000000200", '"><script>')).toBe(
+      "campflare://x.test/archives/C1/p1700000000000200",
+    )
+    expect(desktopLink("x.test", "C1", "pnope")).toBe("campflare://x.test/archives/C1")
+    expect(desktopLink("x.test", "c1")).toBeUndefined()
+  })
+
+  it("are offered beside the browser only when the operator turns it on, and never followed by themselves", async () => {
+    const url = new URL(`${ORIGIN}/archives/C1/p1700000000000200?thread_ts=1700000000.000100&cid=C1`)
+    const appUrl = "https://app.campflare.test/"
+    // Off: the redirect, as before.
+    const redirect = handlePermalink({ appUrl }, url, "C1", "p1700000000000200")
+    expect(redirect.status).toBe(302)
+
+    const res = handlePermalink({ appUrl, offerDesktop: true }, url, "C1", "p1700000000000200")
+    expect(res.status).toBe(200)
+    expect(res.headers.get("location")).toBeNull()
+    const html = await res.text()
+    expect(html).toContain(
+      'href="campflare://campflare.test/archives/C1/p1700000000000200?thread_ts=1700000000.000100&amp;cid=C1"',
+    )
+    expect(html).toContain('href="https://app.campflare.test/#/C1/1700000000.000100?msg=1700000000.000200"')
+    // No script and no refresh: nothing opens until the person clicks.
+    expect(html).not.toMatch(/<script|http-equiv/i)
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'")
+
+    expect([offersDesktop("true"), offersDesktop("1"), offersDesktop("false"), offersDesktop(undefined)]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ])
   })
 })

@@ -81,7 +81,10 @@ and tell the Worker where it is, so the permalinks `chat.getPermalink` hands out
 wrangler secret put APP_URL              # e.g. https://app.example.com/ (a plain var works too)
 ```
 
-Without it, a permalink answers a page naming the app route to open.
+Without it, a permalink answers a page naming the app route to open, with a
+link that opens the desktop app. With `OFFER_DESKTOP_APP=true`, a permalink
+answers a page offering both, the desktop app and the browser, instead of the
+redirect; nothing opens until the person picks one.
 
 ## Using it from Slack clients
 

@@ -27,14 +27,17 @@ async function call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: u
 /** The running app's WebDriver session; empty while it's closed. */
 let session = ""
 
-/** Launches the app (a new process, with whatever it kept from the last launch). */
-export async function launch(): Promise<void> {
+/**
+ * Launches the app (a new process, with whatever it kept from the last launch),
+ * with `args` as its command line: a campflare:// link, as Windows and Linux open one.
+ */
+export async function launch(args: string[] = []): Promise<void> {
   const application = process.env.CAMPFLARE_DESKTOP_APP
   assert.ok(application, "CAMPFLARE_DESKTOP_APP is not set: run the tests through e2e/run.ts")
   assert.equal(session, "", "the app is already running")
   // tauri-driver turns tauri:options into the platform driver's own (webkitgtk:browserOptions, ms:edgeOptions).
   const created = await call<{ sessionId: string }>("POST", "/session", {
-    capabilities: { alwaysMatch: { "tauri:options": { application } } },
+    capabilities: { alwaysMatch: { "tauri:options": { application, args } } },
   })
   session = created.sessionId
   // The window loads the web app, React renders it and the workspace connects: let lookups wait for that.
@@ -81,8 +84,8 @@ export const fill = (element: string, value: string) =>
   })
 
 /** A test that, when it fails, leaves what the window showed in e2e/out/<name>.png and .html (CI uploads them). */
-export function test(name: string, fn: () => Promise<void>) {
-  nodeTest(name, async () => {
+export function test(name: string, fn: () => Promise<void>, options: { skip?: boolean | string } = {}) {
+  nodeTest(name, options, async () => {
     try {
       await fn()
     } catch (error) {

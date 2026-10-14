@@ -1,11 +1,13 @@
 import { createClient, type Fetch } from "@campflare/client"
 import { createWorkspace, type Workspace } from "@campflare/core"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { LoginScreen } from "./components/login-screen"
+import { OtherServerLink } from "./components/other-server-link"
 import { Shell } from "./components/shell"
+import { type DeepLink, deepLinkHash, type DeepLinks, parseDeepLink, platformDeepLinks, serverOf } from "./deep-link"
 import { lastServer, rememberServer } from "./server-address"
 import { revokeSession, type Session, type SessionStore } from "./session"
 import { type BrowserSignIn, platformSignIn } from "./sign-in"
@@ -25,6 +27,8 @@ export interface AppProps {
   devServer?: string
   /** The page's own origin on the web: the login screen offers it when it answers api.test. */
   origin?: string
+  /** campflare:// links handed over by the desktop shell; the shell's own by default, none in a browser. */
+  deepLinks?: DeepLinks | null
 }
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
@@ -33,13 +37,64 @@ const connectTo = (session: Session) => createWorkspace({ client: createClient(s
 const reportStoreError = (what: string) => (error: unknown) =>
   toast.error(`Couldn't ${what} the sign-in: ${error instanceof Error ? error.message : String(error)}`)
 
-export function App({ store, autoSession, connect = connectTo, fetch, signIn: given, devServer, origin }: AppProps) {
+export function App({
+  store,
+  autoSession,
+  connect = connectTo,
+  fetch,
+  signIn: given,
+  devServer,
+  origin,
+  deepLinks: givenLinks,
+}: AppProps) {
   const [own] = useState(() => given ?? platformSignIn(globalThis as never, fetch))
   const signIn = given ?? own
   // The browser coming back from a sign-in wins over a kept session: the person just chose whom to sign in as.
   const [returning] = useState(() => !autoSession && signIn.returning())
   // undefined while the store loads; a store that can't be read means signed out.
   const [session, setSession] = useState<Session | null | undefined>(autoSession ?? (returning ? null : undefined))
+
+  // A campflare:// link (deep-link.ts) waits until the app is signed in, then opens
+  // if it's on this server; on another, the app says so instead of not finding it.
+  const [links] = useState(() => (givenLinks === undefined ? platformDeepLinks() : givenLinks))
+  const [elsewhere, setElsewhere] = useState<DeepLink | null>(null)
+  const linksSession = useRef(session)
+  const waitingLink = useRef<DeepLink | null>(null)
+  const openLink = useCallback((link: DeepLink | null, s: Session | null | undefined) => {
+    if (!link) return
+    waitingLink.current = s ? null : link
+    if (!s) return
+    if (serverOf(s.url) === link.server) window.location.hash = deepLinkHash(link)
+    else setElsewhere(link)
+  }, [])
+  /** The session links open against, changed: a waiting link opens now if it can. */
+  const sessionChanged = useCallback(
+    (s: Session | null) => {
+      linksSession.current = s
+      openLink(waitingLink.current, s)
+    },
+    [openLink],
+  )
+  useEffect(() => {
+    if (!links) return
+    let live = true
+    const receive = (urls: string[]) => {
+      if (!live || urls.length === 0) return
+      const link = urls.map(parseDeepLink).findLast((l) => l !== null)
+      if (link) openLink(link, linksSession.current)
+      else toast.error(`Campflare can't open ${urls.at(-1)}`)
+    }
+    links.current().then(receive, () => {})
+    const stop = links.listen(receive)
+    return () => {
+      live = false
+      stop.then(
+        (unlisten) => unlisten(),
+        () => {},
+      )
+    }
+  }, [links, openLink])
+
   useEffect(() => {
     if (autoSession || returning) return
     let live = true
@@ -47,20 +102,23 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
       .load()
       .catch(() => null)
       .then((loaded) => {
-        if (live) setSession(loaded)
+        if (!live) return
+        setSession(loaded)
+        sessionChanged(loaded)
       })
     return () => {
       live = false
     }
-  }, [store, autoSession, returning])
+  }, [store, autoSession, returning, sessionChanged])
   const onSignIn = useCallback(
     (s: Session) => {
       store.save(s).catch(reportStoreError("keep"))
       // Outlives the session: signing out forgets the token, not where to sign in again.
       rememberServer(s.url)
       setSession(s)
+      sessionChanged(s)
     },
-    [store],
+    [store, sessionChanged],
   )
   // Signing out ends the session on the server first (an OAuth token is revoked; see revokeSession),
   // then forgets it here, whether or not the server answered.
@@ -72,7 +130,8 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
     await store.clear().catch(reportStoreError("forget"))
     setSigningOut(false)
     setSession(null)
-  }, [session, store, fetch])
+    sessionChanged(null)
+  }, [session, store, fetch, sessionChanged])
   const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
 
   return (
@@ -94,6 +153,11 @@ export function App({ store, autoSession, connect = connectTo, fetch, signIn: gi
           probeOrigin={origin}
         />
       )}
+      <OtherServerLink
+        link={elsewhere}
+        signedIn={session ? serverOf(session.url) : ""}
+        onClose={() => setElsewhere(null)}
+      />
       {/* At the top: the composer and its Send button live at the bottom. */}
       <Toaster position="top-center" />
     </TooltipProvider>

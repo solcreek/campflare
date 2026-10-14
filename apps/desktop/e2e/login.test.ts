@@ -8,16 +8,8 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { after, before } from "node:test"
 import { attribute, click, fill, find, launch, quit, test, text } from "./driver.ts"
+import { stack, until } from "./stack.ts"
 
-interface Stack {
-  apiUrl: string
-  /** A seeded person's user token. */
-  token: string
-  /** #general's id. */
-  general: string
-}
-
-const stack = JSON.parse(process.env.CAMPFLARE_E2E_STACK ?? "null") as Stack | null
 /** Where the session file goes when there is no keychain. */
 const sessionFile = process.env.CAMPFLARE_DESKTOP_CONFIG
   ? join(process.env.CAMPFLARE_DESKTOP_CONFIG, "session.json")
@@ -32,13 +24,6 @@ const message = `早安 · こんにちは · 안녕하세요 · ¿Qué tal? Ça
 const CONNECTED = "//*[@role='status' and @aria-label='Connected']"
 const SIGN_IN = "//h1[normalize-space()='Sign in to Campflare']"
 const ourMessage = `//*[@role='log' and @aria-label='Messages']//article[contains(., '${run}')]`
-
-async function until(what: string, check: () => boolean | Promise<boolean>, ms = 15_000): Promise<void> {
-  for (const end = Date.now() + ms; !(await check());) {
-    if (Date.now() > end) throw new Error(`timed out waiting until ${what}`)
-    await new Promise((r) => setTimeout(r, 250))
-  }
-}
 
 before(async () => {
   assert.ok(stack, "CAMPFLARE_E2E_STACK is not set: run the tests through e2e/run.ts")

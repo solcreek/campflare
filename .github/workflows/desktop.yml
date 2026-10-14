@@ -155,7 +155,7 @@ jobs:
             "" | "(none)") driver=webkit2gtk-driver ;;
           esac
           # shellcheck disable=SC2086 # one word per package
-          sudo apt-get install -y $LINUX_PACKAGES "$driver" xvfb
+          sudo apt-get install -y $LINUX_PACKAGES "$driver" xvfb dbus
 
       - name: Install tauri-driver
         run: cargo install tauri-driver --version 2.1.0 --locked
@@ -172,12 +172,14 @@ jobs:
       # e2e/run.ts starts its own seeded server (scripts/dev.ts, wrangler from
       # the dev dependencies). The runner has no Secret Service, so the app
       # must keep its session in the file fallback, and the tests check that.
+      # A session bus (dbus-run-session) lets a second launch with a
+      # campflare:// link reach the running app (tauri-plugin-single-instance).
       - name: Desktop end-to-end tests
         env:
           CAMPFLARE_E2E_SESSION: file
-        run: xvfb-run --auto-servernum pnpm --filter @campflare/desktop e2e --no-build
+        run: dbus-run-session -- xvfb-run --auto-servernum pnpm --filter @campflare/desktop e2e --no-build
 
-      # The window's screenshot and page source for each failed test (e2e/login.test.ts).
+      # The window's screenshot and page source for each failed test (e2e/*.test.ts).
       - name: Upload what the window showed
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -378,7 +378,13 @@ so existence and access are the app's to find out (its not-found view). Without
 `APP_URL` it answers a page naming the route; a malformed channel id is a 404.
 `pnpm dev:all` passes `APP_URL` to wrangler (`--var`): the `--web` app, else
 `APP_URL` from `.dev.vars`, else `http://localhost:5173/` (`pnpm web`), or
-`--app-url`. Deployed, set it as a var or secret.
+`--app-url`. Deployed, set it as a var or secret. The desktop app's link is the
+permalink with its scheme changed, `campflare://<host>/archives/…`
+(`desktopLink()`; see **Desktop**). The page without `APP_URL` links to it;
+with `OFFER_DESKTOP_APP=true` the redirect becomes a page offering both (desktop
+app, browser), opt-in because it costs everyone a click. Neither page launches
+the app by itself (no script, no refresh): a scheme nobody registered would
+only show the browser's error.
 
 **Interactivity.** A click on a button in an app's message is
 `campflare.blocks.action` (`src/methods/blocks.ts`; xoxp, members only): it
@@ -518,8 +524,36 @@ sit behind a `SecretStore` trait, so `cargo test` fakes the keychain. The CSP in
 end-to-end tests (`apps/desktop/e2e/`, `run.ts` + W3C WebDriver helpers in
 `driver.ts`) start a fresh seeded server (`scripts/dev.ts --port 0`), give the
 app its own XDG dirs on Linux, sign in with a pasted token, send a message,
-restart the app expecting it signed in, then sign out; CI sets
+restart the app expecting it signed in, then sign out (`login.test.ts`); then
+launch it with a `campflare://` link as its argument (tauri-driver's
+`tauri:options.args`), to a message here and to another server, and start a
+second instance with a link while it runs (`deep-link.test.ts`; skipped
+without a D-Bus session bus, so CI runs them under `dbus-run-session`). CI sets
 `CAMPFLARE_E2E_SESSION=file` so they also check the fallback file.
+
+**Deep links.** The app opens `campflare://<host>[:<port>]/archives/<channel>[/p<ts>][?thread_ts=…&cid=…]`:
+a permalink with its scheme changed (the server's `desktopLink()`), the host
+naming the server. `tauri-plugin-deep-link` registers the scheme
+(`plugins.deep-link` in `tauri.conf.json`; installers write it into Info.plist,
+the registry and the `.desktop` file, an AppImage registers itself when run) and
+hands links to the webview: the one the app started with (`getCurrent`, the
+`deep-link:default` grant) and later ones (`onOpenUrl`, an event). Windows and
+Linux start a new process per link, with the link as its only argument:
+`tauri-plugin-single-instance` (feature `deep-link`; D-Bus on Linux, so without
+a session bus a second launch just runs) passes it to the running app, which
+comes to the front. The Rust side only forwards: `apps/web/src/deep-link.ts`
+maps a link to the hash route (`parseDeepLink`) and `App` keeps it until signed
+in, then opens it if the session's host is the link's, or shows a dialog naming
+the other server with "Open in your browser" (the https permalink). macOS only
+routes the scheme to a bundled `.app`, not `pnpm desktop`; on Linux and Windows a
+debug build takes the link as its argument (`campflare-desktop campflare://…`).
+https links (Universal Links on macOS, App URI handlers on Windows) are not
+claimed: they need signed builds (#3), the domains fixed in the build (an
+Associated Domains entitlement, `applinks:<host>`, with a provisioning profile; an
+MSIX package on Windows), and each domain serving
+`/.well-known/apple-app-site-association` or `windows-app-web-link` naming the
+app. A self-hosted server's domain isn't known at build time, so only a hosted
+service's domain could ever be claimed; the scheme works for every server.
 
 ## Conventions
 

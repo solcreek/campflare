@@ -19,7 +19,7 @@ import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
 import { mountAuth } from "./auth/routes"
-import { handlePermalink } from "./permalinks"
+import { handlePermalink, offersDesktop } from "./permalinks"
 import { handleMcp } from "./mcp"
 import { handleResponseUrl } from "./interactivity"
 import { Args } from "./api/args"
@@ -141,9 +141,12 @@ app.get("/link/", async (c) => {
 })
 
 /** Permalinks from chat.getPermalink, and links to a conversation: sent on to the app (APP_URL). */
-app.get("/archives/:channel", (c) => handlePermalink(c.env.APP_URL, new URL(c.req.url), c.req.param("channel")))
+const permalinkOptions = (env: Env) => ({ appUrl: env.APP_URL, offerDesktop: offersDesktop(env.OFFER_DESKTOP_APP) })
+app.get("/archives/:channel", (c) =>
+  handlePermalink(permalinkOptions(c.env), new URL(c.req.url), c.req.param("channel")),
+)
 app.get("/archives/:channel/:ts", (c) =>
-  handlePermalink(c.env.APP_URL, new URL(c.req.url), c.req.param("channel"), c.req.param("ts")),
+  handlePermalink(permalinkOptions(c.env), new URL(c.req.url), c.req.param("channel"), c.req.param("ts")),
 )
 
 /** Placeholder avatars: initials on a colour, as an SVG. */

@@ -3,7 +3,7 @@
 // query (oauth_query), and those routes call Better Auth, which answers with
 // the next redirect.
 
-const escape = (s: string) =>
+export const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
 
 /**
@@ -45,8 +45,8 @@ export function page(
   label { display: block; margin: 1.25rem 0 .35rem; font-weight: 600; }
   input:not([type=hidden]) { width: 100%; box-sizing: border-box; padding: .6rem .7rem; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; }
   .row { display: flex; gap: .75rem; margin-top: 1.5rem; }
-  button { font: inherit; padding: .6rem 1.1rem; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button, a.button { font: inherit; padding: .6rem 1.1rem; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; text-decoration: none; }
+  button.primary, a.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   details { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
   summary { cursor: pointer; color: var(--muted); }
   ul { padding-left: 1.2rem; } code { font-size: .9em; }
