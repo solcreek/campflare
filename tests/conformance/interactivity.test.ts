@@ -1,4 +1,14 @@
-import { App, LogLevel, SocketModeReceiver, type BlockAction, type ButtonAction } from "@slack/bolt"
+import {
+  App,
+  LogLevel,
+  SocketModeReceiver,
+  type BlockAction,
+  type ButtonAction,
+  type StaticSelectAction,
+  type UsersSelectAction,
+  type ViewClosedAction,
+  type ViewSubmitAction,
+} from "@slack/bolt"
 import { WebClient } from "@slack/web-api"
 import type { AddressInfo } from "node:net"
 import { beforeAll, describe, expect, inject, it } from "vitest"
@@ -146,6 +156,200 @@ describe("@slack/bolt HTTP receiver", () => {
       })
       await clickThrough(created, seen, "http")
       expect(seen.map((b) => b.actions[0]!.action_id)).toEqual(["feedback", "approve"])
+    } finally {
+      await bolt.stop()
+    }
+  })
+})
+
+/** A message with a select menu, a users select, and a button that opens a modal. */
+const MENU_BLOCKS = [
+  {
+    type: "section",
+    block_id: "pick",
+    text: { type: "mrkdwn", text: "Which environment?" },
+    accessory: {
+      type: "static_select",
+      action_id: "env",
+      placeholder: { type: "plain_text", text: "Choose" },
+      options: [
+        { text: { type: "plain_text", text: "Production" }, value: "prod" },
+        { text: { type: "plain_text", text: "Staging" }, value: "staging" },
+      ],
+    },
+  },
+  {
+    type: "actions",
+    block_id: "more",
+    elements: [
+      { type: "users_select", action_id: "who" },
+      { type: "button", action_id: "open_form", text: { type: "plain_text", text: "Deploy…" } },
+    ],
+  },
+]
+
+const FORM_VIEW = {
+  type: "modal" as const,
+  callback_id: "deploy_form",
+  notify_on_close: true,
+  title: { type: "plain_text" as const, text: "Deploy" },
+  submit: { type: "plain_text" as const, text: "Deploy" },
+  blocks: [
+    {
+      type: "input",
+      block_id: "note",
+      label: { type: "plain_text" as const, text: "Release note" },
+      element: { type: "plain_text_input", action_id: "text" },
+    },
+    {
+      type: "input",
+      block_id: "env",
+      label: { type: "plain_text" as const, text: "Environment" },
+      element: {
+        type: "static_select",
+        action_id: "pick",
+        options: [
+          { text: { type: "plain_text" as const, text: "Production" }, value: "prod" },
+          { text: { type: "plain_text" as const, text: "Staging" }, value: "staging" },
+        ],
+      },
+    },
+  ],
+}
+
+/**
+ * Wires a Bolt app as a real one would: selects answer by replacing the
+ * message, the button opens a modal with the click's trigger_id, the modal's
+ * submission is checked (errors for a short note) and then answered in the
+ * channel, and its closing is noticed.
+ */
+function handleForms(bolt: App, seen: { actions: BlockAction[]; closed: ViewClosedAction[] }) {
+  bolt.action<BlockAction<StaticSelectAction>>("env", async ({ ack, body, action, respond }) => {
+    await ack()
+    seen.actions.push(body)
+    await respond({ replace_original: true, text: `Environment: ${action.selected_option.value}` })
+  })
+  bolt.action<BlockAction<UsersSelectAction>>("who", async ({ ack, body }) => {
+    await ack()
+    seen.actions.push(body)
+  })
+  bolt.action<BlockAction<ButtonAction>>("open_form", async ({ ack, body, client: web }) => {
+    await ack()
+    seen.actions.push(body)
+    await web.views.open({ trigger_id: body.trigger_id, view: FORM_VIEW })
+  })
+  bolt.view<ViewSubmitAction>("deploy_form", async ({ ack, view, body, client: web }) => {
+    const note = view.state.values.note!.text!.value ?? ""
+    if (note.length < 5) {
+      await ack({ response_action: "errors", errors: { note: "Say a bit more" } })
+      return
+    }
+    await ack()
+    const env = view.state.values.env!.pick!.selected_option!.value
+    await web.chat.postMessage({ channel: general, text: `Deploying to ${env} for <@${body.user.id}>: ${note}` })
+  })
+  bolt.view<ViewClosedAction>({ callback_id: "deploy_form", type: "view_closed" }, async ({ ack, body }) => {
+    await ack()
+    seen.closed.push(body)
+  })
+}
+
+type Views = { views: { id: string; callback_id: string }[]; errors?: Record<string, string> }
+
+/** A users select, a modal opened, refused, submitted; another opened and closed; then a static select. */
+async function formsThrough(app: CreatedApp, seen: { actions: BlockAction[]; closed: ViewClosedAction[] }) {
+  const bot = client(app.bot_token)
+  const posted = await bot.chat.postMessage({ channel: general, text: "Which environment?", blocks: MENU_BLOCKS })
+  const act = (args: Record<string, string>) =>
+    owner.apiCall("campflare.blocks.action", { channel: general, ts: posted.ts!, ...args })
+  const me = (await owner.auth.test()).user_id!
+
+  await act({ action_id: "who", value: me })
+  const who = await until(() => seen.actions.find((b) => b.actions[0]?.action_id === "who"))
+  expect(who.actions[0]).toMatchObject({ type: "users_select", selected_user: me })
+
+  // The button opens the modal: it's there for the clicker by the time the click is acked, or soon after.
+  await act({ action_id: "open_form" })
+  const open = async () =>
+    until(async () => {
+      const { views } = (await owner.apiCall("campflare.views.list")) as unknown as Views
+      return views.length > 0 ? views.at(-1) : undefined
+    })
+  const form = await open()
+  expect(form.callback_id).toBe("deploy_form")
+  const submit = async (values: unknown) =>
+    (await owner.apiCall("campflare.views.submit", { view_id: form.id, values })) as unknown as Views
+  const refused = await submit({ note: { text: "hi" }, env: { pick: "prod" } })
+  expect(refused.errors).toEqual({ note: "Say a bit more" })
+  expect(refused.views.map((v) => v.id)).toEqual([form.id])
+  expect((await submit({ note: { text: "release 1.2 ✨ — größer" }, env: { pick: "prod" } })).views).toEqual([])
+  await until(async () => {
+    const latest = (await owner.conversations.history({ channel: general, limit: 1 })).messages?.[0]
+    return latest?.text === `Deploying to prod for <@${me}>: release 1.2 ✨ — größer` ? latest : undefined
+  })
+
+  // Opened again and closed: the app hears of it (notify_on_close).
+  await act({ action_id: "open_form" })
+  const again = await open()
+  await owner.apiCall("campflare.views.close", { view_id: again.id })
+  const closed = await until(() => seen.closed[0])
+  expect(closed).toMatchObject({ type: "view_closed", view: { id: again.id, callback_id: "deploy_form" } })
+
+  // Last, as its answer replaces the message (and its menus) with text.
+  await act({ action_id: "env", value: "staging" })
+  const env = await until(() => seen.actions.find((b) => b.actions[0]?.action_id === "env"))
+  expect(env.actions[0]).toMatchObject({ type: "static_select", selected_option: { value: "staging" } })
+  expect(env.state).toEqual({
+    values: {
+      pick: { env: { type: "static_select", selected_option: expect.objectContaining({ value: "staging" }) } },
+    },
+  })
+  await until(async () => ((await messageAt(posted.ts!))?.text === "Environment: staging" ? true : undefined))
+}
+
+describe("@slack/bolt modals and select menus", () => {
+  it("over HTTP: app.action() on selects, views.open with the trigger_id, app.view() with response_action", async () => {
+    const created = await createApp("Bolt Forms")
+    const bolt = new App({
+      token: created.bot_token,
+      signingSecret: created.signing_secret,
+      clientOptions: { slackApiUrl },
+      logLevel: LogLevel.ERROR,
+    })
+    const seen = { actions: [] as BlockAction[], closed: [] as ViewClosedAction[] }
+    handleForms(bolt, seen)
+    const server = (await bolt.start(0)) as unknown as { address(): AddressInfo }
+    try {
+      await owner.apiCall("campflare.apps.setInteractivity", {
+        app: created.app.id,
+        request_url: `http://127.0.0.1:${server.address().port}/slack/events`,
+      })
+      await formsThrough(created, seen)
+      expect(seen.actions.map((b) => b.actions[0]!.action_id)).toEqual(["who", "open_form", "open_form", "env"])
+    } finally {
+      await bolt.stop()
+    }
+  })
+
+  it("over Socket Mode: the response_action comes in the ack", async () => {
+    const created = await createApp("Socket Forms")
+    const receiver = new SocketModeReceiver({
+      appToken: created.app_token,
+      installerOptions: { clientOptions: { slackApiUrl } },
+      logLevel: LogLevel.ERROR,
+    })
+    const bolt = new App({
+      token: created.bot_token,
+      receiver,
+      clientOptions: { slackApiUrl },
+      logLevel: LogLevel.ERROR,
+    })
+    const seen = { actions: [] as BlockAction[], closed: [] as ViewClosedAction[] }
+    handleForms(bolt, seen)
+    await bolt.start()
+    try {
+      await formsThrough(created, seen)
+      expect(seen.actions.map((b) => b.actions[0]!.action_id)).toEqual(["who", "open_form", "open_form", "env"])
     } finally {
       await bolt.stop()
     }
