@@ -119,6 +119,67 @@ describe("@slack/web-api", () => {
     const res = await bot.chat.postMessage({ channel: general, text: "beep" })
     expect(res.message).toMatchObject({ bot_id: expect.any(String), user: app.botUserId })
   })
+
+  it("streams a reply with chatStream (startStream, appendStream, stopStream) after setStatus", async () => {
+    const bot = client(app.botToken)
+    const question = await owner.chat.postMessage({ channel: general, text: "what's new?" })
+    const thread_ts = question.ts!
+    const status = await bot.assistant.threads.setStatus({ channel_id: general, thread_ts, status: "is thinking…" })
+    expect(status.ok).toBe(true)
+
+    // The SDK buffers markdown and flushes it as chunks once buffer_size is reached.
+    const streamer = bot.chatStream({
+      channel: general,
+      thread_ts,
+      recipient_user_id: ownerId,
+      recipient_team_id: (await owner.auth.test()).team_id!,
+      buffer_size: 8,
+    })
+    expect(await streamer.append({ markdown_text: "Hi" })).toBeNull()
+    const started = await streamer.append({ markdown_text: " there, **you**." })
+    expect(started).toMatchObject({ ok: true, channel: general, ts: expect.any(String) })
+    await streamer.append({ markdown_text: " More" })
+    const feedback = [{ type: "context", elements: [{ type: "mrkdwn", text: "Was this helpful?" }] }]
+    const stopped = await streamer.stop({ markdown_text: " soon.", blocks: feedback })
+    expect(stopped).toMatchObject({
+      ok: true,
+      ts: streamer.ts,
+      message: {
+        text: "Hi there, **you**. More soon.",
+        blocks: [{ type: "markdown", text: "Hi there, **you**. More soon." }, ...feedback],
+        streaming_state: "completed",
+      },
+    })
+    await expect(streamer.append({ markdown_text: "late" })).rejects.toThrow("stream state is completed")
+
+    // The methods themselves, with Slack's errors.
+    const direct = await bot.chat.startStream({
+      channel: general,
+      thread_ts,
+      markdown_text: "Direct",
+      recipient_user_id: ownerId,
+      recipient_team_id: (await owner.auth.test()).team_id!,
+    })
+    await bot.chat.appendStream({ channel: general, ts: direct.ts!, markdown_text: " stream" })
+    await expect(
+      bot.chat.appendStream({ channel: general, ts: direct.ts!, chunks: [{ type: "markdown_text", text: "x" }] }),
+    ).rejects.toMatchObject({ data: { error: "streaming_mode_mismatch" } })
+    const done = await bot.chat.stopStream({ channel: general, ts: direct.ts! })
+    expect(done.message).toMatchObject({ text: "Direct stream", streaming_state: "completed" })
+    await expect(bot.chat.stopStream({ channel: general, ts: direct.ts! })).rejects.toMatchObject({
+      data: { error: "message_not_in_streaming_state" },
+    })
+    await expect(
+      bot.chat.startStream({ channel: general, thread_ts, markdown_text: "who for?" }),
+    ).rejects.toMatchObject({ data: { error: "missing_recipient_user_id" } })
+
+    const replies = await owner.conversations.replies({ channel: general, ts: thread_ts })
+    expect(replies.messages?.map((m) => m.text)).toEqual([
+      "what's new?",
+      "Hi there, **you**. More soon.",
+      "Direct stream",
+    ])
+  })
 })
 
 describe("@slack/socket-mode", () => {
