@@ -1,4 +1,4 @@
-import { keyOf, type WorkspaceState } from "./state"
+import { keyOf, type ThreadStatus, type WorkspaceState } from "./state"
 import type { Conversation, Message, User } from "./types"
 
 // Derived views of the state that every UI needs. Each takes only the parts of
@@ -62,4 +62,15 @@ export function thread(state: WorkspaceState, channel: string, threadTs: string)
   const parent = state.messages[key]
   const replies = (state.threads[key]?.keys ?? []).flatMap((k) => state.messages[k] ?? [])
   return parent ? [parent, ...replies] : replies
+}
+
+/** An app's status in a thread, unless it has run out by `now` (seconds since the epoch). */
+export function threadStatus(
+  statuses: WorkspaceState["statuses"],
+  channel: string,
+  threadTs: string,
+  now: number,
+): ThreadStatus | undefined {
+  const status = statuses[keyOf(channel, threadTs)]
+  return status && status.expires > now ? status : undefined
 }

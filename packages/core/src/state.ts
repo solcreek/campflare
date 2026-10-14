@@ -27,6 +27,20 @@ export interface WorkspaceState {
   threads: Record<string, Timeline>
   /** Messages from others that arrived live after last_read, by channel id. */
   unread: Record<string, number>
+  /** An app's transient status in a thread ("is thinking…"), by keyOf(channel, thread_ts). */
+  statuses: Record<string, ThreadStatus>
+}
+
+/**
+ * What assistant.threads.setStatus sent: shown until the app's next message in
+ * the thread, an empty status, or `expires` (seconds since the epoch) passes.
+ */
+export interface ThreadStatus {
+  /** The app's bot user. */
+  user: string
+  status: string
+  loadingMessages?: string[]
+  expires: number
 }
 
 export type Action =
@@ -59,6 +73,7 @@ export const initialState: WorkspaceState = {
   timelines: {},
   threads: {},
   unread: {},
+  statuses: {},
 }
 
 export const keyOf = (channel: string, ts: string) => `${channel}/${ts}`
@@ -306,6 +321,9 @@ function onMessage(state: WorkspaceState, event: RealtimeEvent): WorkspaceState 
   const { type: _type, channel_type: _channelType, event_ts: _eventTs, ...fields } = event
   const m = { ...fields, type: "message", channel } as Message
   let next = upsert(state, m)
+  // The app's reply ends its status in the thread.
+  const threadKey = m.thread_ts && keyOf(channel, m.thread_ts)
+  if (threadKey && m.user && next.statuses[threadKey]?.user === m.user) next = setStatus(next, threadKey, undefined)
   const self = state.self?.userId
   if (subtype === "channel_join" && m.user === self) next = patchConversation(next, channel, { is_member: true })
   if (subtype === "channel_leave" && m.user === self) next = patchConversation(next, channel, { is_member: false })
@@ -321,11 +339,35 @@ function onMessage(state: WorkspaceState, event: RealtimeEvent): WorkspaceState 
   return next
 }
 
+function setStatus(state: WorkspaceState, key: string, status: ThreadStatus | undefined): WorkspaceState {
+  const statuses = { ...state.statuses }
+  if (status) statuses[key] = status
+  else delete statuses[key]
+  return { ...state, statuses }
+}
+
+/** assistant_thread_status_changed: an empty status clears it. */
+function onStatus(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
+  const key = keyOf(event.channel as string, event.thread_ts as string)
+  const status = typeof event.status === "string" ? event.status : ""
+  if (!status) return state.statuses[key] ? setStatus(state, key, undefined) : state
+  const loading = Array.isArray(event.loading_messages) ? (event.loading_messages as string[]) : []
+  const seconds = typeof event.expires_in === "number" ? event.expires_in : 120
+  return setStatus(state, key, {
+    user: event.user as string,
+    status,
+    ...(loading.length > 0 ? { loadingMessages: loading } : {}),
+    expires: Number(event.event_ts) + seconds,
+  })
+}
+
 /** One RTM event. Events the store has no use for leave it as it was. */
 export function applyEvent(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
   switch (event.type) {
     case "message":
       return onMessage(state, event)
+    case "assistant_thread_status_changed":
+      return onStatus(state, event)
     case "reaction_added":
       return react(state, event, true)
     case "reaction_removed":
