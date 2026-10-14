@@ -110,7 +110,13 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
         conversations: { ...state.conversations, ...byId(action.conversations) },
       }
     case "connection":
-      return { ...state, connection: action.status }
+      // A new link starts with the statuses still showing (the hub sends them after hello), so
+      // ones held from before may have ended while the link was down.
+      return {
+        ...state,
+        connection: action.status,
+        ...(action.status === "connected" && Object.keys(state.statuses).length > 0 ? { statuses: {} } : {}),
+      }
     case "users":
       return { ...state, users: { ...state.users, ...byId(action.users) } }
     case "conversation":
