@@ -4,9 +4,10 @@ import { avatarSvg, initials } from "../src/api/avatar"
 import { sign, verify } from "../src/api/crypto"
 import { CampflareError } from "../src/api/errors"
 import { microsToTs, nextTs, normalizeTs, randomId, tsToMicros } from "../src/api/ids"
-import { imageSize, mimeOf } from "../src/api/media"
+import { imageSize, isAnimated, mimeOf } from "../src/api/media"
 import { ftsString, indexable, likePattern, parseSearch } from "../src/api/search-query"
 import { issueTicket, readTicket } from "../src/api/tickets"
+import { makeGif } from "./images"
 
 describe("ids and timestamps", () => {
   it("shapes ids like Slack's", () => {
@@ -171,6 +172,27 @@ describe("media", () => {
     ])
     expect(imageSize(vp8l)).toEqual({ width: 100, height: 50 })
     expect(imageSize(new Uint8Array([1, 2, 3]))).toBeUndefined()
+  })
+
+  it("tells animated GIFs and WebPs by their frames, not their loop extension", () => {
+    expect(isAnimated(makeGif(20, 10, 1))).toBe(false)
+    expect(isAnimated(makeGif(20, 10, 2))).toBe(true)
+    expect(isAnimated(makeGif(20, 10, 3, { comment: true, localTable: true }))).toBe(true)
+    // A single frame with NETSCAPE2.0, as some encoders write every GIF, is still.
+    expect(isAnimated(makeGif(20, 10, 1, { loop: true, comment: true }))).toBe(false)
+    expect(isAnimated(makeGif(20, 10, 2, { loop: false }))).toBe(true)
+    // Cut off before the second frame, or not a GIF block: still.
+    const one = makeGif(20, 10, 1)
+    const two = makeGif(20, 10, 2)
+    // Everything up to the end of the first frame: the trailer's byte less, NETSCAPE2.0's 19 more.
+    expect(isAnimated(two.subarray(0, one.length - 1 + 19))).toBe(false)
+    expect(isAnimated(two.subarray(0, one.length + 19))).toBe(false)
+    expect(isAnimated(new Uint8Array([...one.subarray(0, one.length - 1), 0x99]))).toBe(false)
+    // WebP: the animation flag of the VP8X header; simple VP8 and VP8L files never move.
+    expect(isAnimated(riff("VP8X", [10, 0, 0, 0, 0x02, 0, 0, 0, 9, 0, 0, 4, 0, 0]))).toBe(true)
+    expect(isAnimated(riff("VP8X", [10, 0, 0, 0, 0x10, 0, 0, 0, 9, 0, 0, 4, 0, 0]))).toBe(false)
+    expect(isAnimated(riff("VP8 ", [0, 0, 0, 0, 0x02, 0, 0, 0, 0, 0, 100, 0, 50, 0]))).toBe(false)
+    expect(isAnimated(new TextEncoder().encode("\x89PNG\r\n\x1a\n"))).toBe(false)
   })
 })
 

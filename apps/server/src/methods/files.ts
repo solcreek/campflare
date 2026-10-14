@@ -9,7 +9,7 @@ import { method, type Actor, type Auth, type Ctx } from "../api/context"
 import { sign, verify } from "../api/crypto"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds } from "../api/ids"
-import { imageSize, mimeOf } from "../api/media"
+import { imageSize, isAnimated, mimeOf } from "../api/media"
 import { fileJson } from "../api/shapes"
 import { imagesOf, makeThumb, THUMB_SIZES, thumbKey, thumbSizeOf, thumbSizes } from "../api/thumbs"
 
@@ -96,7 +96,8 @@ export async function handleUpload(env: Env, request: Request, token: string): P
   }
   if (!body || size === undefined) return new Response("empty upload", { status: 400 })
   if (size > MAX_FILE_BYTES) return new Response("file too large", { status: 413 })
-  const dims = body instanceof Uint8Array && f.mimetype.startsWith("image/") ? imageSize(body) : undefined
+  const image = body instanceof Uint8Array && f.mimetype.startsWith("image/") ? body : undefined
+  const dims = image && imageSize(image)
 
   await env.FILES.put(r2Key(f), body, {
     httpMetadata: { contentType: f.mimetype },
@@ -104,10 +105,11 @@ export async function handleUpload(env: Env, request: Request, token: string): P
   })
   await run(
     env.DB,
-    "UPDATE files SET status = 'uploaded', size = ?, width = ?, height = ? WHERE id = ?",
+    "UPDATE files SET status = 'uploaded', size = ?, width = ?, height = ?, animated = ? WHERE id = ?",
     size,
     dims?.width ?? null,
     dims?.height ?? null,
+    dims ? Number(isAnimated(image!)) : null,
     f.id,
   )
   return new Response(`OK - ${size}`, { status: 200, headers: { "content-type": "text/plain" } })

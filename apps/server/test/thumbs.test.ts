@@ -82,6 +82,25 @@ describe("thumbnail sizes", () => {
 })
 
 describe("thumbnails", () => {
+  it("know at upload whether an image moves", async () => {
+    const w = await workspace()
+    const files = [
+      await share(w.owner.token, w.general, "still.gif", makeGif(40, 30, 1, { loop: true })),
+      await share(w.owner.token, w.general, "moving.gif", makeGif(40, 30, 3)),
+      await share(w.owner.token, w.general, "photo.png", await makePng(40, 30)),
+      await share(w.owner.token, w.general, "notes.txt", new TextEncoder().encode("Grüße, 你好")),
+    ]
+    const rows = await env.DB.prepare("SELECT name, animated FROM files WHERE id IN (?, ?, ?, ?) ORDER BY created, id")
+      .bind(...files.map((f) => f.id))
+      .all<{ name: string; animated: number | null }>()
+    expect(Object.fromEntries(rows.results.map((r) => [r.name, r.animated]))).toEqual({
+      "still.gif": 0,
+      "moving.gif": 1,
+      "photo.png": 0,
+      "notes.txt": null,
+    })
+  })
+
   it("are made on first fetch, kept in R2, and served like url_private", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")

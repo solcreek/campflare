@@ -7,8 +7,15 @@ export { sunsetPng as makePng } from "../../../scripts/seed"
  * A two-colour GIF of width×height (vertical stripes), with `frames` frames.
  * Local Images can't write GIF, so this encodes it: LZW with a clear code
  * after every two pixels keeps the codes 3 bits wide, never compressing.
+ * `loop` adds the NETSCAPE2.0 extension (by default when animated), `comment`
+ * a comment extension, `localTable` gives each frame its own colour table.
  */
-export function makeGif(width: number, height: number, frames = 1): Uint8Array {
+export function makeGif(
+  width: number,
+  height: number,
+  frames = 1,
+  { loop = frames > 1, comment = false, localTable = false } = {},
+): Uint8Array {
   const out: number[] = []
   const le16 = (n: number) => out.push(n & 0xff, n >> 8)
   out.push(...new TextEncoder().encode("GIF89a"))
@@ -16,7 +23,8 @@ export function makeGif(width: number, height: number, frames = 1): Uint8Array {
   le16(height)
   out.push(0x80, 0, 0) // a global table of 2 colours
   out.push(0xe7, 0x39, 0x2d, 0x3c, 0x98, 0x9f)
-  if (frames > 1) {
+  if (comment) out.push(0x21, 0xfe, 5, ...new TextEncoder().encode("hola!"), 0)
+  if (loop) {
     // NETSCAPE2.0: loop forever.
     out.push(0x21, 0xff, 11, ...new TextEncoder().encode("NETSCAPE2.0"), 3, 1, 0, 0, 0)
   }
@@ -27,7 +35,8 @@ export function makeGif(width: number, height: number, frames = 1): Uint8Array {
     le16(0)
     le16(width)
     le16(height)
-    out.push(0)
+    if (localTable) out.push(0x80, 0x3c, 0x98, 0x9f, 0xe7, 0x39, 0x2d)
+    else out.push(0)
     const codes: number[] = []
     for (let i = 0; i < width * height; i++) {
       if (i % 2 === 0) codes.push(4) // clear
