@@ -7,6 +7,7 @@ import { microsToTs, nextTs, normalizeTs, randomId, tsToMicros } from "../src/ap
 import { imageSize, isAnimated, mimeOf } from "../src/api/media"
 import { ftsString, indexable, likePattern, parseSearch } from "../src/api/search-query"
 import { issueTicket, readTicket } from "../src/api/tickets"
+import { formState, givenValues, type Given } from "../src/views"
 import { makeGif } from "./images"
 
 describe("ids and timestamps", () => {
@@ -250,5 +251,90 @@ describe("publicOrigin", () => {
     // Never downgraded: an https request stays https.
     expect(at({ "x-forwarded-proto": "http" }, "https://chat.example.com/")).toBe("https://chat.example.com")
     expect(at({ "x-forwarded-proto": "https" }, "http://localhost:8787/")).toBe("https://localhost:8787")
+  })
+})
+
+describe("a view's form state", () => {
+  const text = (t: string) => ({ type: "plain_text", text: t })
+  const option = (t: string, value: string) => ({ text: text(t), value })
+  const input = (block_id: string, element: Record<string, unknown>, optional = true) => ({
+    type: "input",
+    block_id,
+    label: text(block_id),
+    optional,
+    element: { action_id: "a", ...element },
+  })
+  const view = {
+    blocks: [
+      input("count", { type: "number_input", is_decimal_allowed: false, initial_value: "3" }),
+      input("ratio", { type: "number_input", is_decimal_allowed: true }),
+      input("mail", { type: "email_text_input" }, false),
+      input("short", { type: "plain_text_input", min_length: 3 }),
+      input("tags", {
+        type: "multi_static_select",
+        option_groups: [{ label: text("g"), options: [option("Uno", "1"), option("Dos", "2")] }],
+        initial_options: [option("Uno", "1")],
+      }),
+      input("people", { type: "multi_users_select", initial_users: ["U1"] }),
+      input("rooms", { type: "multi_conversations_select" }),
+      input("chans", { type: "multi_channels_select" }),
+      input("at", { type: "timepicker", initial_time: "09:30" }),
+      input("pick", { type: "conversations_select", initial_conversation: "C1" }),
+      input("rich", { type: "rich_text_input" }),
+      { type: "section", block_id: "s", text: { type: "mrkdwn", text: "x" } },
+    ],
+  }
+
+  it("keeps initial values, in Slack's shape, and collects the ids chosen", () => {
+    const state = formState(view, { mail: { a: "a@example.com" }, chans: { a: ["C2", "C3"] } })
+    expect(state.errors).toEqual({})
+    expect(state.values).toEqual({
+      count: { a: { type: "number_input", value: "3" } },
+      ratio: { a: { type: "number_input", value: null } },
+      mail: { a: { type: "email_text_input", value: "a@example.com" } },
+      short: { a: { type: "plain_text_input", value: null } },
+      tags: { a: { type: "multi_static_select", selected_options: [option("Uno", "1")] } },
+      people: { a: { type: "multi_users_select", selected_users: ["U1"] } },
+      rooms: { a: { type: "multi_conversations_select", selected_conversations: [] } },
+      chans: { a: { type: "multi_channels_select", selected_channels: ["C2", "C3"] } },
+      at: { a: { type: "timepicker", selected_time: "09:30" } },
+      pick: { a: { type: "conversations_select", selected_conversation: "C1" } },
+      rich: { a: { type: "rich_text_input" } },
+    })
+    expect(state.choices).toEqual([
+      { field: "selected_user", id: "U1" },
+      { field: "selected_channel", id: "C2" },
+      { field: "selected_channel", id: "C3" },
+      { field: "selected_conversation", id: "C1" },
+    ])
+  })
+
+  it("says what's wrong with each input, as Slack's client does", () => {
+    const state = formState(view, { count: { a: "2.5" }, ratio: { a: "x" }, short: { a: "ab" } })
+    expect(state.errors).toEqual({
+      count: "Enter a whole number.",
+      ratio: "Enter a number.",
+      mail: "Please complete this required field.",
+      short: "Use at least 3 characters.",
+    })
+    expect(formState(view, { ratio: { a: "0.5" }, mail: { a: "m" } }).errors).toEqual({})
+    const bad = (given: Given) => {
+      try {
+        formState(view, given)
+      } catch (error) {
+        return ((error as CampflareError).extra.response_metadata as { messages: string[] }).messages[0]
+      }
+    }
+    expect(bad({ at: { a: "9am" } })).toBe("[ERROR] at.a must be HH:mm")
+    expect(bad({ tags: { a: ["3"] } })).toBe("[ERROR] tags.a has no option 3")
+    expect(bad({ rich: { a: "x" } })).toBe("[ERROR] rich.a is a rich_text_input, which can't be filled in yet")
+    expect(bad({ s: { a: "x" } })).toBe("[ERROR] no input s.a in this view")
+  })
+
+  it("takes values only as strings or lists of strings", () => {
+    expect(givenValues(undefined)).toEqual({})
+    expect(() => givenValues([])).toThrow(CampflareError)
+    expect(() => givenValues({ b: "x" })).toThrow(CampflareError)
+    expect(givenValues({ b: { a: ["x"], c: null } })).toEqual({ b: { a: ["x"], c: null } })
   })
 })
