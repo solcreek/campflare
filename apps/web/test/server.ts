@@ -97,13 +97,27 @@ export function fakeServer(overrides: Record<string, Handler> = {}): FakeServer 
     push(event) {
       FakeSocket.all.at(-1)?.receive(event)
     },
-    connect: () => createWorkspace({ client: api.client, WebSocket: FakeSocket as unknown as typeof WebSocket }),
+    // Reconnects at once, so a test can drop the link (reconnect()) without waiting out a backoff.
+    connect: () =>
+      createWorkspace({ client: api.client, WebSocket: FakeSocket as unknown as typeof WebSocket, minDelayMs: 0 }),
   }
 }
 
 /** Says hello on the newest socket, so the workspace counts as connected. */
 export function hello() {
   FakeSocket.all.at(-1)?.receive({ type: "hello" })
+}
+
+/**
+ * Drops the RTM link as a network would, and waits for the workspace to open
+ * the next one. It isn't connected until hello(): send what the server sends
+ * a new link first (thread statuses) between the two, as a test needs.
+ */
+export async function reconnect() {
+  const old = FakeSocket.all.at(-1)
+  old?.close()
+  for (let i = 0; i < 50 && FakeSocket.all.at(-1) === old; i++) await new Promise((r) => setTimeout(r, 0))
+  if (FakeSocket.all.at(-1) === old) throw new Error("the workspace didn't open a new link")
 }
 
 export { FakeSocket }

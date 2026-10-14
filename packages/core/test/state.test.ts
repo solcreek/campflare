@@ -441,4 +441,14 @@ describe("streamed messages and thread statuses", () => {
     expect(reduce(s, status(""))).toBe(s)
     expect(reduce(s, status(undefined))).toBe(s)
   })
+
+  it("drops the statuses it holds when a link (re)connects: the server sends the ones still showing", () => {
+    let s = reduce(loaded(), status("is working"))
+    s = reduce(s, { type: "connection", status: "disconnected" })
+    expect(s.statuses[threadKey]).toBeDefined()
+    s = reduce(s, { type: "connection", status: "connected" })
+    expect(s.statuses).toEqual({})
+    s = reduce(s, status("is still working"))
+    expect(s.statuses[threadKey]?.status).toBe("is still working")
+  })
 })

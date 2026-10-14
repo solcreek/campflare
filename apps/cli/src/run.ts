@@ -40,11 +40,14 @@ Messages
   click <#channel|id> <ts> [action_id] [--block <id>] [--value <v>]
                                    click a button in an app's message (Campflare);
                                    without an action_id, lists the message's buttons
+  stop <#channel|id> <ts>          stop an app's reply that is still streaming (Campflare);
+                                   the app's next append is answered stopped_by_user
 
 Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
                                  stream piped markdown into one message as it arrives
-                                 (chat.startStream, appendStream per piece, stopStream at the end)
+                                 (chat.startStream, appendStream per piece, stopStream at the end);
+                                 when a person stops it, says so and reads no more
   status <#channel|id> <thread ts> [text]   the app's status in a thread; no text clears it
 
 Workspace
@@ -443,9 +446,19 @@ const commands: Record<string, Command> = {
       ...(recipient ? { recipient_user_id: recipient, recipient_team_id: team } : {}),
     })
     io.stderr(`Streaming to ${target} (ts ${ts})\n`)
+    let sent = 0
     for await (const piece of pieces) {
       for (const markdown_text of split(piece, MAX_STREAM_PIECE)) {
-        await s.client.call("chat.appendStream", { channel, ts, markdown_text })
+        try {
+          await s.client.call("chat.appendStream", { channel, ts, markdown_text })
+        } catch (error) {
+          if (!(error instanceof ApiError && error.code === "stopped_by_user")) throw error
+          // Someone in the conversation stopped it: the message stays as it was.
+          if (values.json) return s.print({ channel, ts, stopped_by_user: true })
+          io.stdout(`Stopped by someone in ${target} after ${sent} characters (ts ${ts})\n`)
+          return
+        }
+        sent += markdown_text.length
       }
     }
     const stopped = await s.client.call<{ ok: boolean; message: { text: string } }>("chat.stopStream", {
@@ -577,6 +590,20 @@ const commands: Record<string, Command> = {
     })
     if (values.json) return s.print(res)
     io.stdout(`Clicked: the app took it (${res.delivered === "socket" ? "Socket Mode" : "HTTP"})\n`)
+  },
+
+  async stop(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target, ts] = positionals
+    if (!target || !ts) throw new UsageError("stop needs a conversation and the streaming message's ts")
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    const res = await s.client.call<{ ok: boolean; message: { text: string } }>("campflare.chat.stopStream", {
+      channel,
+      ts,
+    })
+    if (values.json) return s.print(res.message)
+    io.stdout(`Stopped the reply in ${target} (ts ${ts}) at ${res.message.text.length} characters\n`)
   },
 
   async edit(argv, io) {

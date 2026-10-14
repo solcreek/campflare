@@ -160,6 +160,18 @@ export class TeamHub extends DurableObject<Env> {
       expires INTEGER NOT NULL
     )`)
     createHealthTables(ctx.storage.sql)
+    // Apps' thread statuses (assistant.threads.setStatus): the latest event per
+    // thread, until it expires, is cleared, or the app replies there, so an RTM
+    // link that opens later gets it too (statusesFor()).
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS thread_statuses (
+      channel_id TEXT NOT NULL,
+      thread_ts TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      audience TEXT NOT NULL,
+      body TEXT NOT NULL,
+      expires INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, thread_ts)
+    )`)
   }
 
   /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id. */
@@ -535,6 +547,8 @@ export class TeamHub extends DurableObject<Env> {
       )
     } else {
       server.send(JSON.stringify({ type: "hello" }))
+      // What a client that was there would be showing: apps' statuses in threads.
+      for (const body of this.statusesFor(connection.users[0]!, now)) send(server, body)
     }
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -546,6 +560,7 @@ export class TeamHub extends DurableObject<Env> {
     // Serialised once, for the log and every RTM link.
     const json = JSON.stringify(body)
     this.record(input, json)
+    this.keepStatus(input, json)
     const members = audience === "team" ? undefined : new Set(audience)
     const sees = (users: string[]) => !members || users.some((u) => members.has(u))
     let delivered = 0
@@ -587,6 +602,56 @@ export class TeamHub extends DurableObject<Env> {
     }
     for (const n of await Promise.all(posts)) delivered += n
     return delivered
+  }
+
+  /**
+   * Keeps the thread statuses statusesFor() replays in step with the events
+   * clients clear theirs on: a status replaces the thread's, an empty one
+   * clears it, and so does a new message in the thread from the status's app.
+   */
+  private keepStatus(input: PublishInput, json: string) {
+    const { event } = input
+    const sql = this.ctx.storage.sql
+    if (event.type === "assistant_thread_status_changed") {
+      const expiresIn = typeof event.expires_in === "number" ? event.expires_in : 0
+      if (!event.status || expiresIn <= 0) {
+        sql.exec("DELETE FROM thread_statuses WHERE channel_id = ? AND thread_ts = ?", event.channel, event.thread_ts)
+        return
+      }
+      sql.exec(
+        `INSERT OR REPLACE INTO thread_statuses (channel_id, thread_ts, user_id, audience, body, expires)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        event.channel,
+        event.thread_ts,
+        event.user,
+        JSON.stringify(input.audience),
+        json,
+        Date.now() + expiresIn * 1000,
+      )
+    } else if (event.type === "message" && event.thread_ts && event.user) {
+      if (event.subtype === "message_changed" || event.subtype === "message_deleted") return
+      sql.exec(
+        "DELETE FROM thread_statuses WHERE channel_id = ? AND thread_ts = ? AND user_id = ?",
+        event.channel,
+        event.thread_ts,
+        event.user,
+      )
+    }
+  }
+
+  /** The thread statuses a user can see that are still showing, as their events. Expired ones are forgotten. */
+  private statusesFor(user: string, now: number): string[] {
+    const sql = this.ctx.storage.sql
+    sql.exec("DELETE FROM thread_statuses WHERE expires <= ?", now)
+    return sql
+      .exec<{ body: string }>(
+        `SELECT body FROM thread_statuses
+         WHERE audience = '"team"' OR EXISTS (SELECT 1 FROM json_each(audience) WHERE value = ?)
+         ORDER BY expires`,
+        user,
+      )
+      .toArray()
+      .map((r) => r.body)
   }
 
   /** Huddles: someone starts publishing in a conversation's call (replacing their earlier seat, if any). */

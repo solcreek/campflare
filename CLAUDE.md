@@ -158,6 +158,11 @@ The hub's SQLite also holds:
 - `delivery_minutes` / `delivery_last` (`src/delivery-health.ts`): every Events
   API attempt (retries too; not `url_verification`, not interactivity) counted
   per app in one-minute buckets over a rolling hour, and the last attempt.
+- `thread_statuses`: the latest `assistant_thread_status_changed` per thread,
+  with its audience, until it expires, an empty status clears it, or a new
+  message from the status's user lands in the thread (`keepStatus()`, run by
+  `publish()`). A new RTM link gets the ones its user can see right after
+  `hello` (`statusesFor()`), so a client that connects late sees them.
 
 Apps get events through `callbacksFor()` in `hub.ts`: the `event_callback`, plus
 `app_mention` (`src/app-events.ts`) when a new message mentions the app's bot
@@ -211,13 +216,32 @@ batch after the conversation: a guarded UPDATE builds the blocks in SQL
 (`json_set`/`json_insert`), and the row read before it in the same batch says
 why it changed nothing (`message_not_owned_by_app`,
 `message_not_in_streaming_state`, `streaming_mode_mismatch`, the limits).
-`task_update`/`plan_update` chunks are checked and accepted but not shown.
-Outside DMs, start wants `recipient_user_id`/`recipient_team_id`.
-`assistant.threads.setStatus` (`src/methods/assistant.ts`) stores nothing: it
-publishes the RTM-only `assistant_thread_status_changed` (`channel`,
-`thread_ts`, `status`, `loading_messages`, the bot's `user`, `expires_in` 120) to the members; clients clear it on the bot's next message in the
-thread, an empty status, or the timeout. A client that connects later
-doesn't see a status already set.
+`task_update`/`plan_update` chunks become Slack's own `task_card` and `plan`
+blocks: a task (its text `details`/`output` as `rich_text`, `sources`) is
+added, or merged into the task with its id where it is, among the text
+(`task_display_mode` "timeline", the default) or in the `tasks` of the
+message's one `plan` block ("plan", stored as `messages.stream_task_display`,
+migration 0017); `plan_update` titles that block. Changing blocks already there
+is beyond the append SQL, so a call with them (`rewrite()`) reads the row,
+builds the blocks in JS (`applyOps()`, which start uses too) and writes them
+with a compare and swap on `text` and `blocks`, reading again if the row moved:
+two round trips. A person in the conversation stops a stream with
+`campflare.chat.stopStream` (xoxp, members only; `campflare stop`, the app's
+Stop control): the message is completed as it stands, `stream_stopped_by` says
+who, and the app's next `chat.appendStream` or `chat.stopStream` answers
+`stopped_by_user` (Slack documents it for append; stop answers it too here).
+Outside DMs, start wants `recipient_user_id`/`recipient_team_id`; they're
+checked (a person of this workspace) but, deliberately, the stream still shows
+to the whole conversation, and a top-level stream (no `thread_ts`) is allowed in
+any conversation. Both are looser than Slack and harmless: nothing shows less
+than an ordinary message would.
+`assistant.threads.setStatus` (`src/methods/assistant.ts`) publishes the
+RTM-only `assistant_thread_status_changed` (`channel`, `thread_ts`, `status`,
+`loading_messages`, the bot's `user`, `expires_in` 120) to the members; clients
+clear it on the bot's next message in the thread, an empty status, or the
+timeout. The hub keeps the latest per thread (`thread_statuses`, above) and
+sends it on every new RTM link; core drops the statuses it holds when a link
+connects, so the ones sent after `hello` are the truth after a reconnect.
 
 **Files.** `files.getUploadURLExternal` reserves a row and returns a signed
 `/upload/v1/:token` URL; bytes go to R2 at `<team>/<file>`;
@@ -458,9 +482,12 @@ API beyond Slack's. `start()` is idempotent (StrictMode).
 never HTML, and only links http(s) and mailto. `src/markdown.ts` parses
 markdown (`markdown_text`, `markdown` blocks) into the same tree, plus
 headings, lists and rules; the app shows a message's blocks instead of its
-text when it has a markdown block (`message-body.tsx`). `state.statuses`
+text when it has a markdown, `task_card` or `plan` block (`message-body.tsx`;
+`src/tasks.ts` reads those as tasks and plans, `message-tasks.tsx` shows them),
+with a Stop control while it streams (`workspace.stopStream`). `state.statuses`
 holds apps' thread statuses; `threadStatus()` drops expired ones, and the
-thread view shows them (`thread-status.tsx`). `src/files.ts` decides image vs
+thread view shows them (`thread-status.tsx`). A `connection` action to
+`connected` empties them: the server resends those still showing. `src/files.ts` decides image vs
 card (`fileKind`; SVG is a card) and `workspace.files` turns `url_private` into
 shared object URLs via `client.fetchFile` (token sent to the server's origin
 only), revoked after a grace period; `workspace.upload` is optimistic like `send`.

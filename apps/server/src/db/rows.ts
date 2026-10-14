@@ -122,6 +122,10 @@ export interface MessageRow {
   stream_state: string | null
   /** How the stream sends content, "markdown_text" or "chunks", once it has sent any. */
   stream_mode: string | null
+  /** The person who stopped the stream from their client (campflare.chat.stopStream); null otherwise. */
+  stream_stopped_by: string | null
+  /** chat.startStream's task_display_mode when it's "plan"; null for the default timeline. */
+  stream_task_display: string | null
 }
 
 export interface ReactionRow {

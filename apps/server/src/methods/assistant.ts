@@ -6,10 +6,12 @@ import { CampflareError, invalidArguments } from "../api/errors"
 
 // assistant.threads.setStatus: an app's transient status in a thread ("is
 // thinking…"), shown until the app's next reply there or an empty status, and
-// for two minutes at most. Nothing is stored: the status goes out as an RTM
-// event, `assistant_thread_status_changed`, to the conversation's members'
-// clients, which clear it themselves on the app's next message in the thread.
-// Apps don't get it (it is client state, like `channel_marked`).
+// for two minutes at most. The status goes out as an RTM event,
+// `assistant_thread_status_changed`, to the conversation's members' clients,
+// which clear it themselves on the app's next message in the thread. Apps don't
+// get it (it is client state, like `channel_marked`). The hub keeps the latest
+// one per thread until then, and gives it to RTM links that open later
+// (TeamHub.keepStatus/statusesFor): nothing goes to D1.
 
 /** How long a status shows without a reply, as in Slack. */
 export const STATUS_TIMEOUT_SECONDS = 120

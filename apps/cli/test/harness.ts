@@ -14,8 +14,11 @@ export const baseUrl = inject("baseUrl")
 export function memoryIo(
   opts: {
     stdin?: string
-    /** Piped input in pieces, as `stream` reads it; each piece after the one before has been handled. */
-    stdinChunks?: string[]
+    /**
+     * Piped input in pieces, as `stream` reads it; each piece after the one before has been handled.
+     * A generator can act between pieces (stop the stream, say).
+     */
+    stdinChunks?: string[] | (() => AsyncIterable<string>)
     files?: Record<string, string>
     env?: Record<string, string>
     openUrl?: (url: string) => Promise<void>
@@ -32,10 +35,13 @@ export function memoryIo(
     stderr: (t) => void err.push(t),
     stdin: async () => opts.stdin,
     stdinChunks: opts.stdinChunks
-      ? () =>
-          (async function* () {
-            yield* opts.stdinChunks!
+      ? () => {
+          const chunks = opts.stdinChunks!
+          if (typeof chunks === "function") return chunks()
+          return (async function* () {
+            yield* chunks
           })()
+        }
       : undefined,
     env: opts.env ?? {},
     async readFile(path) {

@@ -60,6 +60,11 @@ export interface Workspace {
    * message, an ephemeral reply) arrives as events.
    */
   click(channel: string, ts: string, click: Click): Promise<void>
+  /**
+   * Stops an app's message that is still streaming (campflare.chat.stopStream),
+   * as Slack's stop button does. The completed message arrives as an event.
+   */
+  stopStream(channel: string, ts: string): Promise<void>
   /** Marks a conversation read up to its newest loaded message. */
   markRead(channel: string): Promise<void>
   join(channel: string): Promise<void>
@@ -344,6 +349,10 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     })
   }
 
+  async function stopStream(channel: string, ts: string) {
+    await client.call("campflare.chat.stopStream", { channel, ts })
+  }
+
   async function markRead(channel: string) {
     const keys = state.timelines[channel]?.keys ?? []
     const newest = keys
@@ -411,6 +420,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     remove,
     toggleReaction,
     click,
+    stopStream,
     markRead,
     join,
     createChannel,

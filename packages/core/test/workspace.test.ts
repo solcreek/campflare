@@ -380,6 +380,17 @@ describe("createWorkspace", () => {
     )
   })
 
+  it("stops an app's stream with campflare.chat.stopStream, and passes on a refusal", async () => {
+    const { api, ws } = await started({ "campflare.chat.stopStream": () => ({}) })
+    await ws.stopStream("C1", "0000000200.000000")
+    expect(api.calls.at(-1)).toEqual({
+      method: "campflare.chat.stopStream",
+      args: { channel: "C1", ts: "0000000200.000000" },
+    })
+    api.handlers["campflare.chat.stopStream"] = () => new Error("message_not_in_streaming_state")
+    await expect(ws.stopStream("C1", "0000000200.000000")).rejects.toThrow("message_not_in_streaming_state")
+  })
+
   it("marks read up to the newest message, once", async () => {
     const { api, ws } = await started({ "conversations.mark": () => ({}) })
     await ws.markRead("C1")

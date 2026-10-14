@@ -482,6 +482,45 @@ describe("apps", () => {
     expect(JSON.parse(owner.out)).toMatchObject([{ text: "Annyeong", streaming_state: "completed" }])
   })
 
+  it("stops a stream as a person, and the streaming CLI stops reading", async () => {
+    const { owner, bot } = await withBot()
+    await owner.run("send", "#general", "Cuéntame", "--json")
+    const { ts: question } = JSON.parse(owner.out) as { ts: string }
+    owner.clear()
+    let streamTs = ""
+    const cli = bot({
+      stdinChunks: async function* () {
+        yield "Érase una vez"
+        streamTs = /\(ts (\d+\.\d+)\)/.exec(cli.err)![1]!
+        expect(await owner.run("stop", "#general", streamTs)).toBe(0)
+        yield " 昔々"
+        yield " never read"
+      },
+    })
+    expect(await cli.run("stream", "#general", "--thread", question)).toBe(0)
+    expect(owner.out).toBe(`Stopped the reply in #general (ts ${streamTs}) at 13 characters\n`)
+    expect(cli.out).toBe(`Stopped by someone in #general after 13 characters (ts ${streamTs})\n`)
+    owner.clear()
+    expect(await owner.run("history", "#general", "--thread", question, "--json")).toBe(0)
+    const [, reply] = JSON.parse(owner.out) as { text: string; streaming_state: string }[]
+    expect(reply).toMatchObject({ text: "Érase una vez", streaming_state: "completed" })
+    // Only once, and only with a ts.
+    expect(await owner.run("stop", "#general", streamTs, "--json")).toBe(1)
+    expect(owner.err).toContain("message_not_in_streaming_state")
+    expect(await owner.run("stop", "#general")).toBe(2)
+
+    const json = bot({
+      stdinChunks: async function* () {
+        yield "x"
+        await owner.run("stop", "#general", /\(ts (\d+\.\d+)\)/.exec(json.err)![1]!, "--json")
+        yield "y"
+      },
+    })
+    expect(await json.run("stream", "#general", "--thread", question, "--json")).toBe(0)
+    expect(JSON.parse(json.out)).toMatchObject({ stopped_by_user: true })
+    expect(owner.out).toMatch(/"streaming_state": ?"completed"/)
+  })
+
   it("sets and clears a status", async () => {
     const { owner, bot } = await withBot()
     await owner.run("send", "#general", "?", "--json")
