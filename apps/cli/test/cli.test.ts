@@ -297,6 +297,12 @@ describe("workspace", () => {
       expect(await cli.run("admin", "app", other.app.id, "--request-url", "", "--json")).toBe(0)
       expect(JSON.parse(cli.out)).toMatchObject({ app: { event_subscriptions: { request_url: null } } })
       cli.clear()
+      expect(await cli.run("admin", "app", other.app.id, "--rotate-secret")).toBe(0)
+      const rotated = /Signing secret: ([0-9a-f]{32})\n/.exec(cli.out)?.[1]
+      expect(rotated).toBeDefined()
+      expect(rotated).not.toBe(other.signing_secret)
+      expect(cli.out).toContain("The old signing secret no longer signs anything")
+      cli.clear()
       expect(await cli.run("admin", "app", other.app.id, "--request-url", "https://campflare.invalid/x")).toBe(1)
       expect(cli.err).toMatch(/^error: url_verification_failed \[ERROR\] no answer from the Request URL/)
       expect(await cli.run("admin", "app")).toBe(2)

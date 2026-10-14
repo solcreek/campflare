@@ -60,9 +60,10 @@ Admin (Campflare only)
   admin add-user <handle> [--email <e>] [--name <real name>] [--admin]
   admin add-app <name>             a bot token, a Socket Mode app token and a signing secret
   admin app <app id> [--request-url <url>] [--events <a,b>] [--interactivity-url <url>]
-                                   an app's settings; set where its events are POSTed
+            [--rotate-secret]      an app's settings; set where its events are POSTed
                                    (checked with url_verification; '' stops) and which,
-                                   and where clicks on its buttons are POSTed ('' stops)
+                                   and where clicks on its buttons are POSTed ('' stops);
+                                   --rotate-secret replaces the signing secret at once
   token create [--label <l>]   token list   token revoke <id>
 
 Global: --profile <name>, --json. Exit codes: 0 ok, 1 API error, 2 usage.`
@@ -759,6 +760,7 @@ const commands: Record<string, Command> = {
       "request-url": { type: "string" },
       events: { type: "string" },
       "interactivity-url": { type: "string" },
+      "rotate-secret": { type: "boolean" },
     })
     const s = await session(io, values)
     if (sub === "add-user") {
@@ -798,6 +800,8 @@ const commands: Record<string, Command> = {
       const events = str(values.events)
       const interactivity = str(values["interactivity-url"])
       let res: AppSettings | undefined
+      // First, so a Request URL set in the same command is verified with the new secret.
+      if (values["rotate-secret"]) res = await s.client.call<AppSettings>("campflare.apps.rotateSigningSecret", { app })
       if (url !== undefined || events !== undefined) {
         res = await s.client.call<AppSettings>("campflare.apps.setEventSubscriptions", {
           app,
@@ -816,6 +820,9 @@ const commands: Record<string, Command> = {
           `Request URL: ${subs.request_url ?? "none (Socket Mode only)"}\nEvents: ${subs.events?.join(", ") ?? "all"}\n` +
           `Interactivity URL: ${res.app.interactivity.request_url ?? "none (Socket Mode only)"}\n`,
       )
+      if (values["rotate-secret"]) {
+        io.stdout("The old signing secret no longer signs anything: update the app's secret now.\n")
+      }
     } else {
       throw new UsageError("admin commands: add-user, add-app, app")
     }

@@ -350,6 +350,27 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
 })
 
 /**
+ * Replaces an app's signing secret and returns the new one. The switch is
+ * immediate, with no window where both sign: every delivery from now on,
+ * retries of earlier events and clicks included, is signed with the new
+ * secret, so the app must start verifying with it at once (as on Slack, which
+ * signs with one secret at a time).
+ */
+method("campflare.apps.rotateSigningSecret", "user", async (ctx) => {
+  const app = await ownApp(ctx)
+  const updated = (await first<AppRow>(
+    ctx.env.DB,
+    "UPDATE apps SET signing_secret = ? WHERE id = ? RETURNING *",
+    randomSecret(16),
+    app.id,
+  ))!
+  // The hub keeps each subscriber's secret: it must sign the next delivery with the new one.
+  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
+  await hub.subscriptionsChanged()
+  return { app: appSettings(updated) }
+})
+
+/**
  * Sets where clicks on the app's buttons are POSTed (Slack's Interactivity
  * Request URL): block_actions, form-encoded and signed like events. Slack
  * doesn't challenge this URL, so it's only checked for its form; an empty one

@@ -79,6 +79,50 @@ describe("signing secret and settings", () => {
   })
 })
 
+describe("campflare.apps.rotateSigningSecret", () => {
+  it("switches every delivery to a new secret at once, retries of earlier events included", async () => {
+    const { w, app } = await subscribedApp()
+    // An event fails before the rotation, so its retry comes after.
+    urls.answer = () => new Response("", { status: 500 })
+    await ok("chat.postMessage", { channel: w.general, text: "before" }, w.owner.token)
+    const before = await urls.next(isEvent("message", "before"))
+    expect(await validSignature(before, app.signingSecret)).toBe(true)
+    await settle()
+
+    const rotated = await ok<{ app: { signing_secret: string } }>(
+      "campflare.apps.rotateSigningSecret",
+      { app: app.id },
+      w.owner.token,
+    )
+    const secret = rotated.app.signing_secret
+    expect(secret).toMatch(/^[0-9a-f]{32}$/)
+    expect(secret).not.toBe(app.signingSecret)
+    const info = await ok<{ app: { signing_secret: string } }>("campflare.apps.info", { app: app.id }, w.owner.token)
+    expect(info.app.signing_secret).toBe(secret)
+
+    urls.answer = () => new Response("")
+    await expire(w.teamId)
+    const retry = await urls.next(isEvent("message", "before"))
+    expect(await validSignature(retry, secret)).toBe(true)
+    expect(await validSignature(retry, app.signingSecret)).toBe(false)
+    await ok("chat.postMessage", { channel: w.general, text: "after" }, w.owner.token)
+    const after = await urls.next(isEvent("message", "after"))
+    expect(await validSignature(after, secret)).toBe(true)
+    expect(await validSignature(after, app.signingSecret)).toBe(false)
+  })
+
+  it("is for the installer or an admin", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Hooked")
+    const bob = await w.addUser("bob")
+    await expectError("campflare.apps.rotateSigningSecret", { app: app.id }, bob.token, "not_allowed")
+    await expectError("campflare.apps.rotateSigningSecret", { app: app.id }, app.botToken, "not_allowed_token_type")
+    await expectError("campflare.apps.rotateSigningSecret", {}, w.owner.token, "app_not_found")
+    const admin = await w.addUser("ada", { is_admin: true })
+    await ok("campflare.apps.rotateSigningSecret", { app: app.id }, admin.token)
+  })
+})
+
 describe("campflare.apps.setEventSubscriptions", () => {
   it("checks the Request URL with a signed url_verification challenge before saving it", async () => {
     const w = await workspace()
