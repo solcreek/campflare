@@ -292,6 +292,50 @@ describe("chat.startStream, appendStream and stopStream", () => {
     expect(stopped.message.blocks).toHaveLength(50)
   })
 
+  it("lets a person in the conversation stop a stream: the app's next call answers stopped_by_user", async () => {
+    const { w, app, question, link, recipient } = await setup()
+    const { ts } = await ok<Started>(
+      "chat.startStream",
+      { channel: w.general, thread_ts: question.ts, markdown_text: "Counting: 1", ...recipient },
+      app.botToken,
+    )
+    await link.next(isMessage())
+    const stop = (args: Record<string, unknown>, token: string) =>
+      call("campflare.chat.stopStream", { channel: w.general, ts, ...args }, token)
+
+    // People only, members only, and only a stream in progress.
+    expect(await stop({}, app.botToken)).toMatchObject({ error: "not_allowed_token_type" })
+    const { channel: elsewhere } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "elsewhere" },
+      w.owner.token,
+    )
+    const outsider = await w.addUser("outsider")
+    expect(await stop({ channel: elsewhere.id }, outsider.token)).toMatchObject({ error: "not_in_channel" })
+    expect(await stop({ channel: elsewhere.id }, w.owner.token)).toMatchObject({ error: "message_not_found" })
+    expect(await stop({ ts: undefined }, w.owner.token)).toMatchObject({ error: "message_not_found" })
+    expect(await stop({ ts: question.ts }, w.owner.token)).toMatchObject({ error: "message_not_in_streaming_state" })
+
+    const member = await w.addUser("member")
+    const stopped = await ok<Stopped>("campflare.chat.stopStream", { channel: w.general, ts }, member.token)
+    const final = { ts, text: "Counting: 1", streaming_state: "completed", bot_id: app.botId }
+    expect(stopped).toMatchObject({ channel: w.general, ts, message: final })
+    expect(await link.next(isMessage("message_changed"))).toMatchObject({ message: final })
+
+    // The app hears it on its next call; nothing more lands.
+    expect(
+      await call("chat.appendStream", { channel: w.general, ts, markdown_text: ", 2" }, app.botToken),
+    ).toMatchObject({ ok: false, error: "stopped_by_user" })
+    expect(await call("chat.stopStream", { channel: w.general, ts, markdown_text: "!" }, app.botToken)).toMatchObject({
+      ok: false,
+      error: "stopped_by_user",
+    })
+    expect(await stop({}, w.owner.token)).toMatchObject({ error: "message_not_in_streaming_state" })
+    const [, answer] = await reply(w, question.ts)
+    expect(answer).toMatchObject(final)
+    link.close()
+  })
+
   it("streams into a private channel only as a member", async () => {
     const w = await workspace()
     const app = await w.addApp("Private Bot")

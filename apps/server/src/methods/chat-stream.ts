@@ -1,11 +1,11 @@
-import { requireWritable, resolveConversation } from "../db/conversations"
+import { requireMember, requireWritable, resolveConversation } from "../db/conversations"
 import { announceChanged, postMessage, reactionsStatement, MAX_TEXT } from "../db/messages"
 import { first, stmt } from "../db/query"
 import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
 import { audienceFrom, audienceStatement } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
-import { knownExtras, messageJson } from "../api/shapes"
+import { knownExtras, loadExtras, messageJson } from "../api/shapes"
 import { withBlockIds } from "./chat"
 
 // Slack's text streaming: chat.startStream posts a message an app then grows
@@ -259,9 +259,45 @@ async function grow(
 function refusal(row: MessageRow | undefined, appId: string, body: Content): CampflareError {
   if (!row) return new CampflareError("message_not_found")
   if (row.app_id !== appId) return new CampflareError("message_not_owned_by_app")
+  if (row.stream_stopped_by) return new CampflareError("stopped_by_user")
   if (row.stream_state !== "in_progress") return new CampflareError("message_not_in_streaming_state")
   if (body.mode && row.stream_mode && row.stream_mode !== body.mode)
     return new CampflareError("streaming_mode_mismatch")
   if (row.text.length + body.markdown.length > MAX_TEXT) return new CampflareError("msg_too_long")
   return new CampflareError("msg_blocks_too_many")
 }
+
+/**
+ * A person in the conversation stops an app's stream from their client, as
+ * Slack's stop button does: the message is completed as it stands, and the
+ * app's next chat.appendStream (or chat.stopStream) answers `stopped_by_user`.
+ */
+method("campflare.chat.stopStream", "user", async (ctx) => {
+  const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
+  await requireMember(ctx, c)
+  const ts = ctx.args.ts("ts")
+  if (!ts) throw new CampflareError("message_not_found")
+  const db = ctx.env.DB
+  const select = stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ? AND deleted = 0", c.id, ts)
+  const [before, update, after, audience, reactions] = await db.batch([
+    select,
+    stmt(
+      db,
+      `UPDATE messages SET stream_state = 'completed', stream_stopped_by = ?
+       WHERE channel_id = ? AND ts = ? AND deleted = 0 AND stream_state = 'in_progress'`,
+      ctx.auth.user.id,
+      c.id,
+      ts,
+    ),
+    select,
+    audienceStatement(db, c.id),
+    reactionsStatement(db, c.id, ts),
+  ])
+  const old = before!.results[0] as MessageRow | undefined
+  if (!old) throw new CampflareError("message_not_found")
+  if (!update!.meta.changes) throw new CampflareError("message_not_in_streaming_state")
+  const row = after!.results[0] as MessageRow
+  const extras = await loadExtras(ctx.env, [row], reactions!.results as ReactionRow[])
+  const message = announceChanged(ctx, c, { before: old, after: row, audience: audienceFrom(audience!), extras })
+  return { channel: c.id, ts, message }
+})
