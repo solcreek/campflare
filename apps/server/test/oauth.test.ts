@@ -125,6 +125,34 @@ async function mcpAs(accessToken: string) {
   return client
 }
 
+/** The access token's issue time and a password change are whole seconds: this waits for the next one. */
+const nextSecond = () => new Promise((resolve) => setTimeout(resolve, 1005 - (Date.now() % 1000)))
+
+/** Redeems a refresh token at the token endpoint. */
+const refresh = (refreshToken: string) =>
+  SELF.fetch(`${ORIGIN}/auth/oauth2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+      resource: `${ORIGIN}/mcp`,
+    }),
+  })
+
+/** A bare tools/list at /mcp, for its status. */
+const listTools = (token: string) =>
+  SELF.fetch(`${ORIGIN}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  })
+
 /** The CSP of the sign-in page shown for this OAuth query. */
 const csp = async (query: string) =>
   (await browser().go(`/login?${query}`)).headers.get("content-security-policy") ?? ""
@@ -206,6 +234,7 @@ describe("OAuth for MCP clients", () => {
     const email = `sofia-${Date.now()}@example.test`
     const sofia = await w.addUser("sofia", { email })
     await ok("campflare.users.setPassword", { password: "Sofía y 東京の夜" }, sofia.token)
+    await nextSecond() // tokens from the second of a password change count as before it
     const { tokens, askedConsent } = await authorize({ email, password: "Sofía y 東京の夜" })
     expect(askedConsent).toBe(true)
     const client = await mcpAs(tokens.access_token)
@@ -293,16 +322,7 @@ describe("OAuth for MCP clients", () => {
     const w = await workspace()
     const { tokens } = await authorize(w.owner.token)
     expect(tokens.refresh_token).toEqual(expect.any(String))
-    const res = await SELF.fetch(`${ORIGIN}/auth/oauth2/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokens.refresh_token!,
-        client_id: CLIENT_ID,
-        resource: `${ORIGIN}/mcp`,
-      }),
-    })
+    const res = await refresh(tokens.refresh_token!)
     const refreshed = (await res.json()) as Tokens
     expect(refreshed.access_token).toEqual(expect.any(String))
     const client = await mcpAs(refreshed.access_token)
@@ -313,5 +333,44 @@ describe("OAuth for MCP clients", () => {
       user_id: w.owner.id,
     })
     await client.close()
+  })
+
+  it("revokes what was granted before a password change, keeps consent and user tokens", async () => {
+    const w = await workspace()
+    const email = `chloe-${Date.now()}@example.test`
+    const chloe = await w.addUser("chloe", { email })
+    const { tokens: before } = await authorize(chloe.token)
+    expect((await listTools(before.access_token)).status).toBe(200)
+
+    await nextSecond()
+    await ok("campflare.users.setPassword", { password: "Chloé à Zürich, 서울" }, chloe.token)
+    // The refresh token is gone, and the access token (a JWT nobody stores) is refused by its issue time.
+    const refused = await refresh(before.refresh_token!)
+    expect(refused.status).toBe(400)
+    expect(((await refused.json()) as { error: string }).error).toBe("invalid_grant")
+    expect((await listTools(before.access_token)).status).toBe(401)
+    // The person's xoxp token is an app install of its own: still good, at the Web API and at /mcp.
+    await ok("auth.test", {}, chloe.token)
+    expect((await listTools(chloe.token)).status).toBe(200)
+
+    // Signing in after the change works, and consent is remembered.
+    await nextSecond()
+    const { tokens: after, askedConsent } = await authorize({ email, password: "Chloé à Zürich, 서울" })
+    expect(askedConsent).toBe(false)
+    expect((await listTools(after.access_token)).status).toBe(200)
+    const refreshed = (await (await refresh(after.refresh_token!)).json()) as Tokens
+    expect((await listTools(refreshed.access_token)).status).toBe(200)
+  })
+
+  it("leaves other people's grants alone when one person changes their password", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob", { email: `bob-${Date.now()}@example.test` })
+    const { tokens: owners } = await authorize(w.owner.token)
+    const { tokens: bobs } = await authorize(bob.token)
+    await nextSecond()
+    await ok("campflare.users.setPassword", { password: "Ñandú über 北京" }, bob.token)
+    expect((await listTools(bobs.access_token)).status).toBe(401)
+    expect((await listTools(owners.access_token)).status).toBe(200)
+    expect((await refresh(owners.refresh_token!)).status).toBe(200)
   })
 })

@@ -40,13 +40,21 @@ async function verifyJwt(env: Env, request: Request, token: string): Promise<Aut
   } catch {
     throw new OAuthError(OAuthErrorCode.InvalidToken, "invalid or expired access token")
   }
-  const link = await first<{ accountId: string }>(
+  const link = await first<{ accountId: string; passwordSet: number | null }>(
     env.DB,
-    'SELECT "accountId" FROM "account" WHERE "userId" = ? AND "providerId" = ?',
+    `SELECT a."accountId", p.updated AS "passwordSet"
+     FROM "account" a LEFT JOIN passwords p ON p.user_id = a."accountId"
+     WHERE a."userId" = ? AND a."providerId" = ?`,
     claims.sub,
     CAMPFLARE_PROVIDER,
   )
   if (!link) throw new OAuthError(OAuthErrorCode.InvalidToken, "no Campflare user behind this token")
+  // A password change revokes every grant made before it (src/auth/password.ts). Access
+  // tokens are JWTs nobody stores, so it is their issue time that is checked. Both are
+  // whole seconds: one issued in the second of the change counts as before it.
+  if (link.passwordSet !== null && (typeof claims.iat !== "number" || claims.iat <= link.passwordSet)) {
+    throw new OAuthError(OAuthErrorCode.InvalidToken, "issued before the password was changed")
+  }
   let actor
   try {
     actor = await actorFor(env, link.accountId)
