@@ -1,12 +1,12 @@
 import type { Message } from "@campflare/core"
-import { act, render, screen, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
 import { fakeServer, FakeSocket, hello } from "./server"
 
-// An app's streamed replies in the app: their tasks and plan.
+// An app's streamed replies in the app: stopping one, its tasks and plan.
 
 afterEach(() => {
   FakeSocket.all = []
@@ -45,6 +45,35 @@ async function signedIn(messages: Message[], overrides: Parameters<typeof fakeSe
 const article = async (text: string) => (await screen.findByText(text)).closest("article")!
 
 describe("an app's streamed reply", () => {
+  it("can be stopped while it's being written", async () => {
+    const { server, user } = await signedIn([streaming], {
+      "campflare.chat.stopStream": () => new Error("message_not_in_streaming_state"),
+    })
+    const message = within(await article("Thinking it over"))
+    // The app finished first: the server says so, and the button comes back.
+    await user.click(message.getByRole("button", { name: "Stop writing" }))
+    expect(await screen.findByText("Couldn't stop the reply: message_not_in_streaming_state")).toBeTruthy()
+    await waitFor(() =>
+      expect(message.getByRole("button", { name: "Stop writing" }).hasAttribute("disabled")).toBe(false),
+    )
+
+    server.api.handlers["campflare.chat.stopStream"] = () => ({ channel: "CGEN", ts: TS })
+    await user.click(message.getByRole("button", { name: "Stop writing" }))
+    expect(server.api.calls.at(-1)).toEqual({ method: "campflare.chat.stopStream", args: { channel: "CGEN", ts: TS } })
+    expect(message.getByRole("button", { name: "Stop writing" }).hasAttribute("disabled")).toBe(true)
+    // The completed message comes back as an event, without the control.
+    act(() =>
+      server.push({
+        type: "message",
+        subtype: "message_changed",
+        channel: "CGEN",
+        message: { ...streaming, streaming_state: "completed" },
+      }),
+    )
+    expect(message.queryByRole("button", { name: "Stop writing" })).toBeNull()
+    expect(message.queryByText("Still writing")).toBeNull()
+  })
+
   it("shows tasks among the text, with their status, details, output and sources", async () => {
     await signedIn([
       {

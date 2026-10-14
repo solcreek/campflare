@@ -1,4 +1,9 @@
 import { planOf, taskOf, type Message, type MessageBlock, type Task } from "@campflare/core"
+import { SquareIcon } from "lucide-react"
+import { useState } from "react"
+import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
+import { useWorkspace } from "@/workspace"
 import { PlanView, TaskList } from "./message-tasks"
 import { Markdown, Mrkdwn } from "./mrkdwn"
 
@@ -73,6 +78,26 @@ const SHOWN = new Set(["markdown", "task_card", "plan"])
 /** Whether a message reads from its blocks rather than its text. */
 export const showsBlocks = (m: Pick<Message, "blocks">) => Boolean(m.blocks?.some((b) => SHOWN.has(b.type)))
 
+/** Stops an app's reply that is still being written, as Slack's stop button does. */
+function StopStream({ message }: { message: Message }) {
+  const workspace = useWorkspace()
+  const [stopping, setStopping] = useState(false)
+  const stop = () => {
+    setStopping(true)
+    workspace.stopStream(message.channel, message.ts).catch((error: unknown) => {
+      setStopping(false)
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : String(error)
+      toast.error(`Couldn't stop the reply: ${code}`)
+    })
+  }
+  return (
+    <Button size="xs" variant="outline" disabled={stopping} onClick={stop} aria-label="Stop writing">
+      <SquareIcon aria-hidden className="fill-current" />
+      Stop
+    </Button>
+  )
+}
+
 export function MessageBody({ message }: { message: Message }) {
   const streaming = message.streaming_state === "in_progress"
   return (
@@ -87,9 +112,10 @@ export function MessageBody({ message }: { message: Message }) {
         <Mrkdwn text={message.text ?? ""} />
       )}
       {streaming && (
-        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
           <span aria-hidden className="inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-foreground/60" />
           <span className="sr-only">Still writing</span>
+          {!message.pending && <StopStream message={message} />}
         </span>
       )}
     </>
