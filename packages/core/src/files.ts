@@ -43,19 +43,22 @@ export function fitImage(f: MessageFile, maxWidth: number, maxHeight: number): {
 
 /** Slack's fitted thumbnails (thumb_<n> with thumb_<n>_w/_h), smallest first. */
 const THUMBS = [360, 480, 720, 800, 960, 1024]
+/** The ones an animated image also has as a moving GIF (thumb_<n>_gif, sized as thumb_<n>). */
+const GIF_THUMBS = [360, 480]
 
 /**
  * The URL to draw an image from in a box of width×height CSS pixels: the smallest thumbnail
  * (thumb_*) that covers it at `pixelRatio` device pixels per CSS pixel, else the original.
- * GIFs always get the original, since their thumbnails don't move.
+ * An animated image (one with thumb_360_gif) picks among its GIF thumbnails, since the others
+ * are stills; a GIF without them is still.
  */
 export function imageSource(f: MessageFile, width: number, height: number, pixelRatio = 1): string | undefined {
-  if (f.mimetype === "image/gif") return f.url_private
+  const animated = typeof f.thumb_360_gif === "string"
   // A pixel short still looks sharp, and rounding on either side can cost one.
   const needW = Math.ceil(width * pixelRatio) - 1
   const needH = Math.ceil(height * pixelRatio) - 1
-  for (const size of THUMBS) {
-    const url = f[`thumb_${size}`]
+  for (const size of animated ? GIF_THUMBS : THUMBS) {
+    const url = f[animated ? `thumb_${size}_gif` : `thumb_${size}`]
     const w = f[`thumb_${size}_w`]
     const h = f[`thumb_${size}_h`]
     if (typeof url !== "string" || typeof w !== "number" || typeof h !== "number") continue

@@ -39,6 +39,10 @@ npx vitest run test/chat.test.ts -t "tombstone"   # one test
   against the Realtime SFU. `RECORD_FIXTURES=1` refreshes the recorded SFU
   responses that the offline fake SFU (`apps/server/test/fake-sfu.ts`) serves.
   Server tests override the Realtime bindings, so they never reach the real API.
+  The Images binding too: `images.live.test.ts` starts its own `wrangler dev`
+  with it remote (`startServer()` from `tests/conformance/global-setup.ts`).
+  A test without its credentials is skipped with a note saying what to set
+  (the verbose reporter prints it).
 - `apps/cli` and `tests/conformance` tests start a real `wrangler dev` on a free
   port with fresh state (`tests/conformance/global-setup.ts`), so they're slower
   and need nothing running.
@@ -206,17 +210,30 @@ Slack's `thumb_*` (no query): `thumb_64` (square crop), `thumb_80` (padded
 square), `thumb_160`, and `thumb_360` always, `thumb_480`/`720`/`800`/`960`/`1024`
 only below the original's longest side, each from 360 up with `_w`/`_h`. PNG,
 JPEG, GIF and WebP only (not SVG). They're served at
-`/files-tmb/<team>-<file>/<name>_<size>.<png|jpg>` (`handleThumb`) with
+`/files-tmb/<team>-<file>/<name>_<size>.<png|jpg|gif>` (`handleThumb`) with
 `url_private`'s auth, CORS and CSP; the Images binding (`IMAGES`, optional:
 without it no `thumb_*` are sent) makes each on its first fetch, and R2 keeps it
 at `<team>/<file>/thumb_<size>`; `files.delete` removes them. JPEG stays JPEG,
-the rest become PNG (a GIF's first frame: no `thumb_*_gif` yet). If Images fails
+the rest become PNG: no WebP or AVIF, since clients fetch `thumb_*` without an
+`Accept` and older ones can't draw them. Animated images: the upload also records
+`files.animated` (migration 0014, `isAnimated` in `src/api/media.ts`: a GIF with
+more than one frame, not just a NETSCAPE loop extension; a WebP's VP8X animation
+flag; NULL for GIFs from before, which count as animated). They add Slack's
+`thumb_360_gif`, `thumb_480_gif` (beside `thumb_480`) and `deanimate_gif` (the
+first frame, full size, PNG); the other sizes are stills, as on Slack. Images
+writes the GIFs (`anim: true`; stills ask `anim: false`); a GIF that already
+fits the box is served as its own `thumb_<n>_gif`, without Images. If Images fails
 on a file, the original is served, uncached. Locally (wrangler dev, vitest)
-Miniflare runs the binding with sharp, so tests make real thumbnails (it can't
-write GIF; `test/images.ts` encodes one); `setImagesOverride()` fakes a failing
-binding or none. The app draws an inline image from the smallest thumb that covers
-its box at `devicePixelRatio` (`imageSource` in core), the original for GIFs and
-in the viewer.
+Miniflare runs the binding with sharp, so tests make real thumbnails, except GIFs:
+it can't write them, so locally `thumb_*_gif` is the original (`test/gif.ts`
+encodes test GIFs). `setImagesOverride()` fakes a failing, GIF-writing or absent
+binding; `tests/live/images.live.test.ts` runs the real one (wrangler's remote
+binding; needs `CF_ACCOUNT_ID` and `IMAGES_API_TOKEN`). Not sent: `thumb_tiny`
+(Slack's tiny base64 preview has no documented format), `thumb_pdf` and
+`thumb_video` (Images can't render a PDF page or a video frame, and nothing else
+in a Worker can). The app draws an inline image from the smallest thumb that covers
+its box at `devicePixelRatio` (`imageSource` in core): from `thumb_*_gif` for an
+animated image (the original when they're too small), the original in the viewer.
 
 **MCP.** `/mcp` (`src/mcp/`) uses `@modelcontextprotocol/server` v2:
 `createMcpHandler` builds a fresh `McpServer` per request (2026-07-28 spec, with

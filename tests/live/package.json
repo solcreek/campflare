@@ -4,7 +4,7 @@
   "description": "Tests against real Cloudflare services. Opt-in: pnpm test:live, with credentials in apps/server/.dev.vars.",
   "type": "module",
   "scripts": {
-    "test:live": "vitest run",
+    "test:live": "vitest run --reporter=verbose",
     "typecheck": "tsc -p ."
   },
   "devDependencies": {

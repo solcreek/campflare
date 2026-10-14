@@ -138,6 +138,8 @@ export interface FileRow {
   size: number
   width: number | null
   height: number | null
+  /** 1 for an animated GIF or WebP, 0 for other images; NULL for other files and images uploaded before migration 0014. */
+  animated: number | null
   alt_txt: string | null
   status: "reserved" | "uploaded" | "complete"
   channels: string

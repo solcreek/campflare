@@ -83,9 +83,41 @@ describe("file helpers", () => {
       thumb_360_h: 226,
     }
     expect(imageSource(small, 176, 226, 2)).toBe(small.thumb_360)
-    // No thumbnails (a server without them), or a GIF, whose thumbnails don't move.
+    // No thumbnails (a server without them): the original.
     expect(imageSource({ ...small, thumb_360: undefined }, 176, 226)).toBe(small.url_private)
-    expect(imageSource({ ...photo, mimetype: "image/gif" }, 360, 203)).toBe(photo.url_private)
+    // A still GIF uses its (still) thumbnails like any image.
+    expect(imageSource({ ...photo, mimetype: "image/gif" }, 360, 203)).toBe(`${base}_360.jpg`)
+  })
+
+  it("draws an animated image from its moving thumbnails, else the original", () => {
+    const base = "https://x.test/files-tmb/T1-F3/baile"
+    const gif = {
+      id: "F3",
+      mimetype: "image/gif",
+      original_w: 1000,
+      original_h: 500,
+      url_private: "https://x.test/files-pri/T1-F3/baile.gif",
+      thumb_360: `${base}_360.png`,
+      thumb_360_gif: `${base}_360.gif`,
+      thumb_360_w: 360,
+      thumb_360_h: 180,
+      thumb_480: `${base}_480.png`,
+      thumb_480_gif: `${base}_480.gif`,
+      thumb_480_w: 480,
+      thumb_480_h: 240,
+      thumb_720: `${base}_720.png`,
+      thumb_720_w: 720,
+      thumb_720_h: 360,
+    }
+    expect(imageSource(gif, 360, 180)).toBe(`${base}_360.gif`)
+    expect(imageSource(gif, 400, 200)).toBe(`${base}_480.gif`)
+    // Past thumb_480_gif the stills would be sharper, but don't move: the original.
+    expect(imageSource(gif, 360, 180, 2)).toBe(gif.url_private)
+    // A small one's thumb_360_gif is its full size.
+    const small = { ...gif, original_w: 176, original_h: 226, thumb_360_w: 176, thumb_360_h: 226 }
+    expect(imageSource(small, 176, 226, 3)).toBe(`${base}_360.gif`)
+    // An animated WebP's thumbnails are GIFs too.
+    expect(imageSource({ ...gif, mimetype: "image/webp" }, 300, 150)).toBe(`${base}_360.gif`)
   })
 
   it("names pasted files that came with a generic name", () => {

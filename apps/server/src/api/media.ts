@@ -65,3 +65,38 @@ export function imageSize(b: Uint8Array): { width: number; height: number } | un
   }
   return undefined
 }
+
+/** The size of the colour table a GIF's packed flags byte announces. */
+const colorTable = (flags: number) => (flags & 0x80 ? 3 * 2 ** ((flags & 0x07) + 1) : 0)
+
+/**
+ * Whether an image moves: a GIF with more than one frame (image descriptor), or a WebP whose
+ * VP8X header sets the animation flag. A GIF's NETSCAPE loop extension alone doesn't count,
+ * since encoders add it to single frames too. Walks the GIF's blocks, so it needs the whole file.
+ */
+export function isAnimated(b: Uint8Array): boolean {
+  const ascii = (i: number, n: number) => String.fromCharCode(...b.subarray(i, i + n))
+  if (b.length >= 21 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
+    return ascii(12, 4) === "VP8X" && ((b[20] ?? 0) & 0x02) !== 0
+  }
+  if (b.length < 13 || ascii(0, 3) !== "GIF") return false
+  /** The index after a run of data sub-blocks (length-prefixed, ended by a zero length). */
+  const skipSubBlocks = (i: number) => {
+    while (i < b.length && b[i] !== 0) i += b[i]! + 1
+    return i + 1
+  }
+  let i = 13 + colorTable(b[10]!)
+  let frames = 0
+  while (i < b.length) {
+    const block = b[i]
+    if (block === 0x21) {
+      i = skipSubBlocks(i + 2) // introducer, label
+    } else if (block === 0x2c) {
+      if (++frames > 1) return true
+      i = skipSubBlocks(i + 10 + colorTable(b[i + 9] ?? 0) + 1) // descriptor, local table, LZW code size
+    } else {
+      return false // the trailer (0x3b), or not a GIF block
+    }
+  }
+  return false
+}
