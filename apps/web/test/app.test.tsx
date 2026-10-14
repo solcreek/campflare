@@ -181,6 +181,132 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "Thread" })).toBeNull())
   })
 
+  it("shows an app's status in a thread, then its reply streaming in as markdown", async () => {
+    const server = fakeServer({
+      "users.list": () => ({
+        members: [
+          { id: ALEX, name: "alex", real_name: "Alex Rivera" },
+          { id: VINCENT, name: "vincent", real_name: "Vincent Vega" },
+          { id: "UBOT", name: "answer-bot", real_name: "Answer Bot", is_bot: true },
+        ],
+      }),
+    })
+    const { user } = await signedIn(server)
+    await user.click(screen.getByRole("button", { name: "1 reply" }))
+    const thread = await screen.findByRole("complementary", { name: "Thread" })
+    await within(thread).findByText("a reply")
+    const where = { channel: "CGEN", thread_ts: "1700000200.000000" }
+    const now = () => (Date.now() / 1000).toFixed(6)
+
+    act(() =>
+      server.push({
+        type: "assistant_thread_status_changed",
+        ...where,
+        status: "is thinking…",
+        loading_messages: ["Reading the docs"],
+        user: "UBOT",
+        expires_in: 120,
+        event_ts: now(),
+      }),
+    )
+    expect(within(thread).getByRole("status").textContent).toBe("Answer Bot is thinking… · Reading the docs")
+
+    // The app's reply ends the status, and grows in place.
+    const reply = { ...where, ts: "1700000400.000000", user: "UBOT", bot_id: "B1" }
+    act(() =>
+      server.push({
+        type: "message",
+        ...reply,
+        text: "# Ans",
+        blocks: [{ type: "markdown", text: "# Ans" }],
+        streaming_state: "in_progress",
+      }),
+    )
+    expect(within(thread).queryByRole("status")).toBeNull()
+    const article = within(thread).getAllByRole("article").at(-1)!
+    expect(article.getAttribute("aria-busy")).toBe("true")
+    expect(within(article).getByText("Still writing")).toBeTruthy()
+    const markdown = "# Answer\n\n**Hello** from *markdown*, see [docs](https://x.test/docs)\n\n- one\n- two"
+    act(() =>
+      server.push({
+        type: "message",
+        subtype: "message_changed",
+        channel: "CGEN",
+        message: {
+          ...reply,
+          text: markdown,
+          blocks: [{ type: "markdown", text: markdown }],
+          streaming_state: "in_progress",
+        },
+      }),
+    )
+    expect(within(article).getByRole("heading", { name: "Answer", level: 1 })).toBeTruthy()
+    expect(within(article).getByText("Hello").tagName).toBe("STRONG")
+    expect(within(article).getByText("markdown").tagName).toBe("EM")
+    expect(within(article).getByRole("link", { name: "docs" }).getAttribute("href")).toBe("https://x.test/docs")
+    expect(
+      within(article)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["one", "two"])
+
+    const blocks = [
+      { type: "markdown", text: markdown },
+      { type: "divider" },
+      { type: "header", text: { type: "plain_text", text: "Sources" } },
+      { type: "section", text: { type: "mrkdwn", text: "*mrkdwn* section" } },
+      { type: "section", text: { type: "plain_text", text: "*plain* section" } },
+      { type: "section" },
+      { type: "context", elements: [{ type: "mrkdwn", text: "Was this helpful?" }, { type: "image" }] },
+      { type: "context" },
+      { type: "context_actions", elements: [] },
+    ]
+    act(() =>
+      server.push({
+        type: "message",
+        subtype: "message_changed",
+        channel: "CGEN",
+        message: { ...reply, text: markdown, blocks, streaming_state: "completed" },
+      }),
+    )
+    expect(article.getAttribute("aria-busy")).toBeNull()
+    expect(within(article).queryByText("Still writing")).toBeNull()
+    expect(within(article).getByText("Sources")).toBeTruthy()
+    expect(within(article).getByText("mrkdwn").tagName).toBe("STRONG")
+    expect(within(article).getByText("*plain* section")).toBeTruthy()
+    expect(within(article).getByText("Was this helpful?")).toBeTruthy()
+    expect(within(article).getAllByRole("separator")).toHaveLength(1)
+  })
+
+  it("clears an app's status when it says so, and when it runs out", async () => {
+    const { server, user } = await signedIn()
+    await user.click(screen.getByRole("button", { name: "1 reply" }))
+    const thread = await screen.findByRole("complementary", { name: "Thread" })
+    const status = (text: string, eventTs = Date.now() / 1000) =>
+      act(() =>
+        server.push({
+          type: "assistant_thread_status_changed",
+          channel: "CGEN",
+          thread_ts: "1700000200.000000",
+          status: text,
+          user: VINCENT,
+          expires_in: 120,
+          event_ts: eventTs.toFixed(6),
+        }),
+      )
+    status("is typing")
+    expect(within(thread).getByRole("status").textContent).toBe("Vincent Vega is typing")
+    status("")
+    expect(within(thread).queryByRole("status")).toBeNull()
+    // Sent two minutes ago, less a moment: gone when the moment passes.
+    status("is slow", Date.now() / 1000 - 119.8)
+    expect(within(thread).getByRole("status")).toBeTruthy()
+    await waitFor(() => expect(within(thread).queryByRole("status")).toBeNull())
+    // Already out of time when it arrives.
+    status("is late", Date.now() / 1000 - 300)
+    expect(within(thread).queryByRole("status")).toBeNull()
+  })
+
   it("toggles reactions from the bar and the picker", async () => {
     const { server, user } = await signedIn()
     const eyes = within(log()).getByRole("button", { name: "eyes, 1" })

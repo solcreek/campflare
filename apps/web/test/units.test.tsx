@@ -2,7 +2,7 @@ import type { Fetch } from "@campflare/client"
 import { render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { isGrouped } from "@/components/message-list"
-import { Mrkdwn } from "@/components/mrkdwn"
+import { Markdown, Mrkdwn } from "@/components/mrkdwn"
 import { formatRoute, parseRoute } from "@/route"
 import {
   browserStore,
@@ -321,6 +321,31 @@ describe("Mrkdwn", () => {
     expect(screen.queryByRole("link", { name: "click" })).toBeNull()
     expect(screen.getByText("click", { exact: false })).toBeTruthy()
     expect(screen.getByRole("link", { name: "mail" })).toBeTruthy()
+  })
+})
+
+describe("Markdown", () => {
+  it("renders headings, lists, quotes, code and rules as elements", () => {
+    const server = fakeServer()
+    const { container } = render(
+      <WorkspaceProvider workspace={server.connect()}>
+        <Markdown
+          text={
+            "### Notas del día\n3. tercero\n4. cuarto\n\n- 早安\n\n> citado\n\n---\n```\n**not bold**\n```\n[bad](javascript:alert(1))"
+          }
+        />
+      </WorkspaceProvider>,
+    )
+    expect(screen.getByRole("heading", { name: "Notas del día", level: 3 })).toBeTruthy()
+    const [ordered, bullets] = screen.getAllByRole("list")
+    expect(ordered!.tagName).toBe("OL")
+    expect(ordered!.getAttribute("start")).toBe("3")
+    expect(bullets!.tagName).toBe("UL")
+    expect(bullets!.getAttribute("start")).toBeNull()
+    expect(container.querySelector("blockquote")?.textContent).toBe("citado")
+    expect(screen.getByRole("separator")).toBeTruthy()
+    expect(container.querySelector("pre")?.textContent).toBe("**not bold**")
+    expect(screen.queryByRole("link", { name: "bad" })).toBeNull()
   })
 })
 

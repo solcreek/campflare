@@ -33,7 +33,9 @@ export function MessageList({
 }: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
-  const newest = messages.at(-1)?.ts
+  const last = messages.at(-1)
+  // A streamed message grows in place: its length counts as news too.
+  const newest = last && `${last.ts}:${last.text?.length ?? 0}:${last.blocks?.length ?? 0}`
   const followed = useRef<string>(undefined)
 
   // Follow new messages while the reader is at the bottom; leave them be while they read older ones.

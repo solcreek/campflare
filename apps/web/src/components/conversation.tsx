@@ -7,6 +7,7 @@ import { Composer, type ComposerHandle, useFileDrop } from "./composer"
 import { reportError } from "./message"
 import { MessageList } from "./message-list"
 import { MissingMessage, NotFoundView } from "./not-found"
+import { ThreadStatusLine } from "./thread-status"
 
 /** Over a conversation while files are dragged across it. */
 function DropHint() {
@@ -183,6 +184,7 @@ export function ThreadPanel({
             </MissingMessage>
           )}
           <MessageList messages={messages} inThread empty="Loading…" highlight={highlight} />
+          <ThreadStatusLine channel={channel} threadTs={threadTs} />
           <Composer ref={composer} channel={channel} threadTs={threadTs} placeholder="Reply…" />
         </>
       )}
