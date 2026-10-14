@@ -4,9 +4,10 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 import { App } from "@/app"
 import { browserStore } from "@/session"
-import { fakeServer, FakeSocket, hello } from "./server"
+import { fakeServer, FakeSocket, hello, reconnect } from "./server"
 
-// An app's streamed replies in the app: stopping one, its tasks and plan.
+// An app's streamed replies in the app: stopping one, its tasks and plan, and
+// thread statuses a link learns of when it (re)connects.
 
 afterEach(() => {
   FakeSocket.all = []
@@ -14,6 +15,7 @@ afterEach(() => {
 })
 
 const TS = "1700000500.000000"
+const THREAD = "1700000200.000000"
 
 const streaming: Message = {
   ts: TS,
@@ -138,5 +140,39 @@ describe("an app's streamed reply", () => {
     expect(plan.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Lire, Done", "書く, Pending"])
     // A plan without a title or tasks yet.
     expect(within(screen.getByRole("region", { name: "Plan" })).queryByRole("list")).toBeNull()
+  })
+})
+
+describe("thread statuses on a new link", () => {
+  it("drops the ones it held for those the server sends after hello", async () => {
+    const { server, user } = await signedIn([
+      { ts: THREAD, channel: "CGEN", user: "U2", text: "a question", reply_count: 1, reply_users: ["U1"] },
+    ])
+    await user.click(await screen.findByRole("button", { name: "1 reply" }))
+    const thread = within(await screen.findByRole("complementary", { name: "Thread" }))
+    const status = (text: string) => ({
+      type: "assistant_thread_status_changed",
+      channel: "CGEN",
+      thread_ts: THREAD,
+      status: text,
+      user: "U2",
+      expires_in: 120,
+      event_ts: (Date.now() / 1000).toFixed(6),
+    })
+    act(() => server.push(status("is thinking")))
+    expect(thread.getByRole("status").textContent).toBe("Vincent Vega is thinking")
+
+    // While the link was down the app answered: the new link sends no status for the thread.
+    await act(() => reconnect())
+    act(() => hello())
+    expect(thread.queryByRole("status")).toBeNull()
+
+    // A status still showing comes right after hello, as for a client that connects late.
+    await act(() => reconnect())
+    act(() => {
+      hello()
+      server.push(status("is writing"))
+    })
+    expect(thread.getByRole("status").textContent).toBe("Vincent Vega is writing")
   })
 })
