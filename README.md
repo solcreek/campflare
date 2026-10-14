@@ -71,6 +71,17 @@ pnpm deploy
 
 Delete `BOOTSTRAP_SECRET` once your workspaces exist, to close sign-up.
 
+The Worker doesn't serve the app (`apps/web`); host its build anywhere
+(`CAMPFLARE_WEB_ORIGIN=https://app.example.com pnpm --filter @campflare/web build`)
+and tell the Worker where it is, so the permalinks `chat.getPermalink` hands out
+(`/archives/<channel>/p<ts>`) open the message there:
+
+```sh
+wrangler secret put APP_URL              # e.g. https://app.example.com/ (a plain var works too)
+```
+
+Without it, a permalink answers a page naming the app route to open.
+
 ## Using it from Slack clients
 
 Point the client's API base at `https://<your-host>/api/`:
