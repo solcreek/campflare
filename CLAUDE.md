@@ -504,6 +504,30 @@ app its own XDG dirs on Linux, sign in with a pasted token, send a message,
 restart the app expecting it signed in, then sign out; CI sets
 `CAMPFLARE_E2E_SESSION=file` so they also check the fallback file.
 
+**Deep links.** The app opens `campflare://<host>[:<port>]/archives/<channel>[/p<ts>][?thread_ts=…&cid=…]`:
+a permalink with its scheme changed (the server's `desktopLink()`), the host
+naming the server. `tauri-plugin-deep-link` registers the scheme
+(`plugins.deep-link` in `tauri.conf.json`; installers write it into Info.plist,
+the registry and the `.desktop` file, an AppImage registers itself when run) and
+hands links to the webview: the one the app started with (`getCurrent`, the
+`deep-link:default` grant) and later ones (`onOpenUrl`, an event). Windows and
+Linux start a new process per link, with the link as its only argument:
+`tauri-plugin-single-instance` (feature `deep-link`; D-Bus on Linux, so without
+a session bus a second launch just runs) passes it to the running app, which
+comes to the front. The Rust side only forwards: `apps/web/src/deep-link.ts`
+maps a link to the hash route (`parseDeepLink`) and `App` keeps it until signed
+in, then opens it if the session's host is the link's, or shows a dialog naming
+the other server with "Open in your browser" (the https permalink). macOS only
+routes the scheme to a bundled `.app`, not `pnpm desktop`; on Linux and Windows a
+debug build takes the link as its argument (`campflare-desktop campflare://…`).
+https links (Universal Links on macOS, App URI handlers on Windows) are not
+claimed: they need signed builds (#3), the domains fixed in the build (an
+Associated Domains entitlement, `applinks:<host>`, with a provisioning profile; an
+MSIX package on Windows), and each domain serving
+`/.well-known/apple-app-site-association` or `windows-app-web-link` naming the
+app. A self-hosted server's domain isn't known at build time, so only a hosted
+service's domain could ever be claimed; the scheme works for every server.
+
 ## Conventions
 
 - **Naming:** our own identifiers, files and directories never contain "slack";

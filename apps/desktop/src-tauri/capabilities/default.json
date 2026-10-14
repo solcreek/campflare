@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may ask of the shell: opening web and mail links outside the app, keeping the session in the OS keychain (or a private file where there is none), and listening on loopback for the browser to come back from sign-in",
+  "description": "What the main window may ask of the shell: opening web and mail links outside the app, keeping the session in the OS keychain (or a private file where there is none), listening on loopback for the browser to come back from sign-in, and reading the campflare:// link the app was opened with",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -11,6 +11,7 @@
     "allow-oauth-listen",
     "allow-oauth-wait",
     "allow-oauth-cancel",
+    "deep-link:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }, { "url": "mailto:*" }]
