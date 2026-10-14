@@ -187,6 +187,51 @@ describe("lazy images", () => {
   })
 })
 
+describe("thumbnails", () => {
+  const TMB = "https://x.test/files-tmb/T1-"
+  const thumbs = {
+    thumb_360: `${TMB}F1/tokyo_360.png`,
+    thumb_360_w: 360,
+    thumb_360_h: 203,
+    thumb_720: `${TMB}F1/tokyo_720.png`,
+    thumb_720_w: 720,
+    thumb_720_h: 405,
+  }
+  const withThumbs: Message = { ...withFiles, files: [{ ...withFiles.files![0]!, ...thumbs }] }
+  const fetched = (server: ReturnType<typeof fakeServer>) => server.api.fileRequests.map((r) => r.url.split("/").pop())
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("draws an image from the thumbnail that fits its box on this screen, and the viewer from the original", async () => {
+    vi.stubGlobal("devicePixelRatio", 2)
+    const { server, user } = await signedIn([withThumbs], (s) => {
+      s.api.files[thumbs.thumb_720] = new Uint8Array([7])
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+    })
+    const image = (await within(log()).findByRole("img", { name: "Nachtansicht von Tokio" })) as HTMLImageElement
+    expect([image.width, image.height]).toEqual([360, 203])
+    expect(fetched(server)).toEqual(["tokyo_720.png"])
+    expect(server.api.fileRequests[0]!.headers.authorization).toBe("Bearer xoxp-1")
+
+    await user.click(within(log()).getByRole("button", { name: "Open Nachtansicht von Tokio" }))
+    await within(screen.getByRole("dialog", { name: "東京の夜" })).findByRole("img", {
+      name: "Nachtansicht von Tokio",
+    })
+    expect(fetched(server)).toEqual(["tokyo_720.png", "tokyo.png"])
+  })
+
+  it("takes the smaller thumbnail at 1x, and the original when the thumbnail fails", async () => {
+    vi.stubGlobal("devicePixelRatio", 1)
+    const { server } = await signedIn([withThumbs], (s) => {
+      // thumb_360 isn't there (404).
+      s.api.files[`${FILES}F1/tokyo.png`] = new Uint8Array([1])
+    })
+    const image = (await within(log()).findByRole("img", { name: "Nachtansicht von Tokio" })) as HTMLImageElement
+    expect(image.src).toMatch(/^blob:/)
+    expect(fetched(server)).toEqual(["tokyo_360.png", "tokyo.png"])
+  })
+})
+
 describe("the image viewer", () => {
   const twoImages: Message = {
     ...withFiles,

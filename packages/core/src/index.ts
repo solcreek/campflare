@@ -4,7 +4,7 @@ export { browsableChannels, conversationTitle, displayName, sidebar, thread, tim
 export type { Directory, Sidebar } from "./selectors"
 export { commonEmoji, emojiChar, parse as parseMrkdwn, parseInline, plainText } from "./mrkdwn"
 export type { Block, Inline } from "./mrkdwn"
-export { createFileCache, fileKind, fileLabel, fitImage, formatBytes, pastedFileName } from "./files"
+export { createFileCache, fileKind, fileLabel, fitImage, formatBytes, imageSource, pastedFileName } from "./files"
 export type { FileCache, FileCacheOptions, FileKind } from "./files"
 export { createWorkspace } from "./workspace"
 export type { NewFile, Workspace, WorkspaceOptions } from "./workspace"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createFileCache, fileKind, fileLabel, fitImage, formatBytes, pastedFileName } from "../src/files"
+import { createFileCache, fileKind, fileLabel, fitImage, formatBytes, imageSource, pastedFileName } from "../src/files"
 
 afterEach(() => {
   vi.useRealTimers()
@@ -41,6 +41,51 @@ describe("file helpers", () => {
     expect(fitImage({ id: "F1", original_w: 40, original_h: 20 }, 400, 300)).toEqual({ width: 40, height: 20 })
     expect(fitImage({ id: "F1", original_w: 10_000, original_h: 1 }, 400, 300)).toEqual({ width: 400, height: 1 })
     expect(fitImage({ id: "F1" }, 400, 300)).toEqual({ width: 400, height: 300 })
+  })
+
+  it("draws an image from the smallest thumbnail that covers its box", () => {
+    const base = "https://x.test/files-tmb/T1-F1/photo"
+    const photo = {
+      id: "F1",
+      mimetype: "image/jpeg",
+      original_w: 1600,
+      original_h: 900,
+      url_private: "https://x.test/files-pri/T1-F1/photo.jpg",
+      thumb_64: `${base}_64.jpg`,
+      thumb_360: `${base}_360.jpg`,
+      thumb_360_w: 360,
+      thumb_360_h: 203,
+      thumb_720: `${base}_720.jpg`,
+      thumb_720_w: 720,
+      thumb_720_h: 405,
+      thumb_1024: `${base}_1024.jpg`,
+      thumb_1024_w: 1024,
+      thumb_1024_h: 576,
+    }
+    expect(imageSource(photo, 360, 203)).toBe(`${base}_360.jpg`)
+    expect(imageSource(photo, 200, 113)).toBe(`${base}_360.jpg`)
+    // Retina: twice the pixels.
+    expect(imageSource(photo, 360, 203, 2)).toBe(`${base}_720.jpg`)
+    expect(imageSource(photo, 360, 203, 2.5)).toBe(`${base}_1024.jpg`)
+    // Bigger than any thumbnail: the original.
+    expect(imageSource(photo, 1200, 675)).toBe(photo.url_private)
+    expect(imageSource(photo, 360, 203, 3)).toBe(photo.url_private)
+
+    // A small image's thumb_360 is its full size: good at any ratio.
+    const small = {
+      id: "F2",
+      mimetype: "image/png",
+      original_w: 176,
+      original_h: 226,
+      url_private: "https://x.test/files-pri/T1-F2/s.png",
+      thumb_360: "https://x.test/files-tmb/T1-F2/s_360.png",
+      thumb_360_w: 176,
+      thumb_360_h: 226,
+    }
+    expect(imageSource(small, 176, 226, 2)).toBe(small.thumb_360)
+    // No thumbnails (a server without them), or a GIF, whose thumbnails don't move.
+    expect(imageSource({ ...small, thumb_360: undefined }, 176, 226)).toBe(small.url_private)
+    expect(imageSource({ ...photo, mimetype: "image/gif" }, 360, 203)).toBe(photo.url_private)
   })
 
   it("names pasted files that came with a generic name", () => {
