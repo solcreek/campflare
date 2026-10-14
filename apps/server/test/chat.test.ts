@@ -19,6 +19,38 @@ describe("chat.postMessage", () => {
     await expectError("chat.postMessage", { channel: "UNOPE", text: "x" }, w.owner.token, "channel_not_found")
   })
 
+  it("fills in a block_id on every block and an action_id on every action, keeping given ones", async () => {
+    const w = await workspace()
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Ship it?" } },
+      {
+        type: "actions",
+        block_id: "decide",
+        elements: [
+          { type: "button", text: { type: "plain_text", text: "Approve" }, action_id: "approve" },
+          { type: "button", text: { type: "plain_text", text: "Later" } },
+        ],
+      },
+      { type: "context_actions", elements: [{ type: "feedback_buttons" }] },
+    ]
+    const posted = await ok<Posted>("chat.postMessage", { channel: w.general, blocks }, w.owner.token)
+    const stored = posted.message.blocks as { block_id: string; elements?: { action_id: string }[] }[]
+    expect(stored[0]!.block_id).toMatch(/^[A-Za-z0-9]{5}$/)
+    expect(stored[1]!.block_id).toBe("decide")
+    expect(stored[1]!.elements![0]!.action_id).toBe("approve")
+    expect(stored[1]!.elements![1]!.action_id).toMatch(/^[A-Za-z0-9]{5}$/)
+    expect(stored[2]!.elements![0]!.action_id).toMatch(/^[A-Za-z0-9]{5}$/)
+    // Updates fill them in too, and history has what was stored.
+    const updated = await ok<Posted>(
+      "chat.update",
+      { channel: w.general, ts: posted.ts, blocks: [{ type: "divider" }] },
+      w.owner.token,
+    )
+    expect(updated.message.blocks).toEqual([{ type: "divider", block_id: expect.any(String) }])
+    const history = await ok<Messages>("conversations.history", { channel: w.general, limit: 1 }, w.owner.token)
+    expect(history.messages[0]!.blocks).toEqual(updated.message.blocks)
+  })
+
   it("keeps blocks, attachments and metadata, and needs some content", async () => {
     const w = await workspace()
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*bold*" } }]
