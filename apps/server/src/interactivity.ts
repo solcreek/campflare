@@ -11,7 +11,15 @@ import { stmt } from "./db/query"
 import type { AppRow, ConversationRow, TeamRow, UserRow } from "./db/rows"
 import { postSigned } from "./request-url"
 import type { Env } from "./env"
-import { authorOf, content, deleteMessage, editMessage, sendEphemeral } from "./methods/chat"
+import {
+  authorOf,
+  content,
+  deleteEphemeral,
+  deleteMessage,
+  editMessage,
+  replaceEphemeral,
+  sendEphemeral,
+} from "./methods/chat"
 
 // Interactivity: a click on a button in an app's message reaches the app as a
 // block_actions payload (methods/blocks.ts), with a response_url the app may
@@ -32,6 +40,8 @@ export interface ResponseUrlClaims {
   ts: string
   /** Its thread, when it's a reply: where answers go. */
   threadTs?: string
+  /** The message clicked was the clicker's ephemeral one: replacing or deleting it is theirs alone. */
+  ephemeral?: boolean
   appId: string
   /** Who clicked: ephemeral answers go to them. */
   userId: string
@@ -372,11 +382,15 @@ export async function handleResponseUrl(
       waitUntil,
     }
     const threadTs = args.ts("thread_ts") ?? claims.threadTs
+    // The clicked message was ephemeral: it's the clicker's alone to change.
+    const original = claims.ephemeral ? undefined : () => requireMessage(ctx, c.id, claims.ts)
     if (args.bool("delete_original")) {
-      await deleteMessage(ctx, c, await requireMessage(ctx, c.id, claims.ts))
+      if (original) await deleteMessage(ctx, c, await original())
+      else deleteEphemeral(ctx, c, claims.userId, claims.ts)
     } else if (args.bool("replace_original")) {
       if (c.is_archived) throw new CampflareError("is_archived")
-      await editMessage(ctx, c, await requireMessage(ctx, c.id, claims.ts), { quiet: true })
+      if (original) await editMessage(ctx, c, await original(), { quiet: true })
+      else replaceEphemeral(ctx, c, claims.userId, claims.ts, claims.threadTs)
     } else if (args.str("response_type") === "in_channel") {
       if (c.is_archived) throw new CampflareError("is_archived")
       await postMessage(ctx, c, { ...authorOf(ctx), ...content(ctx), thread_ts: threadTs ?? null })

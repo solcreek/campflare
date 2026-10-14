@@ -111,27 +111,89 @@ method("chat.postEphemeral", "actor", async (ctx) => {
 
 /**
  * An ephemeral message of the caller's content to one person; its ts.
- * Never stored: only the recipient's live clients see it.
+ * Never stored in D1: only the recipient's live clients see it. An app's,
+ * with blocks, is kept in the hub for a day so its buttons can be clicked.
  */
 export function sendEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, threadTs?: string): string {
   const ts = nextTs()
+  const message = ephemeralMessage(ctx, c, ts, threadTs)
+  publish(ctx, {
+    teamId: c.team_id,
+    audience: [user],
+    rtmOnly: true,
+    event: message,
+    ...(message.app_id && message.blocks ? { ephemeral: kept(c, ts, user, message) } : {}),
+  })
+  return ts
+}
+
+/** An ephemeral message of the caller's content, as RTM carries it: blocks and attachments as JSON, not strings. */
+function ephemeralMessage(ctx: Ctx<Actor>, c: ConversationRow, ts: string, threadTs?: string) {
+  const { text, blocks, attachments } = content(ctx)
+  return {
+    type: "message",
+    subtype: "ephemeral",
+    is_ephemeral: true,
+    ...authorOf(ctx),
+    text,
+    ...(blocks ? { blocks: JSON.parse(blocks) as unknown[] } : {}),
+    ...(attachments ? { attachments: JSON.parse(attachments) as unknown[] } : {}),
+    channel: c.id,
+    channel_type: channelType(c),
+    ts,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+  }
+}
+
+const kept = (c: ConversationRow, ts: string, userId: string, message: object | null) => ({
+  channelId: c.id,
+  ts,
+  userId,
+  message: message && JSON.stringify(message),
+})
+
+/** An app replaces its ephemeral message to a person (through a response_url): in place, never "(edited)". */
+export function replaceEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, ts: string, threadTs?: string) {
+  const message = ephemeralMessage(ctx, c, ts, threadTs)
+  const { channel: _channel, channel_type: _type, ...inner } = message
+  const now = `${(Date.now() / 1000).toFixed(6)}`
   publish(ctx, {
     teamId: c.team_id,
     audience: [user],
     rtmOnly: true,
     event: {
       type: "message",
-      subtype: "ephemeral",
-      is_ephemeral: true,
-      ...authorOf(ctx),
-      ...content(ctx),
+      subtype: "message_changed",
+      hidden: true,
       channel: c.id,
       channel_type: channelType(c),
-      ts,
-      ...(threadTs ? { thread_ts: threadTs } : {}),
+      ts: now,
+      event_ts: now,
+      message: inner,
     },
+    ephemeral: kept(c, ts, user, message.blocks ? message : null),
   })
-  return ts
+}
+
+/** An app deletes its ephemeral message to a person (through a response_url). */
+export function deleteEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, ts: string) {
+  const now = `${(Date.now() / 1000).toFixed(6)}`
+  publish(ctx, {
+    teamId: c.team_id,
+    audience: [user],
+    rtmOnly: true,
+    event: {
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: c.id,
+      channel_type: channelType(c),
+      ts: now,
+      event_ts: now,
+      deleted_ts: ts,
+    },
+    ephemeral: kept(c, ts, user, null),
+  })
 }
 
 async function ownMessage(ctx: Ctx<Actor>, verb: "update" | "delete") {

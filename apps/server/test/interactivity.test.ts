@@ -553,6 +553,92 @@ describe("campflare.blocks.action over Socket Mode", () => {
   }, 10_000)
 })
 
+describe("buttons on an ephemeral message", () => {
+  /** The app says something with buttons to Bob alone; his live client has it. */
+  async function ephemeral() {
+    const s = await setup()
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, s.bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
+    const { message_ts } = await ok<{ message_ts: string }>(
+      "chat.postEphemeral",
+      { channel: s.w.general, user: s.bob.id, text: "Only you: open the pull request?", blocks: BLOCKS },
+      s.app.botToken,
+      { json: true },
+    )
+    const shown = await rtm.next((f) => f.subtype === "ephemeral")
+    return { ...s, rtm, ts: message_ts, shown }
+  }
+
+  it("arrive as blocks, and a click reaches the app as an ephemeral container without the message", async () => {
+    const { w, app, bob, rtm, ts, shown } = await ephemeral()
+    expect(shown).toMatchObject({ ts, is_ephemeral: true, app_id: app.id, blocks: BLOCKS })
+    expect(shown).not.toHaveProperty("attachments")
+    expect(await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)).toEqual({
+      ok: true,
+      delivered: "http",
+    })
+    const hit = await urls.next(isAction)
+    expect(hit.body).toMatchObject({
+      type: "block_actions",
+      container: { type: "message", message_ts: ts, channel_id: w.general, is_ephemeral: true },
+      channel: { id: w.general, name: "general" },
+      actions: [{ type: "button", action_id: "approve", value: "pr-42" }],
+    })
+    expect(hit.body).not.toHaveProperty("message")
+    // Nobody else has it to click.
+    expect(
+      (await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, w.owner.token)).error,
+    ).toBe("message_not_found")
+    rtm.close()
+  })
+
+  it("is replaced, or deleted, for the clicker alone, through the response_url", async () => {
+    const { w, bob, rtm, ts } = await ephemeral()
+    await ok("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)
+    const responseUrl = (await urls.next(isAction)).body.response_url as string
+    const done = [{ type: "section", block_id: "done", text: { type: "mrkdwn", text: "Approved" } }]
+    expect((await respond(responseUrl, { replace_original: true, text: "Approved", blocks: done })).body).toEqual({
+      ok: true,
+    })
+    const changed = await rtm.next((f) => f.subtype === "message_changed")
+    expect(changed).toMatchObject({
+      channel: w.general,
+      message: { ts, text: "Approved", is_ephemeral: true, blocks: done },
+    })
+    expect(changed.message).not.toHaveProperty("edited")
+    // The replacement has no buttons left: nothing to click.
+    expect(
+      (await call("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)).error,
+    ).toBe("action_not_found")
+    expect((await history(w)).map((m) => m.ts)).not.toContain(ts)
+    expect((await respond(responseUrl, { delete_original: true })).body).toEqual({ ok: true })
+    expect(await rtm.next((f) => f.subtype === "message_deleted")).toMatchObject({ deleted_ts: ts })
+    rtm.close()
+  })
+
+  it("stays clickable after a replacement that keeps buttons, and for a day only", async () => {
+    const { w, bob, rtm, ts } = await ephemeral()
+    await ok("campflare.blocks.action", { channel: w.general, ts, action_id: "approve" }, bob.token)
+    const responseUrl = (await urls.next(isAction)).body.response_url as string
+    await respond(responseUrl, { replace_original: true, text: "Sure?", blocks: BLOCKS })
+    await rtm.next((f) => f.subtype === "message_changed")
+    const click = () => call("campflare.blocks.action", { channel: w.general, ts, action_id: "reject" }, bob.token)
+    expect((await click()).ok).toBe(true)
+    expect((await urls.next(isAction)).body.actions).toMatchObject([{ action_id: "reject" }])
+    const now = Date.now()
+    const later = vi.spyOn(Date, "now").mockReturnValue(now + 25 * 60 * 60 * 1000)
+    try {
+      expect((await click()).error).toBe("message_not_found")
+    } finally {
+      later.mockRestore()
+    }
+    rtm.close()
+  })
+})
+
+const history = async (w: Workspace, token = w.owner.token) =>
+  (await ok<{ messages: Record<string, unknown>[] }>("conversations.history", { channel: w.general }, token)).messages
+
 describe("response_url", () => {
   async function clicked() {
     const s = await setup()
@@ -560,9 +646,6 @@ describe("response_url", () => {
     const responseUrl = (await urls.next(isAction)).body.response_url as string
     return { ...s, responseUrl }
   }
-
-  const history = async (w: Workspace, token = w.owner.token) =>
-    (await ok<{ messages: Record<string, unknown>[] }>("conversations.history", { channel: w.general }, token)).messages
 
   it("replaces the original message", async () => {
     const { w, app, ts, responseUrl, bob } = await clicked()

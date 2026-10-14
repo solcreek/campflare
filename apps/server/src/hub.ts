@@ -41,7 +41,15 @@ export interface PublishInput {
   audience: string[] | "team"
   /** Client-state events (channel_marked and the like) that the Events API doesn't carry. */
   rtmOnly?: boolean
+  /**
+   * An app's ephemeral message to keep (its JSON), or forget (null), for a
+   * while: it isn't stored in D1, but a click on its buttons needs it.
+   */
+  ephemeral?: { channelId: string; ts: string; userId: string; message: string | null }
 }
+
+/** An app's ephemeral message stays clickable this long. */
+export const EPHEMERAL_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface PollInput {
   /** The user whose view to read. */
@@ -203,6 +211,15 @@ export class TeamHub extends DurableObject<Env> {
       updated INTEGER NOT NULL
     )`)
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS views_user ON views (user_id, position)")
+    // Apps' ephemeral messages with blocks, for a day: never in D1, but their buttons can be clicked.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS ephemerals (
+      channel_id TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      expires INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, ts, user_id)
+    )`)
   }
 
   /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id: called with the ack's payload. */
@@ -279,6 +296,41 @@ export class TeamHub extends DurableObject<Env> {
     if (row.expires < Date.now()) return { error: "expired_trigger_id" }
     this.ctx.storage.sql.exec("UPDATE triggers SET used = 1 WHERE id = ?", id)
     return { userId: row.user_id }
+  }
+
+  private keepEphemeral({ channelId, ts, userId, message }: NonNullable<PublishInput["ephemeral"]>) {
+    const now = Date.now()
+    this.ctx.storage.sql.exec("DELETE FROM ephemerals WHERE expires < ?", now)
+    if (message === null) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM ephemerals WHERE channel_id = ? AND ts = ? AND user_id = ?",
+        channelId,
+        ts,
+        userId,
+      )
+      return
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT OR REPLACE INTO ephemerals (channel_id, ts, user_id, message, expires) VALUES (?, ?, ?, ?, ?)",
+      channelId,
+      ts,
+      userId,
+      message,
+      now + EPHEMERAL_TTL_MS,
+    )
+  }
+
+  /** An app's ephemeral message to a person, as JSON, while it's kept. */
+  async ephemeral(channelId: string, ts: string, userId: string): Promise<string | undefined> {
+    return this.ctx.storage.sql
+      .exec<{ message: string }>(
+        "SELECT message FROM ephemerals WHERE channel_id = ? AND ts = ? AND user_id = ? AND expires >= ?",
+        channelId,
+        ts,
+        userId,
+        Date.now(),
+      )
+      .toArray()[0]?.message
   }
 
   /** A person's open views, bottom of the stack first, each as the JSON of a ViewRecord. */
@@ -685,6 +737,7 @@ export class TeamHub extends DurableObject<Env> {
 
   async publish(input: PublishInput): Promise<number> {
     const { event, audience } = input
+    if (input.ephemeral) this.keepEphemeral(input.ephemeral)
     const eventTs = (event.event_ts as string | undefined) ?? `${(Date.now() / 1000).toFixed(6)}`
     const body = { ...event, event_ts: eventTs }
     // Serialised once, for the log and every RTM link.

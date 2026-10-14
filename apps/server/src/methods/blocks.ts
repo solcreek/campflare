@@ -1,7 +1,7 @@
 import { getConversation, requireNotArchived, requireReadable } from "../db/conversations"
 import { reactionsStatement } from "../db/messages"
 import { first, stmt } from "../db/query"
-import type { AppRow, MessageRow, ReactionRow } from "../db/rows"
+import type { AppRow, ConversationRow, MessageRow, ReactionRow } from "../db/rows"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { loadExtras, messageJson } from "../api/shapes"
@@ -68,7 +68,7 @@ async function inMessage(ctx: Ctx<Actor>) {
     reactionsStatement(db, c.id, ts),
   ])
   const message = messages!.results[0] as MessageRow | undefined
-  if (!message) throw new CampflareError("message_not_found")
+  if (!message) return inEphemeral(ctx, c, ts)
   const app = apps!.results[0] as AppRow | undefined
   // Only an app's messages answer clicks: a person's blocks have nobody to go to.
   if (!app) throw new CampflareError("not_interactive")
@@ -101,6 +101,58 @@ async function inMessage(ctx: Ctx<Actor>) {
       channelId: c.id,
       ts: message.ts,
       ...(reply ? { threadTs: reply } : {}),
+      appId: app.id,
+      userId: user.id,
+    }),
+    actions: [action],
+  }
+  return deliverInteraction(ctx, app, payload)
+}
+
+/**
+ * A click on an app's ephemeral message to the clicker, which the hub keeps
+ * for a day (it isn't in D1): block_actions without the message, as Slack
+ * sends it, and a response_url that replaces or deletes it for them alone.
+ */
+async function inEphemeral(ctx: Ctx<Actor>, c: ConversationRow, ts: string) {
+  const user = ctx.auth.user
+  const kept = await ctx.env.HUB.get(ctx.env.HUB.idFromName(c.team_id)).ephemeral(c.id, ts, user.id)
+  if (!kept) throw new CampflareError("message_not_found")
+  const message = JSON.parse(kept) as { app_id?: string; blocks?: unknown; thread_ts?: string }
+  const app = await first<AppRow>(
+    ctx.env.DB,
+    "SELECT * FROM apps WHERE id = ? AND team_id = ?",
+    message.app_id ?? "",
+    c.team_id,
+  )
+  if (!app) throw new CampflareError("not_interactive")
+  const { action, state, choices } = clickOn(ctx, message.blocks)
+  await requireChoices(ctx, choices)
+  const thread = message.thread_ts
+  const payload = {
+    type: "block_actions",
+    user: interactor(user, c.team_id),
+    api_app_id: app.id,
+    token: "",
+    container: {
+      type: "message",
+      message_ts: ts,
+      channel_id: c.id,
+      is_ephemeral: true,
+      ...(thread ? { thread_ts: thread } : {}),
+    },
+    trigger_id: triggerId(),
+    team: { id: ctx.auth.team.id, domain: ctx.auth.team.domain },
+    enterprise: null,
+    is_enterprise_install: false,
+    channel: { id: c.id, name: channelName(c) },
+    state: { values: state },
+    response_url: await issueResponseUrl(ctx.env.SIGNING_KEY, ctx.origin, {
+      teamId: c.team_id,
+      channelId: c.id,
+      ts,
+      ...(thread ? { threadTs: thread } : {}),
+      ephemeral: true,
       appId: app.id,
       userId: user.id,
     }),
