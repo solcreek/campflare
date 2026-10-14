@@ -52,17 +52,20 @@ export interface PostResult {
   body: string
 }
 
-/** POSTs a JSON body to a Request URL, signed, within the timeout. A retry says which and why. */
+/**
+ * POSTs a body to a Request URL, signed, within the timeout: JSON for events,
+ * a form (`payload=<json>`) for interactivity. A retry says which and why.
+ */
 export async function postSigned(
   url: string,
   secret: string,
   body: string,
-  retry?: { num: number; reason: string },
+  { retry, contentType = "application/json" }: { retry?: { num: number; reason: string }; contentType?: string } = {},
 ): Promise<PostResult> {
   // Each attempt is signed afresh: receivers reject a timestamp more than 5 minutes old.
   const timestamp = Math.floor(Date.now() / 1000)
   const headers: Record<string, string> = {
-    "content-type": "application/json",
+    "content-type": contentType,
     "user-agent": "Campflare-Events/1.0",
     "x-slack-request-timestamp": String(timestamp),
     "x-slack-signature": await signature(secret, timestamp, body),

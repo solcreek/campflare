@@ -16,7 +16,7 @@ import { nextTs } from "../api/ids"
 import { loadExtras, messageJson, permalink } from "../api/shapes"
 
 /** Who a message is from: the person, or the bot with its app. */
-function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
+export function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
   const { user, app, kind } = ctx.auth
   if (kind === "bot" && app) {
     return { user_id: user.id, bot_id: app.bot_id, app_id: app.id, username: ctx.args.str("username") ?? null }
