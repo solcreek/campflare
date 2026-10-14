@@ -144,12 +144,18 @@ jobs:
           cache-bin: true
 
       # The Tauri prerequisites, plus WebKitWebDriver (webkit2gtk-driver)
-      # for tauri-driver to drive, and a virtual display.
+      # for tauri-driver to drive, and a virtual display. Ubuntu 26.04 renamed
+      # webkit2gtk-driver to webkitgtk-webdriver; take whichever the image has.
       - name: Linux packages
         run: |
           sudo apt-get update
+          # Not apt-cache show: it succeeds for a name another package merely refers to.
+          driver=webkitgtk-webdriver
+          case "$(apt-cache policy "$driver" | awk '/Candidate:/ { print $2 }')" in
+            "" | "(none)") driver=webkit2gtk-driver ;;
+          esac
           # shellcheck disable=SC2086 # one word per package
-          sudo apt-get install -y $LINUX_PACKAGES webkit2gtk-driver xvfb
+          sudo apt-get install -y $LINUX_PACKAGES "$driver" xvfb
 
       - name: Install tauri-driver
         run: cargo install tauri-driver --version 2.1.0 --locked

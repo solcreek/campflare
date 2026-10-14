@@ -1,8 +1,9 @@
 // pnpm --filter @campflare/desktop e2e: the desktop app itself, driven over
 // WebDriver. tauri-driver (cargo install tauri-driver --locked) sits in front
-// of the platform's own driver: WebKitWebDriver on Linux (webkit2gtk-driver),
-// msedgedriver on Windows. macOS has no WebDriver for WKWebView, so these
-// tests can't run there: use the browser tests (pnpm e2e) on a Mac.
+// of the platform's own driver: WebKitWebDriver on Linux (the package is
+// webkitgtk-webdriver, webkit2gtk-driver before Ubuntu 26.04), msedgedriver on
+// Windows. macOS has no WebDriver for WKWebView, so these tests can't run
+// there: use the browser tests (pnpm e2e) on a Mac.
 //
 //   node e2e/run.ts              build the debug app, then test it
 //   node e2e/run.ts --no-build   test the binary already built

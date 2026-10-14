@@ -83,7 +83,9 @@ test("signs in with a pasted token, lists the channels and sends a message", asy
 
   await fill(await find("//textarea[@aria-label='Message #general']"), message)
   await click(await find("//button[@aria-label='Send' and not(@disabled)]"))
-  const shown = await text(await find(ourMessage))
+  // The delivered copy, not the pending one ("<name> at sending"): the stored
+  // message replaces that node, which would leave a stale element to read.
+  const shown = await text(await find(`${ourMessage}[not(contains(@aria-label, ' at sending'))]`))
   assert.ok(shown.includes(message), shown)
 
   // It reached the server, not just the screen.
