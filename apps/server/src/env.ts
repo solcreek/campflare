@@ -4,6 +4,8 @@ import type { TeamHub } from "./hub"
 export interface Env {
   DB: D1Database
   FILES: R2Bucket
+  /** Cloudflare Images, which makes thumbnails. Optional: without it, files have no thumb_*. */
+  IMAGES?: ImagesBinding
   HUB: DurableObjectNamespace<TeamHub>
   SCRIBE: DurableObjectNamespace<HuddleScribe>
   SIGNING_KEY: string

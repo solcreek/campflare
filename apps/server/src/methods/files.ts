@@ -11,6 +11,7 @@ import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds } from "../api/ids"
 import { imageSize, mimeOf } from "../api/media"
 import { fileJson } from "../api/shapes"
+import { imagesOf, makeThumb, THUMB_SIZES, thumbKey, thumbSizeOf, thumbSizes } from "../api/thumbs"
 
 export const MAX_FILE_BYTES = 1024 * 1024 * 1024
 /** Bytes buffered to read an image's size; larger files stream straight to R2. */
@@ -162,7 +163,11 @@ method("files.completeUploadExternal", "actor", async (ctx) => {
 method("files.info", "actor", async (ctx) => {
   const f = await getFile(ctx, ctx.args.req("file", "file_not_found"))
   if (!(await canSee(ctx.env, ctx.auth, f))) throw new CampflareError("file_not_found")
-  return { file: fileJson(f, ctx.origin), comments: [], response_metadata: { next_cursor: "" } }
+  return {
+    file: fileJson(f, ctx.origin, Boolean(imagesOf(ctx.env))),
+    comments: [],
+    response_metadata: { next_cursor: "" },
+  }
 })
 
 method("files.list", "actor", async (ctx) => {
@@ -191,8 +196,9 @@ method("files.list", "actor", async (ctx) => {
     ...params,
   )
   const pages = Math.max(1, Math.ceil(visible.length / count))
+  const thumbs = Boolean(imagesOf(ctx.env))
   return {
-    files: visible.slice((page - 1) * count, page * count).map((f) => fileJson(f, ctx.origin)),
+    files: visible.slice((page - 1) * count, page * count).map((f) => fileJson(f, ctx.origin, thumbs)),
     paging: { count, total: visible.length, page, pages },
   }
 })
@@ -201,7 +207,8 @@ method("files.delete", "actor", async (ctx) => {
   const f = await getFile(ctx, ctx.args.req("file", "file_not_found"))
   const admin = ctx.auth.kind === "user" && ctx.auth.user.is_admin
   if (f.user_id !== ctx.auth.user.id && !admin) throw new CampflareError("cant_delete_file")
-  await ctx.env.FILES.delete(r2Key(f))
+  // The thumbnails too, made or not: deleting a missing key is no error.
+  await ctx.env.FILES.delete([r2Key(f), ...THUMB_SIZES.map((size) => thumbKey(f, size))])
   await run(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id)
   const channels = JSON.parse(f.channels) as string[]
   const members = await all<{ user_id: string }>(
@@ -218,8 +225,10 @@ method("files.delete", "actor", async (ctx) => {
   return {}
 })
 
-/** GET /files-pri/<team>-<file>/[download/]<name>, with the same Bearer token the API takes. */
-export async function handleDownload(env: Env, request: Request, teamFile: string, download: boolean) {
+const notFound = () => new Response("not found", { status: 404 })
+
+/** The file a /files-pri or /files-tmb URL names, when the request's Bearer token may see it; else the error response. */
+async function visibleFile(env: Env, request: Request, teamFile: string): Promise<FileRow | Response> {
   const token = tokenOf(request, new URL(request.url).searchParams.get("t") ?? undefined)
   if (!token) return new Response("not authed", { status: 401 })
   let auth: Auth
@@ -232,18 +241,24 @@ export async function handleDownload(env: Env, request: Request, teamFile: strin
   const f = fileId
     ? await first<FileRow>(env.DB, "SELECT * FROM files WHERE id = ? AND team_id = ?", fileId, teamId)
     : undefined
-  if (!f || !auth.user || !(await canSee(env, { ...auth, user: auth.user }, f))) {
-    return new Response("not found", { status: 404 })
-  }
-  const object = await env.FILES.get(r2Key(f), { range: request.headers, onlyIf: request.headers })
-  if (!object) return new Response("not found", { status: 404 })
+  if (!f || !auth.user || !(await canSee(env, { ...auth, user: auth.user }, f))) return notFound()
+  return f
+}
+
+/**
+ * Serves an R2 object as a private file, with ranges and conditional requests, never as this
+ * origin's content. Undefined when there's no such object.
+ */
+async function serveObject(env: Env, request: Request, key: string, name: string, download: boolean) {
+  const object = await env.FILES.get(key, { range: request.headers, onlyIf: request.headers })
+  if (!object) return undefined
   const headers = new Headers()
   object.writeHttpMetadata(headers)
   headers.set("etag", object.httpEtag)
   headers.set("cache-control", "private, max-age=3600")
   headers.set(
     "content-disposition",
-    `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
   )
   // Never let an uploaded HTML or SVG run as this origin.
   headers.set("content-security-policy", "sandbox")
@@ -255,4 +270,38 @@ export async function handleDownload(env: Env, request: Request, teamFile: strin
     headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`)
   }
   return new Response(object.body, { status, headers })
+}
+
+/** GET /files-pri/<team>-<file>/[download/]<name>, with the same Bearer token the API takes. */
+export async function handleDownload(env: Env, request: Request, teamFile: string, download: boolean) {
+  const f = await visibleFile(env, request, teamFile)
+  if (f instanceof Response) return f
+  return (await serveObject(env, request, r2Key(f), f.name, download)) ?? notFound()
+}
+
+/**
+ * GET /files-tmb/<team>-<file>/<name>_<size>.<ext>: a thumbnail (thumb_*), with the same auth
+ * as url_private. The Images binding makes it on its first fetch, and R2 keeps it beside the
+ * original (concurrent first fetches each make it; the last write stays). If Images fails on
+ * the file, the original is served instead, uncached, so the image still shows.
+ */
+export async function handleThumb(env: Env, request: Request, teamFile: string, name: string) {
+  const f = await visibleFile(env, request, teamFile)
+  if (f instanceof Response) return f
+  const size = thumbSizeOf(name)
+  const images = imagesOf(env)
+  if (!images || !size || !thumbSizes(f).includes(size)) return notFound()
+  const key = thumbKey(f, size)
+  const cached = await serveObject(env, request, key, name, false)
+  if (cached) return cached
+  const original = await env.FILES.get(r2Key(f))
+  if (!original) return notFound()
+  try {
+    const thumb = await makeThumb(images, f, size, original.body)
+    await env.FILES.put(key, thumb.bytes, { httpMetadata: { contentType: thumb.contentType } })
+  } catch (error) {
+    console.error(`thumbnail ${size} of ${f.id} failed`, error)
+    return (await serveObject(env, request, r2Key(f), f.name, false)) ?? notFound()
+  }
+  return (await serveObject(env, request, key, name, false)) ?? notFound()
 }

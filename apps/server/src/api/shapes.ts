@@ -2,6 +2,7 @@ import { all } from "../db/query"
 import type { AppRow, ConversationRow, FileRow, MessageRow, ReactionRow, TeamRow, UserRow } from "../db/rows"
 import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
+import { imagesOf, thumbsJson } from "./thumbs"
 
 // Rows → the JSON shapes Slack's Web API returns. Fields Slack always sends
 // are sent (with neutral values where Campflare has no such concept), so
@@ -184,7 +185,8 @@ export function fileUrls(origin: string, f: Pick<FileRow, "id" | "team_id" | "na
   }
 }
 
-export function fileJson(f: FileRow, origin: string) {
+/** `thumbs`: whether thumbnails are on (imagesOf(env)), so images carry thumb_*. */
+export function fileJson(f: FileRow, origin: string, thumbs = false) {
   const [filetype, pretty] = FILETYPES[f.mimetype] ?? [f.name.split(".").pop()?.toLowerCase() ?? "binary", "Binary"]
   const channels = JSON.parse(f.channels) as string[]
   return {
@@ -209,6 +211,7 @@ export function fileJson(f: FileRow, origin: string) {
     username: "",
     ...fileUrls(origin, f),
     permalink: `${origin}/files/${f.user_id}/${f.id}/${encodeURIComponent(f.name)}`,
+    ...thumbsJson(origin, f, thumbs),
     ...(f.width && f.height ? { original_w: f.width, original_h: f.height } : {}),
     ...(f.alt_txt ? { alt_txt: f.alt_txt } : {}),
     channels: channels.filter((c) => c.startsWith("C")),
@@ -222,6 +225,8 @@ export interface MessageExtras {
   reactions: Map<string, ReactionRow[]>
   files: Map<string, FileRow>
   apps: Map<string, AppRow>
+  /** Whether files carry thumb_* (thumbnails are on). */
+  thumbs?: boolean
 }
 
 const key = (channelId: string, ts: string) => `${channelId}/${ts}`
@@ -244,7 +249,12 @@ export function reactionsOfQuery(db: D1Database, messages: string, ...params: un
  * `reactions`, when the caller already has them (read in its own batch), saves that query.
  */
 export async function loadExtras(env: Env, messages: MessageRow[], reactions?: ReactionRow[]): Promise<MessageExtras> {
-  const extras: MessageExtras = { reactions: new Map(), files: new Map(), apps: new Map() }
+  const extras: MessageExtras = {
+    reactions: new Map(),
+    files: new Map(),
+    apps: new Map(),
+    thumbs: Boolean(imagesOf(env)),
+  }
   if (messages.length === 0) return extras
   // Ids go in as one JSON argument: D1 binds at most 100 parameters, and a page can hold 1000 messages.
   const reactionRows =
@@ -289,7 +299,7 @@ export function messageJson(m: MessageRow, extras: MessageExtras, origin: string
   const fileIds = m.files ? (JSON.parse(m.files) as string[]) : []
   const files = fileIds.map((id) => {
     const f = extras.files.get(id)
-    return f ? fileJson(f, origin) : { id, mode: "tombstone" }
+    return f ? fileJson(f, origin, extras.thumbs) : { id, mode: "tombstone" }
   })
   const app = m.bot_id ? extras.apps.get(m.bot_id) : undefined
   const replyUsers = JSON.parse(m.reply_users) as string[]

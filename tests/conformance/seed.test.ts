@@ -27,6 +27,19 @@ it("seeds a workspace a Slack client can read", async () => {
   const png = await fetch(file!.url_private!, { headers: { authorization: `Bearer ${seeded.owner}` } })
   expect(png.headers.get("content-type")).toBe("image/png")
   expect([...new Uint8Array(await png.arrayBuffer()).subarray(1, 4)]).toEqual([0x50, 0x4e, 0x47])
+  // Thumbnails, made by the Images binding (sharp, locally) on first fetch. A 192×128 image's
+  // thumb_360 is its own size, and it's too small for thumb_480 and up.
+  expect(file).toMatchObject({ thumb_360_w: 192, thumb_360_h: 128 })
+  expect(file?.thumb_480).toBeUndefined()
+  for (const [url, width, height] of [
+    [file!.thumb_64!, 64, 64],
+    [file!.thumb_360!, 192, 128],
+  ] as const) {
+    const thumb = await fetch(url, { headers: { authorization: `Bearer ${seeded.owner}` } })
+    expect(thumb.headers.get("content-type")).toBe("image/png")
+    const view = new DataView(await thumb.arrayBuffer())
+    expect([view.getUint32(16), view.getUint32(20)]).toEqual([width, height])
+  }
   const ims = await web.users.conversations({ types: "im,mpim" })
   expect(ims.channels).toHaveLength(2)
 })
