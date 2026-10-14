@@ -16,6 +16,7 @@ import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
 import { mountAuth } from "./auth/routes"
+import { handlePermalink } from "./permalinks"
 import { handleMcp } from "./mcp"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
@@ -125,6 +126,12 @@ app.get("/link/", async (c) => {
   headers.set("x-campflare-connection", JSON.stringify(ticket))
   return stub.fetch(new Request(c.req.raw.url, { headers }))
 })
+
+/** Permalinks from chat.getPermalink, and links to a conversation: sent on to the app (APP_URL). */
+app.get("/archives/:channel", (c) => handlePermalink(c.env.APP_URL, new URL(c.req.url), c.req.param("channel")))
+app.get("/archives/:channel/:ts", (c) =>
+  handlePermalink(c.env.APP_URL, new URL(c.req.url), c.req.param("channel"), c.req.param("ts")),
+)
 
 /** Placeholder avatars: initials on a colour, as an SVG. */
 app.get("/avatars/:id", async (c) => {

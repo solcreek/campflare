@@ -23,7 +23,12 @@ function formAction(url: URL): string {
   return "'self'"
 }
 
-function page(title: string, body: string, url: URL, init: { status?: number; retryAfter?: number } = {}): Response {
+export function page(
+  title: string,
+  body: string,
+  url: URL,
+  init: { status?: number; retryAfter?: number } = {},
+): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>

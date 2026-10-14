@@ -13,3 +13,6 @@ REALTIME_TURN_KEY_TOKEN=
 CF_ACCOUNT_ID=
 WORKERS_AI_TOKEN=
 HUDDLE_PUBLIC_URL=
+# Where the app is served: permalinks (/archives/...) redirect there. pnpm dev:all sets it
+# (the --web app, or http://localhost:5173 for pnpm web); set it here to point elsewhere.
+APP_URL=
