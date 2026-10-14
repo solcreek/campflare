@@ -3,6 +3,7 @@ import type { Env } from "./env"
 import { ids } from "./api/ids"
 import { appMentionOf, mentionedUsers, subscribed } from "./app-events"
 import type { AppRow } from "./db/rows"
+import { createHealthTables, healthOf, recordAttempt, resetWindow, type DeliveryHealth } from "./delivery-health"
 import { postSigned, REQUEST_TIMEOUT_MS } from "./request-url"
 
 // One TeamHub per workspace holds its live connections and fans events out.
@@ -157,6 +158,7 @@ export class TeamHub extends DurableObject<Env> {
       uses INTEGER NOT NULL,
       expires INTEGER NOT NULL
     )`)
+    createHealthTables(ctx.storage.sql)
   }
 
   /** Socket Mode `interactive` envelopes waiting for their ack, by envelope_id. */
@@ -238,9 +240,19 @@ export class TeamHub extends DurableObject<Env> {
     return this.subscribers.apps
   }
 
-  /** An app's Request URL or subscriptions changed: read them again for the next event. */
-  async subscriptionsChanged(): Promise<void> {
+  /**
+   * An app's Request URL, subscriptions or secret changed: read them again for
+   * the next event. `newUrlOf` is an app given a (newly verified) Request URL,
+   * whose failure count starts afresh.
+   */
+  async subscriptionsChanged(newUrlOf?: string): Promise<void> {
     this.subscribers = undefined
+    if (newUrlOf) resetWindow(this.ctx.storage.sql, newUrlOf)
+  }
+
+  /** How an app's Request URL is doing, for campflare.apps.info. */
+  async deliveryHealth(appId: string): Promise<DeliveryHealth> {
+    return healthOf(this.ctx.storage.sql, appId)
   }
 
   /** The next connection of an app, in turn: Slack spreads an app's events across its links. */
@@ -286,14 +298,24 @@ export class TeamHub extends DurableObject<Env> {
       due,
     )
     await this.scheduleAlarm(due)
-    return this.attempt(app.url, app.secret, payload.event_id, body, 0)
+    return this.attempt(app, payload.event_id, body, 0)
   }
 
-  /** One attempt at a POST: done when it's taken (2xx) or refused for good, else due again after a delay. */
-  private async attempt(url: string, secret: string, id: string, body: string, retry: number, reason?: string) {
-    const res = await postSigned(url, secret, body, {
+  /**
+   * One attempt at a POST, counted towards the app's delivery health: done
+   * when it's taken (2xx) or refused for good, else due again after a delay.
+   */
+  private async attempt(
+    app: Subscriber & { url: string },
+    id: string,
+    body: string,
+    retry: number,
+    reason?: string,
+  ) {
+    const res = await postSigned(app.url, app.secret, body, {
       retry: retry ? { num: retry, reason: reason ?? "unknown_error" } : undefined,
     })
+    recordAttempt(this.ctx.storage.sql, app.appId, res)
     if (res.ok || res.noRetry || retry >= MAX_RETRIES) {
       this.ctx.storage.sql.exec("DELETE FROM unacked WHERE envelope_id = ?", id)
       return res.ok ? 1 : 0
@@ -324,7 +346,7 @@ export class TeamHub extends DurableObject<Env> {
       now + REQUEST_TIMEOUT_MS + next,
       row.envelope_id,
     )
-    await this.attempt(app.url, app.secret, row.envelope_id, row.envelope, retry, row.reason ?? undefined)
+    await this.attempt({ ...app, url: app.url }, row.envelope_id, row.envelope, retry, row.reason ?? undefined)
   }
 
   /**

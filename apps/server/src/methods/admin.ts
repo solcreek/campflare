@@ -288,6 +288,15 @@ function appSettings(app: AppRow) {
   }
 }
 
+const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
+
+/** appSettings and how its Request URL is doing (the team hub keeps the counts). */
+async function appOut(ctx: Ctx<Actor>, app: AppRow) {
+  const settings = appSettings(app)
+  const delivery = await hubOf(ctx).deliveryHealth(app.id)
+  return { ...settings, event_subscriptions: { ...settings.event_subscriptions, delivery } }
+}
+
 /** An app of the caller's workspace that they installed, or any if they're an admin. */
 async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
   const app = await first<AppRow>(
@@ -301,8 +310,11 @@ async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
   return app
 }
 
-/** An app's settings: its signing secret, Request URL and subscribed events. */
-method("campflare.apps.info", "user", async (ctx) => ({ app: appSettings(await ownApp(ctx)) }))
+/**
+ * An app's settings: its signing secret, Request URL and subscribed events,
+ * and how deliveries to the URL are doing (event_subscriptions.delivery).
+ */
+method("campflare.apps.info", "user", async (ctx) => ({ app: await appOut(ctx, await ownApp(ctx)) }))
 
 /**
  * Sets where and which events an app receives over HTTP (Slack's Event
@@ -344,9 +356,9 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
     events?.length ? JSON.stringify(events) : null,
     app.id,
   ))!
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
-  await hub.subscriptionsChanged()
-  return { app: appSettings(updated) }
+  // A new URL's failures are counted afresh.
+  await hubOf(ctx).subscriptionsChanged(url ? app.id : undefined)
+  return { app: await appOut(ctx, updated) }
 })
 
 /**
@@ -365,9 +377,8 @@ method("campflare.apps.rotateSigningSecret", "user", async (ctx) => {
     app.id,
   ))!
   // The hub keeps each subscriber's secret: it must sign the next delivery with the new one.
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
-  await hub.subscriptionsChanged()
-  return { app: appSettings(updated) }
+  await hubOf(ctx).subscriptionsChanged()
+  return { app: await appOut(ctx, updated) }
 })
 
 /**
@@ -388,7 +399,7 @@ method("campflare.apps.setInteractivity", "user", async (ctx) => {
     url || null,
     app.id,
   ))!
-  return { app: appSettings(updated) }
+  return { app: await appOut(ctx, updated) }
 })
 
 /** `events` as a list (comma-separated or a JSON array), or undefined when not given. */

@@ -1,6 +1,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { env } from "cloudflare:workers"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import type { DeliveryHealth } from "../src/delivery-health"
 import { MAX_RETRIES, type TeamHub } from "../src/hub"
 import {
   connect,
@@ -132,7 +133,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { app: app.id, request_url: URL },
       w.owner.token,
     )
-    expect(res.app.event_subscriptions).toEqual({ request_url: URL, events: null })
+    expect(res.app.event_subscriptions).toMatchObject({ request_url: URL, events: null })
     const hit = await urls.next()
     expect(hit.url).toBe(URL)
     expect(hit.body).toEqual({ token: "", challenge: expect.any(String), type: "url_verification" })
@@ -193,7 +194,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { app: app.id },
       w.owner.token,
     )
-    expect(info.app.event_subscriptions).toEqual({ request_url: null, events: null })
+    expect(info.app.event_subscriptions).toMatchObject({ request_url: null, events: null })
   })
 
   it("allows http on localhost, for an app in development", async () => {
@@ -209,7 +210,7 @@ describe("campflare.apps.setEventSubscriptions", () => {
     type Settings = { app: { event_subscriptions: { request_url: string | null; events: string[] | null } } }
     const set = (args: Record<string, unknown>) =>
       ok<Settings>("campflare.apps.setEventSubscriptions", { app: app.id, ...args }, w.owner.token)
-    expect((await set({ events: "app_mention, message.channels" })).app.event_subscriptions).toEqual({
+    expect((await set({ events: "app_mention, message.channels" })).app.event_subscriptions).toMatchObject({
       request_url: URL,
       events: ["app_mention", "message.channels"],
     })
@@ -223,8 +224,8 @@ describe("campflare.apps.setEventSubscriptions", () => {
       { json: true },
     )
     expect(json.app.event_subscriptions.events).toEqual(["app_mention"])
-    expect((await set({ events: "" })).app.event_subscriptions).toEqual({ request_url: URL, events: null })
-    expect((await set({ request_url: "" })).app.event_subscriptions).toEqual({ request_url: null, events: null })
+    expect((await set({ events: "" })).app.event_subscriptions).toMatchObject({ request_url: URL, events: null })
+    expect((await set({ request_url: "" })).app.event_subscriptions).toMatchObject({ request_url: null, events: null })
     // Only the first set verified a URL.
     expect(urls.hits).toEqual([])
     await expectError("campflare.apps.setEventSubscriptions", { app: app.id }, w.owner.token, "invalid_arguments")
@@ -402,5 +403,91 @@ describe("retries", () => {
     await expire(w.teamId)
     expect(await pending(w.teamId)).toEqual([])
     expect(urls.hits).toEqual([])
+  })
+})
+
+/** event_subscriptions.delivery from campflare.apps.info. */
+async function deliveryOf(app: { id: string }, token: string) {
+  const info = await ok<{ app: { event_subscriptions: { delivery: DeliveryHealth } } }>(
+    "campflare.apps.info",
+    { app: app.id },
+    token,
+  )
+  return info.app.event_subscriptions.delivery
+}
+
+describe("delivery health in campflare.apps.info", () => {
+  it("reports the last attempt, the hour's attempts and failures, and pending retries", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Hooked")
+    expect(await deliveryOf(app, w.owner.token)).toEqual({
+      last_attempt: null,
+      window_minutes: 60,
+      attempts: 0,
+      failures: 0,
+      pending: 0,
+    })
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: URL }, w.owner.token)
+    await urls.next((h) => h.body.type === "url_verification")
+    // url_verification isn't a delivery.
+    expect((await deliveryOf(app, w.owner.token)).attempts).toBe(0)
+
+    const before = Math.floor(Date.now() / 1000)
+    await ok("chat.postMessage", { channel: w.general, text: "taken" }, w.owner.token)
+    await urls.next(isEvent("message", "taken"))
+    await settle()
+    expect(await deliveryOf(app, w.owner.token)).toEqual({
+      last_attempt: { at: expect.any(Number), ok: true, status: 200, reason: null },
+      window_minutes: 60,
+      attempts: 1,
+      failures: 0,
+      pending: 0,
+    })
+    expect((await deliveryOf(app, w.owner.token)).last_attempt!.at).toBeGreaterThanOrEqual(before)
+
+    urls.answer = () => new Response("down", { status: 503 })
+    await ok("chat.postMessage", { channel: w.general, text: "refused" }, w.owner.token)
+    await urls.next(isEvent("message", "refused"))
+    await settle()
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { ok: false, status: 503, reason: "http_error" },
+      attempts: 2,
+      failures: 1,
+      pending: 1,
+    })
+    // Retries count as attempts.
+    urls.answer = () => {
+      throw new TypeError("connection refused")
+    }
+    await expire(w.teamId)
+    await urls.next(isEvent("message", "refused"))
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { ok: false, status: 0, reason: "connection_failed" },
+      attempts: 3,
+      failures: 2,
+      pending: 1,
+    })
+
+    // A new Request URL starts the count afresh; the last attempt stays.
+    urls.answer = (h) => (h.body.type === "url_verification" ? Response.json({ challenge: h.body.challenge }) : new Response(""))
+    await ok("campflare.apps.setEventSubscriptions", { app: app.id, request_url: `${URL}/v2` }, w.owner.token)
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({
+      last_attempt: { reason: "connection_failed" },
+      attempts: 0,
+      failures: 0,
+    })
+  })
+
+  it("forgets attempts older than the hour", async () => {
+    const { w, app } = await subscribedApp()
+    urls.answer = () => new Response("", { status: 500 })
+    await ok("chat.postMessage", { channel: w.general, text: "old" }, w.owner.token)
+    await urls.next(isEvent("message", "old"))
+    await settle()
+    expect((await deliveryOf(app, w.owner.token)).failures).toBe(1)
+    await runInDurableObject(hub(w.teamId), async (_hub: TeamHub, state) => {
+      state.storage.sql.exec("UPDATE delivery_minutes SET minute = minute - 60")
+    })
+    expect(await deliveryOf(app, w.owner.token)).toMatchObject({ attempts: 0, failures: 0 })
   })
 })

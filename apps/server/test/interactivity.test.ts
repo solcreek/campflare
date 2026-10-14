@@ -227,6 +227,18 @@ describe("campflare.blocks.action over HTTP", () => {
     expect(urls.hits.filter(isAction)).toHaveLength(2)
   })
 
+  it("doesn't count towards the event Request URL's delivery health", async () => {
+    const { w, app, click } = await setup()
+    urls.answer = () => new Response("boom", { status: 500 })
+    expect((await click()).error).toBe("app_unreachable")
+    const info = await ok<{ app: { event_subscriptions: { delivery: { attempts: number; last_attempt: unknown } } } }>(
+      "campflare.apps.info",
+      { app: app.id },
+      w.owner.token,
+    )
+    expect(info.app.event_subscriptions.delivery).toMatchObject({ attempts: 0, last_attempt: null })
+  })
+
   it("needs the app to have somewhere to send clicks", async () => {
     const { click } = await setup({ url: null })
     expect((await click()).error).toBe("interactivity_not_enabled")
