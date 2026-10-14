@@ -297,6 +297,50 @@ describe("campflare.blocks.action over HTTP", () => {
   })
 })
 
+describe("a streamed reply's feedback buttons", () => {
+  it("get ids when the stream stops, and a click on one reaches the app", async () => {
+    const { w, app, bob } = await setup()
+    const question = await ok<{ ts: string }>("chat.postMessage", { channel: w.general, text: "why?" }, bob.token)
+    const started = await ok<{ ts: string }>(
+      "chat.startStream",
+      {
+        channel: w.general,
+        thread_ts: question.ts,
+        markdown_text: "Because.",
+        recipient_user_id: bob.id,
+        recipient_team_id: w.teamId,
+      },
+      app.botToken,
+    )
+    const feedback = {
+      type: "feedback_buttons",
+      positive_button: { text: { type: "plain_text", text: "Good" }, value: "up" },
+      negative_button: { text: { type: "plain_text", text: "Bad" }, value: "down" },
+    }
+    const stopped = await ok<{
+      message: { blocks: { type: string; block_id: string; elements?: { action_id: string }[] }[] }
+    }>(
+      "chat.stopStream",
+      { channel: w.general, ts: started.ts, blocks: [{ type: "context_actions", elements: [feedback] }] },
+      app.botToken,
+    )
+    const block = stopped.message.blocks.find((b) => b.type === "context_actions")!
+    expect(block.block_id).toMatch(/^[A-Za-z0-9]{5}$/)
+    const actionId = block.elements![0]!.action_id
+    expect(actionId).toMatch(/^[A-Za-z0-9]{5}$/)
+    await ok(
+      "campflare.blocks.action",
+      { channel: w.general, ts: started.ts, block_id: block.block_id, action_id: actionId, value: "up" },
+      bob.token,
+    )
+    const hit = await urls.next(isAction)
+    expect(hit.body).toMatchObject({
+      container: { message_ts: started.ts, thread_ts: question.ts },
+      actions: [{ type: "feedback_buttons", block_id: block.block_id, action_id: actionId, value: "up" }],
+    })
+  })
+})
+
 describe("campflare.blocks.action over Socket Mode", () => {
   it("sends an interactive envelope to a connected app instead, and waits for its ack", async () => {
     const { app, click } = await setup()

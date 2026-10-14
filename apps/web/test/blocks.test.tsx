@@ -150,6 +150,21 @@ describe("buttons in messages", () => {
     expect(message.getByText("Approved by alex")).toBeTruthy()
   })
 
+  it("shows a streamed reply's markdown with its feedback buttons under it", async () => {
+    const streamed: Message = {
+      ...fromApp,
+      text: "Open the pull request?",
+      blocks: [{ type: "markdown", block_id: "md", text: "Open the pull request?" }, fromApp.blocks![2]!],
+    }
+    const { server, user, message } = await signedIn([streamed])
+    expect(message.queryByRole("button", { name: "Approve" })).toBeNull()
+    await user.click(message.getByRole("button", { name: "Bad" }))
+    await waitFor(() => expect(message.getByRole("button", { name: "Bad" }).getAttribute("aria-pressed")).toBe("true"))
+    expect(clicks(server)).toEqual([
+      { channel: "CGEN", ts: TS, block_id: "rate", action_id: "feedback", value: "down" },
+    ])
+  })
+
   it("keeps the buttons of a message only you see inert", async () => {
     const { server, message } = await signedIn([{ ...fromApp, is_ephemeral: true }])
     expect(message.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(true)
