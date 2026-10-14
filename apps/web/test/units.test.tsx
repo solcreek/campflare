@@ -232,6 +232,19 @@ describe("route", () => {
     expect(formatRoute({ channel: "C1" })).toBe("#/C1")
     expect(formatRoute({ channel: "C1", thread: "1.2" })).toBe("#/C1/1.2")
   })
+
+  it("carries the message a link points at", () => {
+    expect(parseRoute("#/C1?msg=1700000000.000100")).toEqual({ channel: "C1", message: "1700000000.000100" })
+    expect(parseRoute("#/C1/1700000000.000100?msg=1700000000.000200")).toEqual({
+      channel: "C1",
+      thread: "1700000000.000100",
+      message: "1700000000.000200",
+    })
+    expect(parseRoute("#/C1?other=1")).toEqual({ channel: "C1", thread: undefined })
+    expect(formatRoute({ channel: "C1", message: "1.2" })).toBe("#/C1?msg=1.2")
+    expect(formatRoute({ channel: "C1", thread: "1.2", message: "1.3" })).toBe("#/C1/1.2?msg=1.3")
+    expect(formatRoute({ message: "1.2" })).toBe("#/")
+  })
 })
 
 describe("theme", () => {

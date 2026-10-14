@@ -19,6 +19,8 @@ export default defineConfig(async () => {
             REALTIME_APP_SECRET: "test-realtime-secret",
             CF_ACCOUNT_ID: "test-account",
             WORKERS_AI_TOKEN: "test-workers-ai-token",
+            // Where permalinks send the browser; a query of its own, which the redirect keeps.
+            APP_URL: "https://app.campflare.test/?team=dev",
           },
         },
       }),

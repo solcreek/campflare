@@ -32,12 +32,14 @@ export default async function setup(_config: FullConfig) {
   const dir = mkdtempSync(join(tmpdir(), "campflare-e2e-"))
   const envFile = join(dir, "campflare-dev.env")
   const apiPort = await freePort()
+  // Chosen before the server starts: its permalinks redirect to the app (APP_URL).
+  const webPort = await freePort()
   let log = ""
-  const api: ChildProcess = spawn(
-    process.execPath,
-    [join(root, "scripts/dev.ts"), "--port", String(apiPort), "--state", join(dir, "state")],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
-  )
+  const args = ["--port", String(apiPort), "--state", join(dir, "state"), "--app-url", `http://localhost:${webPort}/`]
+  const api: ChildProcess = spawn(process.execPath, [join(root, "scripts/dev.ts"), ...args], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   api.stdout?.on("data", (d) => (log += d))
   api.stderr?.on("data", (d) => (log += d))
   // dev.ts writes the env file once the workspace is seeded.
@@ -47,7 +49,6 @@ export default async function setup(_config: FullConfig) {
   }
 
   process.env.CAMPFLARE_DEV_ENV = envFile
-  const webPort = await freePort()
   const web: ViteDevServer = await createServer({
     root: resolve(import.meta.dirname, ".."),
     configFile: resolve(import.meta.dirname, "../vite.config.ts"),

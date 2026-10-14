@@ -9,6 +9,7 @@ import {
   pageUrl,
   parseShotArgs,
   report,
+  resolveRoute,
   stepProblem,
   UsageError,
 } from "../scripts/shot-options.ts"
@@ -104,6 +105,30 @@ describe("a click target", () => {
     expect(clickTarget("button:Send")).toEqual({ role: "button", name: "Send" })
     expect(clickTarget("link:https://example.com/ü")).toEqual({ role: "link", name: "https://example.com/ü" })
     expect(clickTarget("textbox:")).toEqual({ role: "textbox", name: "" })
+  })
+})
+
+describe("a permalink as a route", () => {
+  const link = "http://localhost:4100/archives/C1/p1700000000000200?thread_ts=1700000000.000100&cid=C1"
+  const answering =
+    (status: number, location?: string): typeof fetch =>
+    async (_url, init) => {
+      expect(init?.redirect).toBe("manual")
+      return new Response(null, { status, headers: location ? { location } : {} })
+    }
+
+  it("is the hash its server redirects to; a hash stays as it is", async () => {
+    const to = "http://localhost:4200/#/C1/1700000000.000100?msg=1700000000.000200"
+    expect(await resolveRoute(link, answering(302, to))).toBe("#/C1/1700000000.000100?msg=1700000000.000200")
+    expect(await resolveRoute("#/C1", answering(500))).toBe("#/C1")
+    expect(await resolveRoute("", answering(500))).toBe("")
+  })
+
+  it("says why when the server doesn't redirect, or can't be reached", async () => {
+    await expect(resolveRoute(link, answering(200))).rejects.toThrow(/answered HTTP 200, not a redirect/)
+    await expect(resolveRoute(link, answering(404))).rejects.toBeInstanceOf(UsageError)
+    const down: typeof fetch = () => Promise.reject(new TypeError("fetch failed"))
+    await expect(resolveRoute(link, down)).rejects.toThrow(`couldn't reach ${link}: fetch failed`)
   })
 })
 

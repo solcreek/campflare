@@ -116,6 +116,27 @@ or point at an app:  pnpm shot --url http://localhost:<port>`,
   return { url: stack.appUrl }
 }
 
+/**
+ * A route as given: a hash as is, or a permalink (`http…/archives/<channel>/p<ts>`, from
+ * chat.getPermalink) turned into the hash its server redirects to, so the shot is of the
+ * screen the link opens.
+ */
+export async function resolveRoute(route: string, fetcher: typeof fetch = fetch): Promise<string> {
+  if (!/^https?:\/\//.test(route)) return route
+  let res: Response
+  try {
+    res = await fetcher(route, { redirect: "manual" })
+  } catch (error) {
+    throw new UsageError(`couldn't reach ${route}: ${error instanceof Error ? error.message : error}`)
+  }
+  const location = res.headers.get("location")
+  if (res.status < 300 || res.status > 399 || !location)
+    throw new UsageError(
+      `${route} answered HTTP ${res.status}, not a redirect to the app: routes are hashes ('#/C123') or permalinks`,
+    )
+  return new URL(location, route).hash
+}
+
 /** The page for a route, signed in as --as when given. */
 export const pageUrl = (base: string, as: string | undefined, route: string) =>
   `${base}/${as ? `?as=${as}` : ""}${route}`

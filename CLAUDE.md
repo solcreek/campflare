@@ -15,9 +15,11 @@ pnpm check                 # oxfmt --check, oxlint, tsc (all packages), every te
 pnpm fmt                   # format in place (oxfmt)
 pnpm dev:all               # migrations + wrangler dev on :8787 + seed; --port 0, --state <dir>, --fresh, --no-seed
                            # --web: the app too (free port with --port 0); URLs in .wrangler/campflare-dev.run.json
+                           # --app-url: where permalinks redirect (default: the --web app, else :5173)
 pnpm otui                  # opentui-slack against the dev:all server (reads .wrangler/campflare-dev.env)
 pnpm web                   # the app (apps/web) on :5173, signed in to the dev:all server as alex; ?as=vincent
 pnpm shot '#/C123'         # screenshot of the dev:all --web app + console errors + accessible outline (--as, --dark, --state)
+                           # a permalink (http://…/archives/C123/p…) works as a route too
 pnpm e2e                   # the app in Chromium against a fresh stack of its own (needs nothing running)
 pnpm desktop               # the Tauri shell around pnpm web (Rust toolchain needed)
 pnpm dev                   # just wrangler dev on :8787 (apply migrations first: see below)
@@ -290,6 +292,19 @@ with how to revoke it, in one line on stderr. The `/login` and
 `/consent` pages' CSP adds the redirect URI's origin to `form-action`: browsers
 check it on the redirects a POST answers with, so `'self'` alone blocks the return.
 
+**Permalinks.** `chat.getPermalink` answers Slack's shape,
+`<origin>/archives/<channel>/p<ts without dot>` (`?thread_ts=&cid=` for a reply;
+`permalink()` in `shapes.ts`). The Worker doesn't serve the app, so
+`/archives/:channel(/:ts)` (`src/permalinks.ts`) redirects (302) to `APP_URL`,
+where the app is, at its hash route: `#/<channel>?msg=<ts>`, or
+`#/<channel>/<thread>?msg=<ts>` for a reply; `/archives/<channel>` alone opens the
+conversation. Nothing is looked up: a browser following a link carries no token,
+so existence and access are the app's to find out (its not-found view). Without
+`APP_URL` it answers a page naming the route; a malformed channel id is a 404.
+`pnpm dev:all` passes `APP_URL` to wrangler (`--var`): the `--web` app, else
+`APP_URL` from `.dev.vars`, else `http://localhost:5173/` (`pnpm web`), or
+`--app-url`. Deployed, set it as a var or secret.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, tokens and apps (an app is
@@ -358,7 +373,15 @@ which (`"oauth"` or `"token"`; absent in older sessions, which count as
 5 s at most, then signs out regardless) only for `"oauth"`, since a pasted
 token may be shared with scripts, and never for the dev accounts. In dev,
 `?as=none` shows the login screen, and a return from the browser is never
-auto-signed-in. The composer ignores Enter while an IME
+auto-signed-in. The web sign-in keeps the page's hash with its pending state
+and puts it back on return (the redirect URI is the bare root), so a permalink
+opened signed out lands on its message. Routes (`route.ts`) carry `?msg=<ts>` for
+a linked message: `ConversationView` pages older history until it's loaded (or
+there's nothing older), `MessageList` scrolls it into view and `MessageItem`
+marks it `aria-current` (tests find it by that); a reply's link highlights the
+reply in `ThreadPanel` and its head in the conversation. An unknown conversation
+renders `NotFoundView` (and loads nothing); a missing message, reply or thread
+gets a notice. The composer ignores Enter while an IME
 composes (`isComposing`, or keyCode 229 on Safari), which CJK input depends on.
 Inline images (`message-files.tsx`) take their final box from
 `original_w`/`original_h` before the bytes come, and fetch them only when they

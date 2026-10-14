@@ -8,6 +8,8 @@
 //   pnpm dev:all --no-seed        an empty server
 //   pnpm dev:all --web            also the app's Vite dev server, signed in to this one
 //                                 (on a free port with --port 0, else 5173)
+//   pnpm dev:all --app-url <url>  where permalinks (/archives/...) send the browser: by default
+//                                 the --web app, else APP_URL in .dev.vars, else :5173 (pnpm web)
 //
 // While it runs, <state>/../campflare-dev.run.json says what it serves
 // (scripts/dev-stack.ts): `pnpm shot` finds the app through it.
@@ -31,6 +33,7 @@ const { values } = parseArgs({
     fresh: { type: "boolean", default: false },
     seed: { type: "boolean", default: true },
     web: { type: "boolean", default: false },
+    "app-url": { type: "string" },
   },
   allowNegative: true,
 })
@@ -84,14 +87,19 @@ execFileSync(wrangler, ["d1", "migrations", "apply", "campflare", "--local", "--
 
 const port = values.port === "0" ? await freePort() : Number(values.port)
 const url = `http://localhost:${port}`
+// The app's port is chosen now, though it starts later: the server needs its URL (APP_URL) to redirect permalinks to.
+const webPort = values.web ? (values.port === "0" ? await freePort() : 5173) : undefined
+const appUrl = webPort ? `http://localhost:${webPort}` : undefined
+const permalinkTarget = values["app-url"] ?? (appUrl ? `${appUrl}/` : vars.APP_URL || "http://localhost:5173/")
 const children: ChildProcess[] = []
 let stopping = false
 // The inspector too: wrangler probes 9229 and takes the next free one, a race two stacks starting at once can lose.
 const inspector = values.port === "0" ? ["--inspector-port", String(await freePort())] : []
-const child = spawn(wrangler, ["dev", "--port", String(port), ...inspector, "--persist-to", state], {
-  cwd: server,
-  stdio: ["inherit", "inherit", "inherit"],
-})
+const child = spawn(
+  wrangler,
+  ["dev", "--port", String(port), ...inspector, "--persist-to", state, "--var", `APP_URL:${permalinkTarget}`],
+  { cwd: server, stdio: ["inherit", "inherit", "inherit"] },
+)
 children.push(child)
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
@@ -134,10 +142,8 @@ writeFileSync(envFile, `# Written by pnpm dev:all; the tokens belong to ${state}
 })
 
 // Vite reads the env file when it loads its config, so the app starts only now.
-let appUrl: string | undefined
-if (values.web) {
+if (webPort && appUrl) {
   const web = join(root, "apps/web")
-  const webPort = values.port === "0" ? await freePort() : 5173
   const vite = spawn(join(web, "node_modules/.bin/vite"), ["--port", String(webPort), "--strictPort"], {
     cwd: web,
     env: { ...process.env, CAMPFLARE_DEV_ENV: envFile, CAMPFLARE_WEB_PORT: String(webPort) },
@@ -151,7 +157,6 @@ if (values.web) {
     console.error(`the app's dev server stopped (${code ?? "signal"}); stopping the server too`)
     child.kill("SIGTERM")
   })
-  appUrl = `http://localhost:${webPort}`
   await answers(appUrl, "the app's dev server")
 }
 writeStack(runFile, { apiUrl: url, ...(appUrl ? { appUrl } : {}), envFile, pid: process.pid })
@@ -161,6 +166,7 @@ const custom = values.state ? `CAMPFLARE_DEV_ENV=${rel(envFile)} ` : ""
 const stateArg = values.state ? ` --state ${rel(state)}` : ""
 console.log(`
   Campflare is up on ${url}${appUrl ? `\n  app    ${appUrl}  (signed in as alex; ?as=vincent for someone else)` : ""}
+  links  permalinks (/archives/...) open ${permalinkTarget}
   state  ${rel(state)}${seeded ? "\n  team   Campflare Dev: you are @alex; also vincent, minjun, ada" : ""}
   env    ${rel(envFile)}
   run    ${rel(runFile)}

@@ -18,4 +18,9 @@ export interface Env {
   WORKERS_AI_TOKEN?: string
   /** The public origin the SFU connects back to for transcription (a tunnel in development). Defaults to the request's. */
   HUDDLE_PUBLIC_URL?: string
+  /**
+   * Where the app (apps/web) is served, e.g. https://app.example.com/: permalinks
+   * (/archives/...) redirect there, to the message's hash route. pnpm dev:all sets it.
+   */
+  APP_URL?: string
 }

@@ -108,9 +108,11 @@ export interface MessageItemProps {
   /** Shown inside a thread: no thread summary. */
   inThread?: boolean
   onOpenThread?: (ts: string) => void
+  /** The message a link points at (a permalink): marked, and marked as current for assistive tech. */
+  highlighted?: boolean
 }
 
-export function MessageItem({ message, grouped, inThread, onOpenThread }: MessageItemProps) {
+export function MessageItem({ message, grouped, inThread, onOpenThread, highlighted }: MessageItemProps) {
   const workspace = useWorkspace()
   const author = useWorkspaceState((s) => (message.user ? s.users[message.user] : undefined))
   const selfId = useWorkspaceState((s) => s.self?.userId)
@@ -127,7 +129,11 @@ export function MessageItem({ message, grouped, inThread, onOpenThread }: Messag
     return (
       <article
         aria-label={`${name} at ${formatTime(message.ts)}`}
-        className="flex items-baseline gap-2 px-4 py-0.5 pl-15 text-sm text-muted-foreground"
+        aria-current={highlighted || undefined}
+        className={cn(
+          "flex items-baseline gap-2 px-4 py-0.5 pl-15 text-sm text-muted-foreground",
+          highlighted && "bg-highlight",
+        )}
       >
         {!text.includes("<@") && <span className="font-medium">{name}</span>}
         <Mrkdwn text={text} />
@@ -139,8 +145,10 @@ export function MessageItem({ message, grouped, inThread, onOpenThread }: Messag
   return (
     <article
       aria-label={`${name} at ${message.pending ? "sending" : formatTime(message.ts)}`}
+      aria-current={highlighted || undefined}
       className={cn(
-        "group relative flex gap-2 px-4 py-0.5 hover:bg-muted/50",
+        "group relative flex gap-2 px-4 py-0.5",
+        highlighted ? "bg-highlight" : "hover:bg-muted/50",
         !grouped && "mt-2 pt-1",
         message.pending && !message.failed && "opacity-60",
       )}
