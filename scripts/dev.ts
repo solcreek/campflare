@@ -178,4 +178,5 @@ console.log(`
     set -a; . ${rel(envFile)}; set +a    # then the CLI acts as @alex:
     campflare send '#dev' "hello"
     CAMPFLARE_TOKEN=$CAMPFLARE_TOKEN_VINCENT campflare send @alex "hi"
+    echo "**hi**" | CAMPFLARE_TOKEN=$CAMPFLARE_BOT_TOKEN campflare stream @alex   # a streamed bot reply
 `)

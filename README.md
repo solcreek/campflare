@@ -276,6 +276,8 @@ campflare send @vincent "have a look" -f screenshot.png
 make test 2>&1 | tail -5 | campflare send @me                  # text from stdin
 campflare history '#dev' -n 50
 campflare search 'deploy in:#dev from:@bob after:2026-10-01'
+llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791990000.000100 --status "is thinking…"
+                                                              # as a bot: one message that grows as stdin arrives
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON

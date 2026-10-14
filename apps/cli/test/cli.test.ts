@@ -325,6 +325,98 @@ const until = async (check: () => boolean) => {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 10))
 }
 
+describe("apps", () => {
+  async function withBot() {
+    const owner = await loggedIn()
+    await owner.run("admin", "add-app", "Writer", "--json")
+    const { bot_token } = JSON.parse(owner.out) as { bot_token: string }
+    owner.clear()
+    const bot = (opts: Parameters<typeof memoryIo>[0] = {}) =>
+      memoryIo({ ...opts, env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: bot_token } })
+    return { owner, bot }
+  }
+
+  it("streams piped markdown into one message, piece by piece, after a status", async () => {
+    const { owner, bot } = await withBot()
+    await owner.run("send", "#general", "Résumez, s'il vous plaît", "--json")
+    const { ts: question } = JSON.parse(owner.out) as { ts: string }
+    owner.clear()
+    // A piece over Slack's 12,000 characters goes in several appends.
+    const long = "長".repeat(12_001)
+    const cli = bot({ stdinChunks: ["**Résumé**", " : 早安", "", ` ${long}`] })
+    expect(
+      await cli.run(
+        "stream",
+        "#general",
+        "--thread",
+        question,
+        "--status",
+        "is thinking…",
+        "--blocks",
+        '[{"type":"divider"}]',
+      ),
+    ).toBe(0)
+    expect(cli.err).toMatch(/^Streaming to #general \(ts \d+\.\d+\)\n$/)
+    expect(cli.out).toMatch(/^Streamed 12017 characters to #general/)
+    expect(await owner.run("history", "#general", "--thread", question, "--json")).toBe(0)
+    const [, reply] = JSON.parse(owner.out) as { text: string; blocks: { type: string }[]; streaming_state: string }[]
+    expect(reply).toMatchObject({ text: `**Résumé** : 早安 ${long}`, streaming_state: "completed" })
+    expect(reply!.blocks.map((b) => b.type)).toEqual(["markdown", "divider"])
+  })
+
+  it("streams into a DM from all of stdin, and to someone named with --to", async () => {
+    const { owner, bot } = await withBot()
+    const whole = bot({ stdin: "Hola\n" })
+    expect(await whole.run("stream", "@owner", "--json")).toBe(0)
+    expect(JSON.parse(whole.out)).toMatchObject({ channel: expect.stringMatching(/^D/), message: { text: "Hola" } })
+    const named = bot({ stdinChunks: ["Annyeong"] })
+    expect(await named.run("stream", "#general", "--to", "@owner")).toBe(0)
+    expect(await owner.run("history", "#general", "-n", "1", "--json")).toBe(0)
+    expect(JSON.parse(owner.out)).toMatchObject([{ text: "Annyeong", streaming_state: "completed" }])
+  })
+
+  it("sets and clears a status", async () => {
+    const { owner, bot } = await withBot()
+    await owner.run("send", "#general", "?", "--json")
+    const { ts } = JSON.parse(owner.out) as { ts: string }
+    const cli = bot()
+    expect(await cli.run("status", "#general", ts, "is", "looking")).toBe(0)
+    expect(cli.out).toBe("Status set in #general: is looking\n")
+    cli.clear()
+    expect(await cli.run("status", "#general", ts)).toBe(0)
+    expect(cli.out).toBe("Status cleared in #general\n")
+    expect(await cli.run("status", "#general", "1.000001", "x")).toBe(1)
+    expect(cli.err).toContain("invalid_thread_ts")
+  })
+
+  it("says what's missing", async () => {
+    const { owner, bot } = await withBot()
+    const cli = bot({ stdinChunks: ["x"] })
+    expect(await cli.run("stream")).toBe(2)
+    expect(await cli.run("stream", "#general", "--status", "x")).toBe(2)
+    expect(cli.err).toContain("--status needs --thread")
+    expect(await cli.run("stream", "#general", "--blocks", "{")).toBe(2)
+    expect(cli.err).toContain("--blocks wants a JSON array")
+    expect(await cli.run("stream", "#general")).toBe(2)
+    expect(cli.err).toContain("give --to @person or --thread")
+    expect(await bot().run("stream", "#general")).toBe(2)
+    expect(await cli.run("status", "#general")).toBe(2)
+    // A thread whose first message is gone has no one to answer.
+    await owner.run("send", "#general", "gone soon", "--json")
+    const { ts } = JSON.parse(owner.out) as { ts: string }
+    await owner.run("delete", "#general", ts)
+    expect(await cli.run("stream", "#general", "--thread", ts)).toBe(1)
+    // A person's token is told to use a bot's.
+    const person = memoryIo({
+      stdinChunks: ["x"],
+      env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: owner.config!.profiles.default!.token! },
+    })
+    expect(await person.run("stream", "#general", "--to", "@me")).toBe(2)
+    expect(person.err).toContain("stream acts as an app: use its bot token")
+    expect(await person.run("status", "#general", "1.000001")).toBe(2)
+  })
+})
+
 describe("listen", () => {
   it("streams RTM events until interrupted", async () => {
     const cli = await loggedIn()
