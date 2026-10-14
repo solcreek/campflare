@@ -39,6 +39,7 @@ own stack; `--fresh` starts over and `--no-seed` leaves the server empty.
 pnpm otui                                       # opentui-slack against it (from ~/Projects/solcreek/opentui-slack)
 set -a; . apps/server/.wrangler/campflare-dev.env; set +a
 node apps/cli/dist/index.mjs send '#dev' "hello"  # the CLI, as @alex
+CAMPFLARE_TOKEN=$CAMPFLARE_BOT_TOKEN node apps/cli/dist/index.mjs send '#dev' "beep"  # as the seeded app's bot
 ```
 
 The app runs against the same server and signs in by itself in development
