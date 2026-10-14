@@ -125,4 +125,36 @@ describe("@campflare/core against the server", () => {
     expect(minjun.getState().unread[dm]).toBe(1)
     minjun.stop()
   })
+
+  it("shows an app's thread status to someone who connects after it was set, and stops its stream", async () => {
+    const bot = createClient({ url: base, token: seeded.botToken })
+    const general = seeded.channels.general!
+    const owner = createClient({ url: base, token: seeded.owner })
+    const { ts: question } = await owner.call<{ ok: boolean; ts: string }>("chat.postMessage", {
+      channel: general,
+      text: "¿Qué hora es?",
+    })
+    await bot.call("assistant.threads.setStatus", { channel_id: general, thread_ts: question, status: "is checking" })
+    const { ts } = await bot.call<{ ok: boolean; ts: string }>("chat.startStream", {
+      channel: general,
+      thread_ts: question,
+      markdown_text: "Il est",
+      recipient_user_id: alex.getState().self!.userId,
+      recipient_team_id: seeded.teamId,
+    })
+    // The reply ended the status; a new one comes after it.
+    await bot.call("assistant.threads.setStatus", { channel_id: general, thread_ts: question, status: "is counting" })
+
+    const late = createWorkspace({ client: createClient({ url: base, token: seeded.people.vincent! }) })
+    await late.start()
+    const key = keyOf(general, question)
+    await until(late, () => late.getState().statuses[key]?.status === "is counting")
+
+    await late.stopStream(general, ts)
+    await until(alex, () => alex.getState().messages[keyOf(general, ts)]?.streaming_state === "completed")
+    await expect(bot.call("chat.appendStream", { channel: general, ts, markdown_text: " midi" })).rejects.toThrow(
+      "stopped_by_user",
+    )
+    late.stop()
+  })
 })
