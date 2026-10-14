@@ -46,12 +46,26 @@ Workspace
 
 Admin (Campflare only)
   admin add-user <handle> [--email <e>] [--name <real name>] [--admin]
-  admin add-app <name>             a bot token and a Socket Mode app token
+  admin add-app <name>             a bot token, a Socket Mode app token and a signing secret
+  admin app <app id> [--request-url <url>] [--events <a,b>]
+                                   an app's settings; set where its events are POSTed
+                                   (checked with url_verification; '' stops) and which
   token create [--label <l>]   token list   token revoke <id>
 
 Global: --profile <name>, --json. Exit codes: 0 ok, 1 API error, 2 usage.`
 
 type Values = Record<string, string | boolean | (string | boolean)[] | undefined>
+
+type AppSettings = {
+  ok: boolean
+  app: {
+    id: string
+    name: string
+    bot_user_id: string
+    signing_secret: string
+    event_subscriptions: { request_url: string | null; events: string[] | null }
+  }
+}
 
 const COMMON: ParseArgsConfig["options"] = {
   profile: { type: "string" },
@@ -526,6 +540,8 @@ const commands: Record<string, Command> = {
       email: { type: "string" },
       name: { type: "string" },
       admin: { type: "boolean" },
+      "request-url": { type: "string" },
+      events: { type: "string" },
     })
     const s = await session(io, values)
     if (sub === "add-user") {
@@ -550,13 +566,35 @@ const commands: Record<string, Command> = {
         app: { id: string; bot_user_id: string }
         bot_token: string
         app_token: string
+        signing_secret: string
       }>("campflare.apps.create", { name })
       if (values.json) return s.print(res)
       io.stdout(
-        `Created app ${res.app.id} (bot user ${res.app.bot_user_id})\nBot token: ${res.bot_token}\nApp token: ${res.app_token}\n`,
+        `Created app ${res.app.id} (bot user ${res.app.bot_user_id})\nBot token: ${res.bot_token}\nApp token: ${res.app_token}\n` +
+          `Signing secret: ${res.signing_secret}\n` +
+          `Events come over Socket Mode (the app token), or over HTTP: campflare admin app ${res.app.id} --request-url <url>\n`,
+      )
+    } else if (sub === "app") {
+      const [app] = positionals
+      if (!app) throw new UsageError("admin app needs an app id (from admin add-app)")
+      const url = str(values["request-url"])
+      const events = str(values.events)
+      const res =
+        url === undefined && events === undefined
+          ? await s.client.call<AppSettings>("campflare.apps.info", { app })
+          : await s.client.call<AppSettings>("campflare.apps.setEventSubscriptions", {
+              app,
+              ...(url === undefined ? {} : { request_url: url }),
+              ...(events === undefined ? {} : { events }),
+            })
+      if (values.json) return s.print(res)
+      const { id, name, bot_user_id, signing_secret, event_subscriptions: subs } = res.app
+      io.stdout(
+        `App ${id} (${name}), bot user ${bot_user_id}\nSigning secret: ${signing_secret}\n` +
+          `Request URL: ${subs.request_url ?? "none (Socket Mode only)"}\nEvents: ${subs.events?.join(", ") ?? "all"}\n`,
       )
     } else {
-      throw new UsageError("admin commands: add-user, add-app")
+      throw new UsageError("admin commands: add-user, add-app, app")
     }
   },
 
