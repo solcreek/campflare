@@ -258,6 +258,16 @@ describe("workspace", () => {
     expect(await cli.run("invite", "#dev")).toBe(2)
   })
 
+  it("lets a bot name public channels it hasn't joined, as it may post there", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("admin", "add-app", "Poster", "--json")).toBe(0)
+    const { bot_token } = JSON.parse(cli.out) as { bot_token: string }
+    const bot = memoryIo({ env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: bot_token } })
+    expect(await bot.run("send", "#general", "from the bot")).toBe(0)
+    expect(await bot.run("send", "#nowhere", "x")).toBe(2)
+    expect(bot.err).toContain("you're not in #nowhere")
+  })
+
   it("adds apps and calls raw API methods", async () => {
     const cli = await loggedIn()
     expect(await cli.run("admin", "add-app", "Deploy", "Bot")).toBe(0)
