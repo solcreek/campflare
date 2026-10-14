@@ -37,6 +37,7 @@ export function ConversationView({
 }: ConversationViewProps) {
   const workspace = useWorkspace()
   const conversation = useWorkspaceState((s) => s.conversations[channel])
+  const known = Boolean(conversation)
   const title = useWorkspaceState((s) => (conversation ? conversationTitle(s, conversation) : channel))
   const line = useWorkspaceState((s) => s.timelines[channel])
   const messagesById = useWorkspaceState((s) => s.messages)
@@ -52,8 +53,9 @@ export function ConversationView({
   const drop = useFileDrop((files) => composer.current?.attach(files))
 
   useEffect(() => {
-    if (!loaded) workspace.loadHistory(channel).catch(reportError("load messages"))
-  }, [workspace, channel, loaded])
+    // Not for a conversation that isn't there: the not-found view says so, without an error toast too.
+    if (!loaded && known) workspace.loadHistory(channel).catch(reportError("load messages"))
+  }, [workspace, channel, loaded, known])
 
   // Again for each page that comes in (oldest moves) while the message is still further back.
   useEffect(() => {

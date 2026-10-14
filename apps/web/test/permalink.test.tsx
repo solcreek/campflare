@@ -116,10 +116,11 @@ describe("links to a message", () => {
 
   it("show a not-found view for a conversation that isn't there, with a way back", async () => {
     const user = userEvent.setup()
-    await openAt("#/CNOPE/1700000200.000000?msg=1700000300.000000")
+    const server = await openAt("#/CNOPE/1700000200.000000?msg=1700000300.000000")
     expect(await screen.findByRole("heading", { name: "Conversation not found", level: 1 })).toBeTruthy()
-    // No thread panel for a conversation that isn't there.
+    // No thread panel for a conversation that isn't there, and no attempt (and error toast) to load it.
     expect(screen.queryByRole("complementary", { name: "Thread" })).toBeNull()
+    expect(server.api.calls.filter((c) => c.args.channel === "CNOPE")).toEqual([])
     await user.click(screen.getByRole("button", { name: "Back to your conversations" }))
     await screen.findByRole("heading", { name: "general", level: 1 })
     expect(window.location.hash).toBe("#/CGEN")
