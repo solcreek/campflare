@@ -1,10 +1,12 @@
-import type { Message, MessageBlock } from "@campflare/core"
+import { planOf, taskOf, type Message, type MessageBlock, type Task } from "@campflare/core"
+import { PlanView, TaskList } from "./message-tasks"
 import { Markdown, Mrkdwn } from "./mrkdwn"
 
-// What a message says. Text is mrkdwn; a message with markdown blocks (what an
-// app streams with chat.startStream, or posts as a markdown block) shows its
-// blocks instead, in order: markdown, and the text of sections, headers and
-// context. Blocks that act (buttons, feedback buttons) are MessageBlocks's.
+// What a message says. Text is mrkdwn; a message with markdown, task_card or
+// plan blocks (what an app streams with chat.startStream, or posts as such
+// blocks) shows its blocks instead, in order: markdown, tasks and plans, and
+// the text of sections, headers and context. Blocks that act (buttons,
+// feedback buttons) are MessageBlocks's.
 
 interface TextObject {
   type?: string
@@ -44,13 +46,32 @@ function BlockView({ block }: { block: MessageBlock }) {
     }
     case "divider":
       return <hr className="my-2" />
+    case "plan": {
+      const plan = planOf(block)
+      return plan ? <PlanView plan={plan} /> : null
+    }
     default:
       return null
   }
 }
 
+/** The blocks to show in order, with consecutive task cards as one list. */
+function pieces(blocks: MessageBlock[]): (MessageBlock | Task[])[] {
+  const out: (MessageBlock | Task[])[] = []
+  for (const block of blocks) {
+    const task = taskOf(block)
+    const last = out.at(-1)
+    if (!task) out.push(block)
+    else if (Array.isArray(last)) last.push(task)
+    else out.push([task])
+  }
+  return out
+}
+
+const SHOWN = new Set(["markdown", "task_card", "plan"])
+
 /** Whether a message reads from its blocks rather than its text. */
-export const showsBlocks = (m: Pick<Message, "blocks">) => Boolean(m.blocks?.some((b) => b.type === "markdown"))
+export const showsBlocks = (m: Pick<Message, "blocks">) => Boolean(m.blocks?.some((b) => SHOWN.has(b.type)))
 
 export function MessageBody({ message }: { message: Message }) {
   const streaming = message.streaming_state === "in_progress"
@@ -58,9 +79,9 @@ export function MessageBody({ message }: { message: Message }) {
     <>
       {showsBlocks(message) ? (
         <div className="space-y-1">
-          {message.blocks!.map((block, i) => (
-            <BlockView key={i} block={block} />
-          ))}
+          {pieces(message.blocks!).map((piece, i) =>
+            Array.isArray(piece) ? <TaskList key={i} tasks={piece} /> : <BlockView key={i} block={piece} />,
+          )}
         </div>
       ) : (
         <Mrkdwn text={message.text ?? ""} />
