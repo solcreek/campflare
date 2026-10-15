@@ -181,6 +181,16 @@ export const NEEDS: Record<string, Need> = {
   "campflare.invites.create": ["admin.invites:write"],
   "campflare.invites.revoke": ["admin.invites:write"],
   "campflare.invites.list": ["admin.invites:read"],
+  // Importing an export (docs/import.md): plus the admin role.
+  "campflare.import.start": ["admin.import:write"],
+  "campflare.import.users": ["admin.import:write"],
+  "campflare.import.conversations": ["admin.import:write"],
+  "campflare.import.messages": ["admin.import:write"],
+  "campflare.import.files": ["admin.import:write"],
+  "campflare.import.finish": ["admin.import:write"],
+  "campflare.import.undo": ["admin.import:write"],
+  "campflare.import.status": ["admin.import:read"],
+  "campflare.import.list": ["admin.import:read"],
   // The link's code is the credential (docs/invites.md).
   "campflare.invites.accept": [],
   "campflare.users.resetPassword": [],
@@ -288,6 +298,8 @@ export const FULL_USER_SCOPES = [
   "admin.users:write",
   "admin.invites:read",
   "admin.invites:write",
+  "admin.import:read",
+  "admin.import:write",
 ]
 
 export const DEFAULT_BOT_SCOPES = [

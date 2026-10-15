@@ -231,10 +231,18 @@ export async function removeMember(ctx: Ctx<Actor>, c: ConversationRow, userId: 
   return true
 }
 
+/** What a channel name may hold: lower case letters (any script's), digits, - and _. */
+export const CHANNEL_NAME_CHARS = "\\p{Ll}\\p{Lo}\\p{N}_-"
+export const MAX_CHANNEL_NAME = 80
+
 /** Slack channel names: lower case, digits, - and _, at most 80 characters. */
 export function validChannelName(name: string): string {
   const normalized = name.replace(/^#/, "").trim().toLowerCase()
-  if (!normalized || normalized.length > 80 || !/^[\p{Ll}\p{Lo}\p{N}_-]+$/u.test(normalized)) {
+  if (
+    !normalized ||
+    normalized.length > MAX_CHANNEL_NAME ||
+    !new RegExp(`^[${CHANNEL_NAME_CHARS}]+$`, "u").test(normalized)
+  ) {
     throw new CampflareError("invalid_name_specials")
   }
   return normalized

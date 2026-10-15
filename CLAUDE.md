@@ -95,6 +95,7 @@ macOS (no WebDriver for WKWebView).
   `src/mcp/` is the remote MCP server at `/mcp`.
 - `packages/client`: `@campflare/client`, a dependency-free Web API, Socket Mode and RTM client.
 - `apps/cli`: the `campflare` CLI, bundled by tsdown into one file with the client inlined.
+  `campflare import slack` reads an export zip with `src/zip.ts` (`test/zip-writer.ts` makes test zips).
 - `packages/core`: `@campflare/core`, app state on top of the client (see below).
   `@campflare/core/testing` has the fake Web API and WebSocket its tests and the app's use.
 - `apps/web`: the app, React + shadcn/ui on Base UI (`components.json` style
@@ -711,6 +712,29 @@ nothing) and is throttled per email and address and per address
 sender with `setEmailSender()`. Pages send `referrer-policy: same-origin` (not `no-referrer`, under which form POSTs carry `Origin: null`), since
 their URLs hold codes. Role checks and `HANDLE` live in `src/api/roles.ts`,
 email normalizing in `src/api/email-address.ts`.
+
+**Import.** `src/import/` (`docs/import.md`), methods in `src/methods/import.ts`:
+`campflare.import.*` (xoxp, admin role, `admin.import:write`/`:read`) take a
+Slack export in chunks that the client reads (the CLI's `apps/cli/src/import.ts`,
+with its own zip reader `zip.ts` on `node:zlib`). A job (`import_jobs`, migration 0026) maps the export's ids (`import_users`, `import_conversations`,
+`import_files`) and tags every row it writes (`import_job` on messages,
+reactions, members, files, users, conversations), so `campflare.import.undo`
+removes it, a bounded piece per call. People map by email, else become
+deactivated placeholders without tokens (Slackbot stays `USLACKBOT`, never a
+member: DMs with it are skipped); a taken channel name becomes `name-imported`
+unless `merge_into_existing` and the privacy matches; DMs merge by `member_key`. Messages
+keep Slack's `ts` and go in with `INSERT … SELECT FROM json_each` (`INSERT OR
+IGNORE`, so a re-sent chunk changes nothing and existing messages are never
+touched), split under D1's 2 MB argument; counts are bumped in the same batch
+with `changes()`. **Never through `postMessage`**: an import publishes no
+events and records no activity. Each chunk recounts the threads it touches
+(`recountThreads()`), so heads and replies arrive in any order; `finish` adds
+tombstone heads for orphan replies, `parent_user_id`, `thread_participants`
+and read markers (only for memberships the job added), 10 conversations per
+call. The CLI sends the source token only to Slack's https hosts. Files are a
+`[file not imported: name]` line unless the client uploads them
+(`files.getUploadURLExternal`) and `campflare.import.files` attaches them.
+Custom emoji is a seam (`importCustomEmoji()` in the CLI).
 
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches

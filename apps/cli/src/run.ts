@@ -13,6 +13,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util"
 import { activeProfile, loadConfig, saveConfig, type Profile } from "./config"
 import { deliveryLines, messageLine, plain, time, type EventDelivery } from "./format"
 import { UsageError, type Io } from "./io"
+import { importCommand } from "./import"
 import { oauthLogin, revokeToken, tokenOwner } from "./oauth"
 import { resolveConversation, resolveUser, type Conversation, type User } from "./resolve"
 
@@ -131,6 +132,14 @@ Admin (Campflare only)
   admin reset-password <@person> [--expires 1h]
                                    a single-use link that sets a new password (an admin's for
                                    a member, an owner's for an admin); printed on stdout
+  import slack <export.zip> [--dry-run] [--files skip|download --slack-token xoxp-…]
+               [--merge-into-existing]
+                                   bring a Slack export's people, conversations and history
+                                   (admins); silent: no notifications. Re-run to continue.
+                                   Files stay a line each unless downloaded with a token of
+                                   the exported workspace; a taken channel name becomes
+                                   name-imported unless merged; --dry-run writes nothing
+  import status [<job>]            import undo <job>   (within 7 days of finishing)
   token create [--preset read|write|full] [--scopes a,b] [--expires 1h|7d|<seconds>] [--label <l>]
                                    a token for a script or an agent: the preset and scopes
                                    together, never more than this token holds; prints the
@@ -335,7 +344,7 @@ const COMMON: ParseArgsConfig["options"] = {
   help: { type: "boolean", short: "h" },
 }
 
-function parse(argv: string[], options: ParseArgsConfig["options"] = {}) {
+export function parse(argv: string[], options: ParseArgsConfig["options"] = {}) {
   try {
     const { values, positionals } = parseArgs({
       args: argv,
@@ -348,9 +357,9 @@ function parse(argv: string[], options: ParseArgsConfig["options"] = {}) {
   }
 }
 
-const str = (v: Values[string]) => (typeof v === "string" ? v : undefined)
+export const str = (v: Values[string]) => (typeof v === "string" ? v : undefined)
 
-interface Session {
+export interface Session {
   io: Io
   profile: Profile
   client: Client
@@ -360,7 +369,7 @@ interface Session {
   print(value: unknown): void
 }
 
-async function session(io: Io, values: Values): Promise<Session> {
+export async function session(io: Io, values: Values): Promise<Session> {
   const profile = await activeProfile(io, str(values.profile))
   if (!profile.token) throw new UsageError("this profile has no token: run `campflare login`")
   const client = createClient({ url: profile.url, token: profile.token, fetch: io.fetch })
@@ -568,6 +577,8 @@ const LEVELS = ["all", "mentions", "none"]
 type Prefs = { notifications: { default: string; conversations: Record<string, string> } }
 
 const commands: Record<string, Command> = {
+  import: importCommand,
+
   async login(argv, io) {
     const { values } = parse(argv, {
       url: { type: "string" },

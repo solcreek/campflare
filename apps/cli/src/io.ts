@@ -1,4 +1,5 @@
 import type { Fetch } from "@campflare/client"
+import type { RandomAccess } from "./zip"
 
 /** Everything the CLI touches outside itself, so tests can stand in for it. */
 export interface Io {
@@ -12,6 +13,8 @@ export interface Io {
   secret?(prompt: string): Promise<string>
   env: Record<string, string | undefined>
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>
+  /** Opens a file to read by offset (a big zip); without it, readFile reads it whole. */
+  openFile?(path: string): Promise<RandomAccess>
   readConfig(): Promise<string | undefined>
   writeConfig(text: string): Promise<void>
   configPath: string
