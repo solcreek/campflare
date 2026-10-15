@@ -360,6 +360,24 @@ describe("reduce", () => {
     expect(unseen.pins.C1?.map((p) => p.ts)).toEqual(["0000000900.000000"])
   })
 
+  it("takes pinned_to and is_starred from the server's copies", () => {
+    const ts = "0000000200.000000"
+    const key = keyOf("C1", ts)
+    let s = run(ready, history([msg(ts, { pinned_to: ["C1"], is_starred: true })]))
+    // An edit's message_changed carries pinned_to when pinned: without it, the message was unpinned.
+    s = reduce(s, event({ channel: "C1", subtype: "message_changed", message: { ts, user: "U2", text: "editado" } }))
+    expect(s.messages[key]).not.toHaveProperty("pinned_to")
+    // is_starred is the caller's, which events never carry: it stays.
+    expect(s.messages[key]?.is_starred).toBe(true)
+    const changed = { ts, user: "U2", text: "編集", pinned_to: ["C1"] }
+    s = reduce(s, event({ channel: "C1", subtype: "message_changed", message: changed }))
+    expect(s.messages[key]?.pinned_to).toEqual(["C1"])
+    // A reloaded page is the whole truth for both.
+    s = reduce(s, history([msg(ts)]))
+    expect(s.messages[key]).not.toHaveProperty("pinned_to")
+    expect(s.messages[key]).not.toHaveProperty("is_starred")
+  })
+
   it("keeps a conversation's bookmarks bar in rank order", () => {
     const bm = (id: string, rank: string, title = id) => ({
       id,

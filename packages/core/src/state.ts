@@ -249,6 +249,19 @@ function pendingTwin(state: WorkspaceState, m: Message): string | undefined {
   return list?.keys.find((k) => standsFor(m, state.messages[k]))
 }
 
+/**
+ * A newer copy of a known message over the old one. Local fields (pending,
+ * failed…) stay unless the copy sets them. pinned_to is the server's to say:
+ * every copy it sends carries it when pinned, so a copy without it means
+ * unpinned. is_starred is not: it's the caller's alone, and events (sent to
+ * everyone) never carry it, so it changes by star events and page loads only.
+ */
+function merge(known: Message, m: Message): Message {
+  const next = { ...known, ...m }
+  if (!m.pending && !("pinned_to" in m)) delete next.pinned_to
+  return next
+}
+
 /** Adds or replaces a message, filing it under its conversation or its thread. */
 function upsert(state: WorkspaceState, m: Message): WorkspaceState {
   // RTM's copy of your message can beat chat.postMessage's or an upload's answer: it takes the pending one's place.
@@ -256,7 +269,7 @@ function upsert(state: WorkspaceState, m: Message): WorkspaceState {
   if (twin) state = remove(state, m.channel, state.messages[twin]!.ts)
   const key = keyOf(m.channel, m.ts)
   const known = state.messages[key]
-  const messages = { ...state.messages, [key]: known ? { ...known, ...m } : m }
+  const messages = { ...state.messages, [key]: known ? merge(known, m) : m }
   if (isReply(m)) {
     const threadKey = keyOf(m.channel, m.thread_ts!)
     const thread = state.threads[threadKey] ?? { keys: [], hasMore: false }
