@@ -488,14 +488,27 @@ describe("campflare.import", () => {
       { ts: "1700000000.000001", user: "U03", text: "Mise à jour du design · デザイン更新" },
       // An imported reply to a message that was here: the head's thread counts it.
       { ts: "1700000000.000002", user: "U04", text: "Una respuesta · 返信", thread_ts: existing.ts },
+      // Newer than what was here.
+      { ts: "1990000000.000001", user: "U03", text: "Futuro · 未来" },
     ])
-    expect(res).toMatchObject({ imported: 2, skipped: 1 })
+    expect(res).toMatchObject({ imported: 3, skipped: 1 })
     const head = (await history(w.owner.token, design)).find((m) => m.ts === existing.ts)!
     expect(head).toMatchObject({ thread_ts: existing.ts, reply_count: 1, latest_reply: "1700000000.000002" })
     const list = await history(w.owner.token, design)
     expect(list.find((m) => m.ts === existing.ts)!.text).toBe("Ours")
     expect(list.map((m) => m.text)).toContain("Mise à jour du design · デザイン更新")
-    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 2, messages_skipped: 1 })
+    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 3, messages_skipped: 1 })
+    // Finishing marks history read for the people the import added, never past what was here; the rest keep theirs.
+    const lastRead = () =>
+      env.DB.prepare("SELECT user_id, last_read FROM members WHERE conversation_id = ? ORDER BY user_id")
+        .bind(design)
+        .all<{ user_id: string; last_read: string }>()
+    const before = new Map((await lastRead()).results.map((r) => [r.user_id, r.last_read]))
+    await finish(w.owner.token, job.id)
+    const after = new Map((await lastRead()).results.map((r) => [r.user_id, r.last_read]))
+    expect(after.get(w.owner.id)).toBe(before.get(w.owner.id))
+    const added = [...after].filter(([user]) => !before.has(user) || before.get(user) !== after.get(user))
+    expect(added.map(([, read]) => read)).toEqual([existing.ts])
 
     // A DM with the same people goes into the existing one, merge or not.
     const job2 = await start(w.owner.token)

@@ -53,6 +53,7 @@ export async function finishImport(ctx: Ctx<Actor>) {
 function finishConversation(db: D1Database, job: ImportJobRow, id: string): D1PreparedStatement[] {
   const replies = "channel_id = ?1 AND import_job = ?2 AND thread_ts IS NOT NULL AND thread_ts <> ts"
   const newest = "(SELECT max(ts) FROM messages WHERE channel_id = ?1 AND import_job = ?2)"
+  const others = "(SELECT max(ts) FROM messages WHERE channel_id = ?1 AND import_job IS NOT ?2 AND deleted = 0)"
   return [
     // A thread whose head isn't in the export (Slack drops deleted heads): a tombstone head, as chat.delete leaves.
     stmt(
@@ -88,11 +89,12 @@ function finishConversation(db: D1Database, job: ImportJobRow, id: string): D1Pr
       id,
       job.id,
     ),
-    // History arrives read.
+    // History arrives read, for the memberships the job added only: anyone who was here keeps their
+    // unread messages. And never past a message that was here (or came meanwhile): those are news.
     stmt(
       db,
-      `UPDATE members SET last_read = max(last_read, ${newest})
-       WHERE conversation_id = ?1 AND ${newest} IS NOT NULL`,
+      `UPDATE members SET last_read = max(last_read, coalesce(min(${newest}, ${others}), ${newest}))
+       WHERE conversation_id = ?1 AND import_job = ?2 AND ${newest} IS NOT NULL`,
       id,
       job.id,
     ),
