@@ -10,7 +10,8 @@ import { conversationId, userIdOf } from "./resolve"
 const INSTRUCTIONS = `Campflare is a team chat workspace (Slack-compatible). You act as the user who owns the token.
 Conversations can be named "#channel", "@handle" (your DM with that person) or by id (C…, D…, G…).
 Messages are identified by their conversation and "ts"; a thread is its first message's ts.
-Use get_events or wait_for_reply to see what happens next instead of re-reading history in a loop.`
+Use get_events or wait_for_reply to see what happens next instead of re-reading history in a loop.
+Asked what needs your attention (mentions, direct messages, replies, reactions), use get_activity.`
 
 const conversation = z.string().min(1).describe('"#channel", "@handle" for a direct message, or a conversation id')
 
@@ -282,6 +283,71 @@ export function buildServer(caller: Caller): McpServer {
         cursor: res.cursor,
         has_more: res.has_more,
       }
+    }),
+  )
+
+  server.registerTool(
+    "get_activity",
+    {
+      title: "Get activity",
+      description:
+        "What needs your attention, newest first: messages that mention you, direct messages, replies in threads you are in, and reactions to your messages. Unread only unless asked otherwise.",
+      inputSchema: z.object({
+        unread_only: z.boolean().default(true),
+        types: z
+          .array(z.enum(["mention", "dm", "thread_reply", "reaction"]))
+          .optional()
+          .describe("Which kinds (default: all)"),
+        limit: z.number().int().min(1).max(100).default(20),
+        cursor: z.string().optional().describe("next_cursor from the previous call, for older items"),
+      }),
+      annotations: READ,
+    },
+    tool(async ({ unread_only, types, limit, cursor }) => {
+      const [res, dir] = await Promise.all([
+        invoke<{
+          items: (Record<string, unknown> & { message?: RawMessage; actor?: string; thread_ts?: string })[]
+          unread: Record<string, number>
+          response_metadata: { next_cursor: string }
+        }>(caller, "campflare.activity.list", { unread_only, types: types?.join(","), limit, cursor }),
+        directory(caller),
+      ])
+      return {
+        unread: res.unread,
+        items: res.items.map((i) => ({
+          id: i.id,
+          type: i.type,
+          conversation: i.channel,
+          ts: i.ts,
+          ...(i.thread_ts ? { thread_ts: i.thread_ts } : {}),
+          by: dir.name(i.actor),
+          ...(i.reaction ? { emoji: i.reaction } : {}),
+          ...(i.message ? { message: compactMessage(i.message, dir) } : {}),
+          ...(i.is_read ? { read: true } : {}),
+        })),
+        ...(res.response_metadata.next_cursor ? { next_cursor: res.response_metadata.next_cursor } : {}),
+      }
+    }),
+  )
+
+  server.registerTool(
+    "mark_activity_read",
+    {
+      title: "Mark activity read",
+      description: "Mark activity items read once handled: some by id (from get_activity), or all of them.",
+      inputSchema: z.object({
+        ids: z.array(z.string()).optional().describe("The items' ids"),
+        all: z.boolean().optional().describe("Mark everything read"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    tool(async ({ ids, all }) => {
+      const res = await invoke<{ marked: number; unread: Record<string, number> }>(
+        caller,
+        "campflare.activity.mark",
+        all ? { all: true } : { ids: ids?.join(",") },
+      )
+      return { marked: res.marked, unread: res.unread }
     }),
   )
 

@@ -53,9 +53,11 @@ describe("MCP over Streamable HTTP", () => {
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).toSorted()).toEqual([
       "add_reaction",
+      "get_activity",
       "get_events",
       "list_conversations",
       "list_people",
+      "mark_activity_read",
       "read_messages",
       "read_thread",
       "search_messages",
@@ -157,6 +159,45 @@ describe("MCP over Streamable HTTP", () => {
       arguments: { conversation: "@nobody", text: "x" },
     })) as ToolResult
     expect(nobody.content[0]!.text).toBe("error: user_not_found")
+    await client.close()
+  })
+
+  it("tells an agent what needs its attention, and marks it handled", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const client = await connect(w.owner.token)
+    const { ts } = await ok<{ ts: string }>(
+      "chat.postMessage",
+      { channel: w.general, text: `<@${w.owner.id}> ¿puedes revisar? 请看一下` },
+      bob.token,
+    )
+    await ok("reactions.add", { channel: w.general, timestamp: ts, name: "eyes" }, w.owner.token)
+    const mine = await ok<{ ts: string }>("chat.postMessage", { channel: w.general, text: "Bericht" }, w.owner.token)
+    await ok("reactions.add", { channel: w.general, timestamp: mine.ts, name: "heart" }, bob.token)
+
+    const activity = await callTool<{ unread: Record<string, number>; items: Record<string, unknown>[] }>(
+      client,
+      "get_activity",
+    )
+    expect(activity.unread).toMatchObject({ total: 2, mention: 1, reaction: 1 })
+    expect(activity.items).toEqual([
+      expect.objectContaining({ type: "reaction", emoji: "heart", by: "@bob", ts: mine.ts }),
+      expect.objectContaining({
+        type: "mention",
+        conversation: w.general,
+        by: "@bob",
+        message: expect.objectContaining({ from: "@bob", text: expect.stringContaining("请看") }),
+      }),
+    ])
+    const mentions = await callTool<{ items: { id: string }[] }>(client, "get_activity", { types: ["mention"] })
+    expect(await callTool(client, "mark_activity_read", { ids: [mentions.items[0]!.id] })).toMatchObject({
+      marked: 1,
+      unread: { total: 1 },
+    })
+    const all = await callTool<{ items: Record<string, unknown>[] }>(client, "get_activity", { unread_only: false })
+    expect(all.items.map((i) => i.read ?? false)).toEqual([false, true])
+    expect(await callTool(client, "mark_activity_read", { all: true })).toMatchObject({ unread: { total: 0 } })
+    expect((await callTool<{ items: unknown[] }>(client, "get_activity")).items).toEqual([])
     await client.close()
   })
 
