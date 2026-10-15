@@ -64,6 +64,8 @@ export interface Client {
    * are sent the token; any other URL throws without a request.
    */
   fetchFile(url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response>
+  /** The token's scopes, as the server reports them on auth.test (`x-oauth-scopes`, as Slack does). */
+  scopes(): Promise<string[]>
 }
 
 export function apiBase(url: string): string {
@@ -98,6 +100,13 @@ export function createClient(options: ClientOptions): Client {
       if (!data.ok) throw new ApiError(method, data)
       return data as T
     }
+  }
+
+  async function scopes(): Promise<string[]> {
+    const res = await fetch(`${base}auth.test`, { method: "POST", headers: auth, body: form({}) })
+    const data = (await res.json().catch(() => ({ ok: false, error: `http_${res.status}` }))) as ApiResult
+    if (!data.ok) throw new ApiError("auth.test", data)
+    return (res.headers.get("x-oauth-scopes") ?? "").split(",").filter(Boolean)
   }
 
   async function paginate<T>(method: string, key: string, args: ApiArgs = {}): Promise<T[]> {
@@ -143,5 +152,5 @@ export function createClient(options: ClientOptions): Client {
     return fetch(target.href, { headers: { ...init.headers, ...auth }, signal: init.signal })
   }
 
-  return { url: options.url, call, paginate, upload, fetchFile }
+  return { url: options.url, call, paginate, upload, fetchFile, scopes }
 }

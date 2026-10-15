@@ -148,3 +148,18 @@ describe("fetchFile", () => {
     expect(seen).toHaveLength(2)
   })
 })
+
+describe("scopes", () => {
+  it("reads the token's scopes from auth.test's x-oauth-scopes", async () => {
+    const { fetch, seen } = fakeFetch([
+      json({ ok: true, user_id: "U1" }, { headers: { "x-oauth-scopes": "chat:write,channels:read" } }),
+      json({ ok: true }),
+      json({ ok: false, error: "invalid_auth" }),
+    ])
+    const client = createClient({ url: "https://x.test", token: "xoxp-1", fetch })
+    expect(await client.scopes()).toEqual(["chat:write", "channels:read"])
+    expect(seen[0]!.url).toBe("https://x.test/api/auth.test")
+    expect(await client.scopes()).toEqual([])
+    await expect(client.scopes()).rejects.toBeInstanceOf(ApiError)
+  })
+})
