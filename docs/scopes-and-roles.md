@@ -105,9 +105,11 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `calls:read` / `calls:write`   | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
-could see, not only those their other scopes allow. Filtering events by scope
-is possible later; until then they are their own scopes, so a narrow token
-simply can't stream.
+could see, not only those their other scopes allow. Until events are filtered
+by scope, each feed wants its own scope **and** every type's `:history`
+(`{ all: […] }` in `NEEDS`; `scopes_required: "all"` in
+`campflare.methods.list`), so a token can't read live what
+`conversations.history` would refuse it.
 
 ### No escalation
 
@@ -231,8 +233,8 @@ it.
 
 ## CLI
 
-- `campflare whoami` adds the role and the token's scopes (`client.scopes()`
-  in `@campflare/client` reads `x-oauth-scopes`).
+- `campflare whoami` adds the role and the token's scopes (`client.authTest()`
+  in `@campflare/client` answers auth.test with its `x-oauth-scopes`).
 - `campflare token create [--preset read|write|full] [--scopes a,b] [--expires 30m|12h|7d|<seconds>] [--label l] [--json]`
   prints the token alone on stdout (`TOKEN=$(campflare token create …)`) and
   what it holds on stderr.
@@ -245,7 +247,8 @@ it.
 ## Later
 
 - Filtering the live feeds (`rtm:stream`, `events:read`) by the token's other
-  scopes, so a narrow token can stream what it may read.
+  scopes, so a narrow token can stream what it may read (today a feed wants
+  every type's `:history`).
 - Guests (`is_restricted`, `is_ultra_restricted`).
 - A primary owner, distinct from the other owners, with ownership transfer.
 - `last_used` on tokens, so stale agent tokens can be found and revoked.

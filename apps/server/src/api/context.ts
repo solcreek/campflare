@@ -67,5 +67,5 @@ export function authorize(name: string, def: MethodDef, auth: Auth): Verb | unde
   if (!allowed) throw new CampflareError("not_allowed_token_type")
   const need = NEEDS[name] ?? []
   checkMethodScopes(auth, need)
-  return Array.isArray(need) ? undefined : need.conversation
+  return "conversation" in need ? need.conversation : undefined
 }

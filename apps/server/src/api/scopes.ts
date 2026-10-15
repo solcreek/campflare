@@ -8,8 +8,8 @@ import { CampflareError } from "./errors"
 /** What a conversation method does to the conversation it names. */
 export type Verb = "read" | "history" | "write"
 
-/** No scope; any one of these; or the verb's scope for the conversation's type. */
-export type Need = string[] | { conversation: Verb }
+/** No scope; any one of these; every one of these; or the verb's scope for the conversation's type. */
+export type Need = string[] | { all: string[] } | { conversation: Verb }
 
 const CONVERSATION_PREFIXES = ["channels", "groups", "im", "mpim"] as const
 
@@ -24,6 +24,8 @@ export function conversationScopes(c: Pick<ConversationRow, "kind" | "is_private
 }
 
 const conversation = (verb: Verb): Need => ({ conversation: verb })
+
+const HISTORY = ["channels:history", "groups:history", "im:history", "mpim:history"]
 
 export const NEEDS: Record<string, Need> = {
   "api.test": [],
@@ -100,8 +102,9 @@ export const NEEDS: Record<string, Need> = {
   "dnd.endDnd": ["dnd:write"],
 
   "apps.connections.open": ["connections:write"],
-  "rtm.connect": ["rtm:stream"],
-  "campflare.events.poll": ["events:read"],
+  // The live feeds carry every message the person sees, so they want every type's :history too.
+  "rtm.connect": { all: ["rtm:stream", ...HISTORY] },
+  "campflare.events.poll": { all: ["events:read", ...HISTORY] },
 
   "campflare.huddles.ice_servers": ["calls:read"],
   "campflare.huddles.info": ["calls:read"],
@@ -137,6 +140,7 @@ export const NEEDS: Record<string, Need> = {
 /** The scopes a method accepts, any one of which will do, for x-accepted-oauth-scopes and missing_scope. */
 export function acceptedScopes(need: Need): string[] {
   if (Array.isArray(need)) return need
+  if ("all" in need) return need.all
   return CONVERSATION_PREFIXES.flatMap((p) => conversationScopes(kindOf(p), need.conversation))
 }
 
@@ -156,6 +160,11 @@ export function requireScope(auth: Pick<Auth, "scopes">, accepted: string[]): vo
 
 /** The up-front check: the token holds a scope the method accepts (for some conversation type, for those). */
 export function checkMethodScopes(auth: Pick<Auth, "scopes">, need: Need): void {
+  if (!Array.isArray(need) && "all" in need) {
+    const missing = need.all.filter((s) => !auth.scopes.includes(s))
+    if (missing.length) throw missingScope(auth, missing)
+    return
+  }
   requireScope(auth, acceptedScopes(need))
 }
 

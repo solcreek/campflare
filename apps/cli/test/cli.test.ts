@@ -142,6 +142,9 @@ describe("accounts", () => {
     expect(cli.out).toContain("chat.postEphemeral")
     expect(cli.out).not.toContain("reactions.add")
     cli.clear()
+    expect(await cli.run("api", "--list", "rtm.", "--url", baseUrl)).toBe(0)
+    expect(cli.out).toContain("rtm.connect  (user, bot)  rtm:stream + channels:history + ")
+    cli.clear()
     expect(await cli.run("api", "--list", "conversations.history", "--url", baseUrl, "--json")).toBe(0)
     const listed = JSON.parse(cli.out) as {
       methods: { conversation_scope?: string }[]

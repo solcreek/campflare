@@ -405,3 +405,20 @@ describe("scope headers in a browser", () => {
     expect(res.headers.get("access-control-expose-headers")?.toLowerCase()).toContain("x-oauth-scopes")
   })
 })
+
+describe("the live feeds", () => {
+  it("want every type's :history, since they carry every message the person sees", async () => {
+    const w = await workspace()
+    const streamOnly = await narrow(w.teamId, w.owner.id, ["rtm:stream", "events:read", "channels:history"])
+    expect(await call("rtm.connect", {}, streamOnly)).toMatchObject({
+      error: "missing_scope",
+      needed: "groups:history,im:history,mpim:history",
+    })
+    await expectError("campflare.events.poll", {}, streamOnly, "missing_scope")
+    const reader = await narrow(w.teamId, w.owner.id, ["read"])
+    await ok("rtm.connect", {}, reader)
+    await ok("campflare.events.poll", {}, reader)
+    const listed = await ok<{ methods: { name: string; scopes_required?: string }[] }>("campflare.methods.list")
+    expect(listed.methods.find((m) => m.name === "rtm.connect")).toMatchObject({ scopes_required: "all" })
+  })
+})

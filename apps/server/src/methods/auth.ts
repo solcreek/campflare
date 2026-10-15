@@ -36,7 +36,8 @@ method("campflare.methods.list", "none", async () => ({
         name,
         tokens: TOKEN_KINDS[def.access],
         scopes: acceptedScopes(need),
-        ...(Array.isArray(need) ? {} : { conversation_scope: need.conversation }),
+        ...("conversation" in need ? { conversation_scope: need.conversation } : {}),
+        ...("all" in need ? { scopes_required: "all" } : {}),
       }
     })
     .toSorted((a, b) => a.name.localeCompare(b.name)),

@@ -1190,7 +1190,13 @@ async function listMethods(io: Io, values: Values, prefix = "") {
   if (!url) throw new UsageError("api --list needs a server: log in, or pass --url")
   const res = await createClient({ url, fetch: io.fetch }).call<{
     ok: boolean
-    methods: { name: string; tokens: string[]; scopes: string[]; conversation_scope?: string }[]
+    methods: {
+      name: string
+      tokens: string[]
+      scopes: string[]
+      conversation_scope?: string
+      scopes_required?: "all"
+    }[]
     presets: Record<string, string[]>
   }>("campflare.methods.list")
   const methods = res.methods.filter((m) => m.name.startsWith(prefix))
@@ -1199,7 +1205,9 @@ async function listMethods(io: Io, values: Values, prefix = "") {
     return
   }
   for (const m of methods) {
-    const scopes = m.conversation_scope ? `*:${m.conversation_scope} for the conversation's type` : m.scopes.join(" | ")
+    const scopes = m.conversation_scope
+      ? `*:${m.conversation_scope} for the conversation's type`
+      : m.scopes.join(m.scopes_required === "all" ? " + " : " | ")
     io.stdout(`${m.name}  (${m.tokens.join(", ") || "no token"})  ${scopes || "no scope"}\n`)
   }
 }
