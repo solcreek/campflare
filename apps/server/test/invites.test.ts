@@ -290,9 +290,23 @@ describe("campflare.invites.accept", () => {
     const eve = await w.addUser("eve", { is_admin: true })
     const fromEve = await invite(eve.token)
     await ok("campflare.users.setRole", { user: eve.id, role: "member" }, w.owner.token)
-    expect((await accept(fromEve.url, { name: "fred" })).error).toBe("invalid_invite")
+    expect((await accept(fromEve.url, { name: "fred" })).error).toBe("inviter_inactive")
+    // The list and the page say so too, rather than offering a form that will fail.
+    expect(await listed(w.owner.token, fromEve.invite.id)).toMatchObject({ state: "inviter_inactive" })
+    const page = await browser().go(fromEve.url)
+    expect(page.status).toBe(410)
+    expect(await page.text()).toContain("can no longer invite people")
     await ok("campflare.users.setRole", { user: eve.id, role: "admin" }, w.owner.token)
+    expect(await listed(w.owner.token, fromEve.invite.id)).toMatchObject({ state: "pending" })
     expect((await accept(fromEve.url, { name: "fred" })).ok).toBe(true)
+
+    // An admin invite needs its inviter to stay an owner; a deactivated inviter retires theirs.
+    const ada = await w.addUser("ada2", { is_admin: true })
+    const adminInvite = await invite(w.owner.token, { role: "admin" })
+    const fromAda = await invite(ada.token)
+    await ok("campflare.users.deactivate", { user: ada.id }, w.owner.token)
+    expect(await listed(w.owner.token, fromAda.invite.id)).toMatchObject({ state: "inviter_inactive" })
+    expect(await listed(w.owner.token, adminInvite.invite.id)).toMatchObject({ state: "pending" })
   })
 
   it("throttles guessing codes by address, and every attempt by rate", async () => {

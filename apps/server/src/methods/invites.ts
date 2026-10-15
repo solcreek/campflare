@@ -13,6 +13,7 @@ import {
   completeReset,
   createReset,
   INVITE_MAX_TTL,
+  INVITER_ACTIVE,
   INVITE_MAX_USES,
   INVITE_TTL,
   inviteJson,
@@ -132,7 +133,8 @@ method("campflare.invites.list", "user", async (ctx) => {
   requireAdmin(ctx)
   const rows = await all<InviteRow & { inviter_name: string }>(
     ctx.env.DB,
-    `SELECT i.*, u.name AS inviter_name FROM invites i JOIN users u ON u.id = i.inviter
+    `SELECT i.*, u.name AS inviter_name, ${INVITER_ACTIVE} AS inviter_active
+     FROM invites i JOIN users u ON u.id = i.inviter
      WHERE i.team_id = ? ORDER BY i.created DESC, i.id LIMIT ?`,
     ctx.auth.team.id,
     ctx.args.int("limit", 100, { min: 1, max: 1000 }),

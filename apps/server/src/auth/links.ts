@@ -9,6 +9,7 @@ import {
   findInvite,
   findReset,
   inviteState,
+  STATE_ERRORS,
   requestReset,
   type InviteDetails,
   type ResetDetails,
@@ -44,6 +45,7 @@ const DEAD_INVITE: Record<string, string> = {
   invite_used_up: "This invitation has been used as many times as it allows.",
   invite_revoked: "This invitation was withdrawn.",
   invalid_invite: "This invitation link doesn't work.",
+  inviter_inactive: "Whoever sent this invitation can no longer invite people.",
 }
 
 function deadInvite(url: URL, code: string): Response {
@@ -227,7 +229,7 @@ export function mountLinks(app: Hono<{ Bindings: Env }>) {
     const invite = await findInvite(c.env, c.req.param("code"))
     if (!invite) return deadInvite(url, "invalid_invite")
     const state = inviteState(invite)
-    if (state !== "pending") return deadInvite(url, `invite_${state}`)
+    if (state !== "pending") return deadInvite(url, STATE_ERRORS[state])
     return joinPage(url, invite, c.env.APP_URL)
   })
 

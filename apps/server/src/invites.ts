@@ -55,23 +55,39 @@ export interface InviteRow {
   expires: number
   revoked: number
   created: number
+  /**
+   * Whether the inviter may still make this invite (INVITER_ACTIVE): an
+   * active admin, an owner for an admin invite. Read with the invite; absent
+   * where it was just made.
+   */
+  inviter_active?: number
 }
 
-export type InviteState = "pending" | "used_up" | "expired" | "revoked"
+export type InviteState = "pending" | "used_up" | "expired" | "revoked" | "inviter_inactive"
 
-export function inviteState(invite: Pick<InviteRow, "revoked" | "expires" | "uses" | "max_uses">, now = nowSeconds()) {
+/** An invite's state. One whose inviter was demoted or deactivated is retired with their power to make it. */
+export function inviteState(
+  invite: Pick<InviteRow, "revoked" | "expires" | "uses" | "max_uses" | "inviter_active">,
+  now = nowSeconds(),
+): InviteState {
   if (invite.revoked) return "revoked"
   if (invite.uses >= invite.max_uses) return "used_up"
   if (invite.expires <= now) return "expired"
+  if (invite.inviter_active === 0) return "inviter_inactive"
   return "pending"
 }
 
-const STATE_ERRORS: Record<InviteState, string> = {
+export const STATE_ERRORS: Record<InviteState, string> = {
   pending: "invalid_invite",
   used_up: "invite_used_up",
   expired: "invite_expired",
   revoked: "invite_revoked",
+  inviter_inactive: "inviter_inactive",
 }
+
+/** SQL for an invite `i`: 1 while its inviter may still make it, else 0. The same test guards acceptInvite. */
+export const INVITER_ACTIVE = `EXISTS (SELECT 1 FROM users a WHERE a.id = i.inviter AND a.deleted = 0 AND a.is_admin = 1
+  AND (i.role = 'member' OR a.is_owner = 1))`
 
 /** An invite as the API answers it. */
 export function inviteJson(invite: InviteRow & { inviter_name?: string }) {
@@ -93,8 +109,10 @@ export function inviteJson(invite: InviteRow & { inviter_name?: string }) {
 /** An invite with what its page shows: the workspace and who invited. */
 export type InviteDetails = InviteRow & { team_name: string; inviter_name: string }
 
-const INVITE_DETAILS = `SELECT i.*, t.name AS team_name, coalesce(nullif(u.real_name, ''), u.name) AS inviter_name
-  FROM invites i JOIN teams t ON t.id = i.team_id JOIN users u ON u.id = i.inviter WHERE i.hash = ?`
+const DETAILS = `SELECT i.*, t.name AS team_name, coalesce(nullif(u.real_name, ''), u.name) AS inviter_name,
+    ${INVITER_ACTIVE} AS inviter_active
+  FROM invites i JOIN teams t ON t.id = i.team_id JOIN users u ON u.id = i.inviter`
+const INVITE_DETAILS = `${DETAILS} WHERE i.hash = ?`
 
 /** The invite a code opens, whatever its state; undefined for a code that opens none. */
 export async function findInvite(env: Env, code: string): Promise<InviteDetails | undefined> {
@@ -157,8 +175,7 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
         `INSERT INTO users (id, team_id, name, real_name, display_name, email, is_admin, is_owner, is_bot, updated, created)
          SELECT ?1, i.team_id, ?2, ?3, '', ?4, CASE WHEN i.role = 'admin' THEN 1 ELSE 0 END, 0, 0, ?5, ?5
          FROM invites i WHERE i.id = ?6 AND i.revoked = 0 AND i.expires > ?5 AND i.uses < i.max_uses
-           AND EXISTS (SELECT 1 FROM users a WHERE a.id = i.inviter AND a.deleted = 0 AND a.is_admin = 1
-                       AND (i.role = 'member' OR a.is_owner = 1))`,
+           AND ${INVITER_ACTIVE}`,
         id,
         name,
         joining.realName?.trim() ?? "",
@@ -206,10 +223,9 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
   }
   const user = batch[4]!.results[0] as UserRow | undefined
   if (!user) {
-    // Changed since it was read: say how, or that its inviter can't invite any more.
-    const now2 = nowSeconds()
-    const again = await first<InviteRow>(env.DB, "SELECT * FROM invites WHERE id = ?", invite.id)
-    throw new CampflareError(STATE_ERRORS[inviteState(again!, now2)])
+    // Changed since it was read: say how.
+    const again = await first<InviteRow>(env.DB, `${DETAILS} WHERE i.id = ?`, invite.id)
+    throw new CampflareError(STATE_ERRORS[inviteState(again!)])
   }
   publish(lc, { teamId: user.team_id, audience: "team", event: { type: "team_join", user: userJson(user, lc.origin) } })
   const joined = batch[5]!.results as { id: string; kind: "channel"; is_private: number; audience: string }[]
