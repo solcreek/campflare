@@ -115,6 +115,17 @@ describe("bookmarks", () => {
     await expectAdd({ emoji: "not an emoji" }, "invalid_emoji")
     await expectAdd({ channel_id: "C0NOPE" }, "channel_not_found")
     await expectError("bookmarks.remove", { channel_id: w.general }, w.owner.token, "not_found")
+    // An edit to an empty title or link is refused, not ignored.
+    const { bookmark } = await ok<{ bookmark: Bookmark }>(
+      "bookmarks.add",
+      { channel_id: w.general, type: "link", title: "Kept", link: "https://example.com/kept" },
+      w.owner.token,
+    )
+    const edit = { channel_id: w.general, bookmark_id: bookmark.id }
+    await expectError("bookmarks.edit", { ...edit, title: "" }, w.owner.token, "invalid_arguments")
+    await expectError("bookmarks.edit", { ...edit, link: "" }, w.owner.token, "invalid_link")
+    const kept = await ok<{ bookmarks: Bookmark[] }>("bookmarks.list", { channel_id: w.general }, w.owner.token)
+    expect(kept.bookmarks).toMatchObject([{ title: "Kept", link: "https://example.com/kept" }])
 
     // A public channel bob isn't in: he reads its bookmarks but doesn't change them.
     const { channel } = await ok<{ channel: { id: string } }>("conversations.create", { name: "docs" }, w.owner.token)

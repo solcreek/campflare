@@ -126,8 +126,9 @@ method("bookmarks.add", "actor", async (ctx) => {
 method("bookmarks.edit", "actor", async (ctx) => {
   const c = await conversationOf(ctx, true)
   const id = ctx.args.req("bookmark_id", "not_found")
-  const title = ctx.args.has("title") ? validTitle(ctx.args.req("title")) : null
-  const link = ctx.args.has("link") ? validLink(ctx.args.req("link")) : null
+  // Given empty is refused, as add refuses it, rather than ignored.
+  const title = ctx.args.given("title") ? validTitle(ctx.args.str("title") ?? "") : null
+  const link = ctx.args.given("link") ? validLink(ctx.args.str("link") ?? "") : null
   const emoji = ctx.args.given("emoji") ? validEmoji(ctx.args.str("emoji") ?? "") : null
   const db = ctx.env.DB
   const [updated, row, audience] = await db.batch([
