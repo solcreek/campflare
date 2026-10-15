@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers"
 import { afterEach, describe, expect, it } from "vitest"
 import { issueToken } from "../src/api/auth"
 import type { TeamHub } from "../src/hub"
-import { MAX_SUBSCRIPTIONS } from "../src/methods/push"
+import { isPushService, MAX_SUBSCRIPTIONS } from "../src/methods/push"
 import { decode } from "../src/push/base64url"
 import { PUSH_PER_MINUTE, PUSH_RETRY_DELAYS_MS } from "../src/push/deliver"
 import { importPublic } from "../src/push/keys"
@@ -129,6 +129,18 @@ describe("push subscriptions", () => {
     expect(labels[0]).toBe(`device ${MAX_SUBSCRIPTIONS}`)
   })
 
+  it("knows the browsers' push services, and those PUSH_SERVICE_HOSTS adds", () => {
+    expect(isPushService("fcm.googleapis.com")).toBe(true)
+    expect(isPushService("updates.push.services.mozilla.com")).toBe(true)
+    expect(isPushService("web.push.apple.com")).toBe(true)
+    expect(isPushService("wns2-db5p.notify.windows.com")).toBe(true)
+    expect(isPushService("push.apple.com.evil.test")).toBe(false)
+    expect(isPushService("evilpush.apple.com")).toBe(false)
+    expect(isPushService("example.com")).toBe(false)
+    expect(isPushService("ntfy.example.com", " ntfy.example.com ,*.up.example.org")).toBe(true)
+    expect(isPushService("a.up.example.org", "ntfy.example.com,*.up.example.org")).toBe(true)
+  })
+
   it("refuses what isn't a push subscription", async () => {
     const w = await workspace()
     const sub = await browserSubscription()
@@ -136,6 +148,8 @@ describe("push subscriptions", () => {
       call("campflare.push.subscribe", { subscription }, w.owner.token, { json: true }).then((r) => r.error)
     expect(await bad({ ...sub, endpoint: "http://push.example/x" })).toBe("invalid_arguments")
     expect(await bad({ ...sub, endpoint: "not a url" })).toBe("invalid_arguments")
+    // Only push services: not any https URL.
+    expect(await bad({ ...sub, endpoint: "https://internal.campflare.test/admin" })).toBe("invalid_arguments")
     expect(await bad({ endpoint: sub.endpoint })).toBe("invalid_arguments")
     expect(await bad({ ...sub, keys: { ...sub.keys, auth: "AAAA" } })).toBe("invalid_arguments")
     expect(await bad({ ...sub, keys: { ...sub.keys, p256dh: sub.keys.auth } })).toBe("invalid_arguments")
@@ -469,7 +483,9 @@ describe("campflare.push.test", () => {
       w.owner.token,
     )
     expect(res).toMatchObject({ sent: 1, failed: 1, removed: 1 })
-    expect(res.results).toContainEqual({ id: subscription.id, ok: true, status: 201 })
+    expect(res.results).toContainEqual({ id: subscription.id, result: "delivered" })
+    expect(res.results.map((r) => (r as { result: string }).result).toSorted()).toEqual(["delivered", "failed", "gone"])
+    expect(JSON.stringify(res)).not.toContain("502")
     expect((await service.payload(working)).payload).toMatchObject({
       title: "Campflare",
       body: "Notifications work on Pixel.",

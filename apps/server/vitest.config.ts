@@ -25,6 +25,8 @@ export default defineConfig(async () => {
             VAPID_PUBLIC_KEY: "BJQiCS-kDdMSnJJm-oewJ2ESIFX-sq5HFIE2TXDesZbHULYpnrUjid9rwNDjDehUKIZ8G_x_JsIRQA8jDTw20aA",
             VAPID_PRIVATE_KEY: "7dyzr08oHg1CxK68ptek_5k4dxYlkMOk5w3GDpCH8n8",
             VAPID_SUBJECT: "mailto:push@campflare.test",
+            // The fake push services' hosts (push.example, fcm.example…).
+            PUSH_SERVICE_HOSTS: "*.example",
           },
         },
       }),

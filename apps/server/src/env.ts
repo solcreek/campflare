@@ -41,4 +41,9 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string
   VAPID_PRIVATE_KEY?: string
   VAPID_SUBJECT?: string
+  /**
+   * Push services beyond the browsers' own that subscriptions may use (a
+   * self-hosted one), comma-separated hosts, `*.example.com` for subdomains.
+   */
+  PUSH_SERVICE_HOSTS?: string
 }

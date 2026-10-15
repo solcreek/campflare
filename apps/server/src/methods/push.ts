@@ -27,6 +27,33 @@ export interface PushSubscriptionRow {
   last_used: number
 }
 
+/**
+ * The push services browsers use: Chrome, Edge and Opera (FCM), Firefox
+ * (Mozilla's), Safari (Apple's), and Windows' own. Endpoints elsewhere are
+ * refused, so the server can't be pointed at any URL; PUSH_SERVICE_HOSTS adds
+ * more (a self-hosted push service), comma-separated, `*.` for subdomains.
+ */
+export const KNOWN_PUSH_SERVICES = [
+  "fcm.googleapis.com",
+  "updates.push.services.mozilla.com",
+  "push.services.mozilla.com",
+  "*.push.apple.com",
+  "*.notify.windows.com",
+]
+
+/** Whether a host is a push service we send to: a known one, or one PUSH_SERVICE_HOSTS adds. */
+export function isPushService(hostname: string, extra = ""): boolean {
+  const host = hostname.toLowerCase()
+  const patterns = [
+    ...KNOWN_PUSH_SERVICES,
+    ...extra
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  ]
+  return patterns.some((p) => (p.startsWith("*.") ? host.endsWith(p.slice(1)) : host === p))
+}
+
 /** The server's VAPID keys (checked: the pair must match), or push_not_configured. */
 async function requireVapid(ctx: Pick<Ctx, "env" | "origin">) {
   const vapid = await loadVapid(ctx.env, ctx.origin)
@@ -76,6 +103,9 @@ async function subscriptionArgs(ctx: Ctx<Actor>) {
   }
   if (url.protocol !== "https:" || endpoint.length > MAX_ENDPOINT) {
     throw invalidArguments("endpoint must be an https URL")
+  }
+  if (!isPushService(url.hostname, ctx.env.PUSH_SERVICE_HOSTS)) {
+    throw invalidArguments(`endpoint isn't at a known push service: ${url.hostname}`)
   }
   const point = decode(p256dh)
   const ok =
@@ -214,11 +244,10 @@ method("campflare.push.test", "user", async (ctx) => {
     sent: sent.length,
     failed: rows.length - sent.length - removed.length,
     removed: removed.length,
+    // What happened, not the push service's status: the answer isn't a probe of other servers.
     results: rows.map((r, i) => ({
       id: r.id,
-      ok: outcomes[i]!.ok,
-      status: outcomes[i]!.status,
-      ...(outcomes[i]!.gone ? { removed: true } : {}),
+      result: outcomes[i]!.ok ? "delivered" : outcomes[i]!.gone ? "gone" : "failed",
     })),
   }
 })
