@@ -66,6 +66,10 @@ Messages
   view click <view id> <action_id> [--block <id>] [--value|--option|--user|--conversation …]
   stop <#channel|id> <ts>          stop an app's reply that is still streaming (Campflare);
                                    the app's next append is answered stopped_by_user
+  command <#channel|id> </name> [text…]
+                                   run an app's slash command there, as typing it would;
+                                   prints the app's answer (only you see it, unless it says so)
+  commands [--json]                the slash commands apps offer, and what they take
 
 Attention (Campflare)
   inbox [--unread] [--type mention,dm,thread_reply,reaction] [-n 20] [--follow] [--json]
@@ -118,6 +122,13 @@ Admin (Campflare only)
                                    --rotate-secret replaces the signing secret at once.
                                    Shows how deliveries are doing, and if they were
                                    turned off for failing (set the URL again to resume)
+  admin app <app id> --command '/name:description:usage hint' [--command …] [--command-url <url>]
+            [--clear-commands]     replace the app's slash commands; --command-url is where
+                                   they're POSTed without a Socket Mode connection
+  admin webhook create <app id> <#channel> [--label <l>]
+                                   an incoming webhook URL that posts there as the app's bot,
+                                   printed alone on stdout (shown once)
+  admin webhooks <app id>          its webhooks; admin webhook revoke <id> stops one
   admin role <@person> member|admin|owner   (owners only)
   admin invite [--email <e>] [--admin] [--channel <#c>]… [--expires 7d] [--uses N]
                                    an invitation link, printed alone on stdout: to one email,
@@ -147,6 +158,47 @@ type AppSettings = {
     event_subscriptions: { request_url: string | null; events: string[] | null } & EventDelivery
     interactivity: { request_url: string | null }
   }
+}
+
+type CommandJson = {
+  command: string
+  description: string
+  usage_hint: string
+  app_id: string
+  app_name?: string
+  url: string | null
+}
+
+type CommandRun = {
+  ok: boolean
+  delivered: "socket" | "http"
+  response?: { response_type: "ephemeral" | "in_channel"; text: string; ts: string }
+}
+
+/** "/deploy [branch]  Deploy a branch". */
+export const commandLine = (c: Pick<CommandJson, "command" | "usage_hint" | "description">) =>
+  [c.usage_hint ? `${c.command} ${c.usage_hint}` : c.command, c.description].filter(Boolean).join("  ")
+
+/** --command '/name:description:usage hint' as campflare.apps.setCommands takes it. */
+export function commandSpec(spec: string, url?: string) {
+  const [command = "", description = "", ...hint] = spec.split(":")
+  if (!command.startsWith("/")) throw new UsageError(`--command starts with the command's /name, not ${spec}`)
+  return {
+    command: command.trim(),
+    description: description.trim(),
+    usage_hint: hint.join(":").trim(),
+    ...(url ? { url } : {}),
+  }
+}
+
+type WebhookJson = {
+  id: string
+  app_id: string
+  channel: string
+  channel_name?: string
+  label: string
+  created: number
+  last_used: number | null
 }
 
 /**
@@ -1090,6 +1142,41 @@ const commands: Record<string, Command> = {
     io.stdout(`Stopped the reply in ${target} (ts ${ts}) at ${res.message.text.length} characters\n`)
   },
 
+  async command(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target, name, ...words] = positionals
+    if (!target || !name) {
+      throw new UsageError("command needs a conversation and a command, e.g. command #ops /deploy staging")
+    }
+    const command = name.startsWith("/") ? name : `/${name}`
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    const res = await s.client.call<CommandRun>("campflare.commands.invoke", {
+      channel,
+      command,
+      text: words.join(" "),
+    })
+    if (values.json) return s.print({ delivered: res.delivered, response: res.response ?? null })
+    if (!res.response) {
+      return io.stderr(`${command} went to its app (${res.delivered === "socket" ? "Socket Mode" : "HTTP"})\n`)
+    }
+    io.stdout(`${res.response.text || "(blocks)"}\n`)
+    io.stderr(
+      res.response.response_type === "in_channel"
+        ? `Posted in ${target} (ts ${res.response.ts})\n`
+        : "Only you can see this\n",
+    )
+  },
+
+  async commands(argv, io) {
+    const { values } = parse(argv)
+    const s = await session(io, values)
+    const res = await s.client.call<{ ok: boolean; commands: CommandJson[] }>("campflare.commands.list")
+    if (values.json) return s.print(res.commands)
+    if (res.commands.length === 0) return io.stdout("No slash commands yet\n")
+    for (const c of res.commands) io.stdout(`${commandLine(c)}  (${c.app_name})\n`)
+  },
+
   async edit(argv, io) {
     const { values, positionals } = parse(argv)
     const [target, ts, ...words] = positionals
@@ -1565,6 +1652,10 @@ const commands: Record<string, Command> = {
       events: { type: "string" },
       "interactivity-url": { type: "string" },
       "rotate-secret": { type: "boolean" },
+      command: { type: "string", multiple: true },
+      "command-url": { type: "string" },
+      "clear-commands": { type: "boolean" },
+      label: { type: "string" },
       channel: { type: "string", multiple: true },
       expires: { type: "string" },
       uses: { type: "string" },
@@ -1594,6 +1685,36 @@ const commands: Record<string, Command> = {
       // The URL alone on stdout, for URL=$(campflare admin invite …); what it allows on stderr.
       io.stdout(`${res.url}\n`)
       io.stderr(`${inviteLine(res.invite)}${res.emailed ? `; emailed to ${res.invite.email}` : ""}\n`)
+    } else if (sub === "webhook" && positionals[0] === "revoke") {
+      const id = positionals[1]
+      if (!id) throw new UsageError("admin webhook revoke needs a webhook id (from admin webhooks)")
+      await s.client.call("campflare.apps.webhooks.revoke", { webhook: id })
+      if (values.json) return s.print({ revoked: id })
+      io.stdout(`Revoked webhook ${id}: its URL answers no_service now\n`)
+    } else if (sub === "webhook" && positionals[0] === "create") {
+      const [, app, target] = positionals
+      if (!app || !target) throw new UsageError("admin webhook create needs an app id and a conversation")
+      const res = await s.client.call<{ ok: boolean; webhook: WebhookJson & { url: string } }>(
+        "campflare.apps.createWebhook",
+        { app, channel: await s.conversation(target), label: str(values.label) },
+      )
+      if (values.json) return s.print(res.webhook)
+      // The URL alone on stdout, for URL=$(campflare admin webhook create …).
+      io.stdout(`${res.webhook.url}\n`)
+      io.stderr(
+        `Webhook ${res.webhook.id} posts in ${target} as the app's bot. The URL is shown once: keep it secret.\n`,
+      )
+    } else if (sub === "webhooks") {
+      const [app] = positionals
+      if (!app) throw new UsageError("admin webhooks needs an app id")
+      const res = await s.client.call<{ ok: boolean; webhooks: WebhookJson[] }>("campflare.apps.webhooks.list", { app })
+      if (values.json) return s.print(res.webhooks)
+      if (res.webhooks.length === 0) return io.stdout(`No webhooks for ${app}\n`)
+      for (const w of res.webhooks) {
+        const where = w.channel_name ? `#${w.channel_name}` : w.channel
+        const used = w.last_used ? `last used ${isoTime(w.last_used)}` : "never used"
+        io.stdout(`${w.id}  ${where}  ${w.label ? `${w.label}  ` : ""}${used}\n`)
+      }
     } else if (sub === "invites") {
       const res = await s.client.call<{ ok: boolean; invites: InviteJson[] }>("campflare.invites.list")
       if (values.json) return s.print(res.invites)
@@ -1673,8 +1794,20 @@ const commands: Record<string, Command> = {
       if (interactivity !== undefined) {
         res = await s.client.call<AppSettings>("campflare.apps.setInteractivity", { app, request_url: interactivity })
       }
+      const specs = (values.command as string[] | undefined) ?? []
+      let commands: CommandJson[] | undefined
+      if (specs.length || values["clear-commands"]) {
+        const given = specs.map((spec) => commandSpec(spec, str(values["command-url"])))
+        const set = await s.client.call<{ ok: boolean; commands: CommandJson[] }>("campflare.apps.setCommands", {
+          app,
+          commands: JSON.stringify(given),
+        })
+        commands = set.commands
+      } else if (values["command-url"] !== undefined) {
+        throw new UsageError("--command-url goes with the --command it applies to")
+      }
       res ??= await s.client.call<AppSettings>("campflare.apps.info", { app })
-      if (values.json) return s.print(res)
+      if (values.json) return s.print(commands ? { ...res, commands } : res)
       const { id, name, bot_user_id, signing_secret, event_subscriptions: subs } = res.app
       io.stdout(
         `App ${id} (${name}), bot user ${bot_user_id}\nSigning secret: ${signing_secret}\n` +
@@ -1682,11 +1815,17 @@ const commands: Record<string, Command> = {
           `Interactivity URL: ${res.app.interactivity.request_url ?? "none (Socket Mode only)"}\n`,
       )
       for (const line of deliveryLines(subs)) io.stdout(`${line}\n`)
+      if (commands) {
+        io.stdout(commands.length ? "Slash commands:\n" : "Slash commands: none\n")
+        for (const c of commands) io.stdout(`  ${commandLine(c)}${c.url ? `  → ${c.url}` : ""}\n`)
+      }
       if (values["rotate-secret"]) {
         io.stdout("The old signing secret no longer signs anything: update the app's secret now.\n")
       }
     } else {
-      throw new UsageError("admin commands: add-user, add-app, app, role, invite, invites, reset-password")
+      throw new UsageError(
+        "admin commands: add-user, add-app, app, role, invite, invites, reset-password, webhook, webhooks",
+      )
     }
   },
 
