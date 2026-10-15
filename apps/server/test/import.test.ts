@@ -517,10 +517,25 @@ describe("campflare.import", () => {
     const usersBefore = await env.DB.prepare("SELECT count(*) AS n FROM users WHERE team_id = ?")
       .bind(w.teamId)
       .first<{ n: number }>()
+    const live = await ok<{ ts: string }>("chat.postMessage", { channel: w.general, text: "Antes · 以前" }, ana.token)
     const job = await start(w.owner.token, { merge_into_existing: true })
     const { conversation } = await prepare(w.owner.token, name, job.id)
-    await messages(w.owner.token, job.id, "C01", [...chunk1, ...chunk2])
+    await messages(w.owner.token, job.id, "C01", [
+      ...chunk1,
+      ...chunk2,
+      // An imported reply to a message that was here.
+      { ts: "1700003000.000001", user: "U03", text: "Réponse importée · 返事", thread_ts: live.ts },
+    ])
     await messages(w.owner.token, job.id, "C03", [{ ts: "1700000000.000009", user: "U03", text: "東京タワー" }])
+    // A person answers an imported thread: undoing would orphan the answer, so it's refused.
+    const answer = await ok<{ ts: string }>(
+      "chat.postMessage",
+      { channel: w.general, thread_ts: HEAD, text: "Je réponds" },
+      ana.token,
+    )
+    const refused = await expectError("campflare.import.undo", { job: job.id }, w.owner.token, "import_in_use")
+    expect(refused.conversations).toEqual([w.general])
+    await ok("chat.delete", { channel: w.general, ts: answer.ts }, ana.token)
     // Someone reacts to and saves an imported message meanwhile: those go with it.
     await ok("reactions.add", { channel: w.general, timestamp: "1700000000.000100", name: "eyes" }, ana.token)
     await ok("stars.add", { channel: w.general, timestamp: "1700000000.000100" }, ana.token)
@@ -528,9 +543,12 @@ describe("campflare.import", () => {
 
     const { removed, job: undone } = await undo(w.owner.token, job.id)
     expect(undone.state).toBe("undone")
-    expect(removed).toMatchObject({ messages: 13, conversations: 5, users: 6 })
+    expect(removed).toMatchObject({ messages: 14, conversations: 5, users: 6 })
     const general = await history(w.owner.token, w.general)
-    expect(general.map((m) => m.ts)).toEqual([ours.ts])
+    expect(general.map((m) => m.ts)).toEqual([ours.ts, live.ts])
+    // The message that was here is no thread head any more.
+    expect(general[1]).not.toHaveProperty("thread_ts")
+    expect(general[1]).not.toHaveProperty("reply_count")
     const usersAfter = await env.DB.prepare("SELECT count(*) AS n FROM users WHERE team_id = ?")
       .bind(w.teamId)
       .first<{ n: number }>()

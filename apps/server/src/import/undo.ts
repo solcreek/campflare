@@ -3,6 +3,7 @@ import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { THUMB_VARIANTS, thumbKey } from "../api/thumbs"
 import { all, first, stmt } from "../db/query"
+import { recountThreads } from "./messages"
 import { jobJson, loadJob, UNDO_WINDOW_SECONDS, type ImportJobRow } from "./job"
 
 // campflare.import.undo: takes back everything a job wrote, a bounded piece
@@ -29,11 +30,17 @@ export async function undoImport(ctx: Ctx<Actor>) {
     throw new CampflareError("undo_window_passed")
   }
   if (job.state !== "undoing") {
-    // People wrote in a conversation the import made: removing it would take their messages too.
+    // People wrote in a conversation the import made, or replied to an imported message: removing
+    // it would take their messages too, or leave their replies without a thread.
     const used = await all<{ id: string }>(
       db,
       `SELECT DISTINCT channel_id AS id FROM messages
-       WHERE channel_id IN ${CREATED} AND import_job IS NOT ?`,
+       WHERE channel_id IN ${CREATED} AND import_job IS NOT ?
+       UNION SELECT DISTINCT r.channel_id FROM messages h
+       JOIN messages r ON r.channel_id = h.channel_id AND r.thread_ts = h.ts AND r.ts <> h.ts
+       WHERE h.import_job = ? AND r.import_job IS NOT ? AND r.deleted = 0`,
+      job.id,
+      job.id,
       job.id,
       job.id,
     )
@@ -44,20 +51,29 @@ export async function undoImport(ctx: Ctx<Actor>) {
       .run()
   }
 
-  const keys = await all<{ channel_id: string; ts: string }>(
+  const keys = await all<{ channel_id: string; ts: string; thread_ts: string | null }>(
     db,
-    "SELECT channel_id, ts FROM messages WHERE import_job = ? LIMIT ?",
+    "SELECT channel_id, ts, thread_ts FROM messages WHERE import_job = ? LIMIT ?",
     job.id,
     UNDO_MESSAGES_PER_CALL,
   )
   if (keys.length) {
     const list = JSON.stringify(keys.map((k) => [k.channel_id, k.ts]))
+    const heads = JSON.stringify(
+      keys.flatMap((k) => (k.thread_ts && k.thread_ts !== k.ts ? [[k.channel_id, k.thread_ts]] : [])),
+    )
     const results = await db.batch([
       stmt(db, `DELETE FROM reactions WHERE (channel_id, ts) IN ${KEYS}`, list),
       stmt(db, `DELETE FROM stars WHERE (channel_id, ts) IN ${KEYS}`, list),
       stmt(db, `DELETE FROM activity WHERE (channel_id, ts) IN ${KEYS}`, list),
       stmt(db, `DELETE FROM thread_participants WHERE (channel_id, thread_ts) IN ${KEYS}`, list),
       stmt(db, `DELETE FROM messages WHERE (channel_id, ts) IN ${KEYS} AND import_job = ?`, list, job.id),
+      // Heads that were here before and had imported replies: counted again, a head no more if none are left.
+      recountThreads(
+        db,
+        { sql: `(h.channel_id, h.ts) IN ${KEYS} AND h.import_job IS NOT ?`, params: [heads, job.id] },
+        { emptied: true },
+      ),
     ])
     removed.reactions = results[0]!.meta.changes
     // meta.changes counts the search index's trigger writes too: every key found is one message.
