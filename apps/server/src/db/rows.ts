@@ -177,6 +177,8 @@ export interface ScheduledMessageRow {
   /** The scheduling token's scopes, as it held them: what posting checks at fire time. */
   scopes: string
   claimed_until: number | null
+  /** The claiming runner's token while claimed: its post only commits while the row still holds it. */
+  claim: string | null
   attempts: number
 }
 
@@ -193,5 +195,6 @@ export interface ReminderRow {
   created: number
   origin: string
   claimed_until: number | null
+  claim: string | null
   attempts: number
 }

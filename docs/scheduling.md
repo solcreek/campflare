@@ -44,25 +44,27 @@ Cloudflare runs a Durable Object's alarm at least once: an alarm that throws is
 retried with backoff, and an alarm set survives eviction and restarts. On top
 of that, each item is posted at most once:
 
-1. **Claim**: `UPDATE … SET claimed_until = now + 60, attempts = attempts + 1
-WHERE id = ? AND due <= now AND (claimed_until IS NULL OR claimed_until <= now)
-RETURNING *`. Only one runner gets the row; a second run of the same alarm
-   (or two runs at once) finds it claimed and skips it.
-2. **Post and finish in one batch**: `postMessage()` takes extra statements to
-   run in its own `DB.batch`: the message insert and the `DELETE` of the
-   scheduled message (or the reminder's `fired = 1`) commit together or not at
-   all. A crash before the batch leaves the claim to expire, and the item is
-   tried again after 60 s; a crash after it leaves nothing pending.
+1. **Claim**: `UPDATE … SET claimed_until = now + 60, claim = <random token>,
+attempts = attempts + 1 WHERE id = ? AND due <= now AND (claimed_until IS
+NULL OR claimed_until <= now) RETURNING *`. Only one runner gets the row; a
+   second run of the same alarm (or two runs at once) finds it claimed and
+   skips it.
+2. **Post and finish in one batch, while the claim holds**: `postMessage()`
+   takes extra statements to run in its own `DB.batch`: a guard, then the
+   `DELETE … WHERE claim = <token>` of the scheduled message (or the reminder's
+   `fired = 1`). The guard inserts a NULL into `claim_guards.lost` (NOT NULL)
+   when the row no longer holds the token, which fails the statement and rolls
+   back the whole batch, message included. A crash before the batch leaves the
+   claim to expire, and the item is tried again after 60 s; a crash after it
+   leaves nothing pending.
 3. **Deleting** a scheduled message is refused while it is claimed
-   (`invalid_scheduled_message_id`), so a delete never races a post that is
-   already under way: either the delete wins and the claim finds no row, or the
-   claim wins and the message is posted.
+   (`invalid_scheduled_message_id`). Once a claim has run out it may be
+   deleted, and the runner that held it then posts nothing.
 
-The one window left: a runner that takes longer than the 60 s lease to post
-could be overtaken by the next run, which would post too. Posting is a couple
-of D1 round trips, and the alarm is the only runner, so this needs a stall of
-a minute inside one alarm run. The lease is long next to a post and short next
-to what a person would call late.
+So a runner that stalls past its 60 s lease can't post twice: the run that
+took the row over holds a new token, and the stalled runner's batch fails on
+the guard. `isUniqueViolation()` matches only UNIQUE and PRIMARY KEY clashes,
+so `postMessage` doesn't retry that failure with another ts.
 
 An item that fails with an unexpected error (D1 down) keeps its claim and is
 tried again when the lease ends, up to 5 attempts; then it is given up as a
@@ -173,6 +175,7 @@ The posted message itself goes out as any message does (`message`,
 | the alarm run throws                     | Cloudflare retries it; claimed items wait for their lease                                                   |
 | the runner dies mid-post                 | the batch didn't commit: the claim expires, tried again in 60 s                                             |
 | the runner dies after the post           | the row is gone with the post: nothing repeats                                                              |
+| the runner stalls past its lease         | the run that takes over posts; the stalled one's batch fails on the guard                                   |
 | D1 errors on one item, 5 times           | given up as failed: dropped, the poster told                                                                |
 | more than 50 items due at once           | the run fires 50 of each and re-arms for now                                                                |
 

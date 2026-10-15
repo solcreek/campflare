@@ -39,6 +39,7 @@ method("reminders.add", "user", async (ctx) => {
     created: now,
     origin: ctx.origin,
     claimed_until: null,
+    claim: null,
     attempts: 0,
   }
   await stmt(

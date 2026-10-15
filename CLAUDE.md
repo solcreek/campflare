@@ -500,10 +500,13 @@ an alarm: methods `await armScheduler()` before answering, and `alarm()` reads
 what's due from D1 (`runDue()`), fires it in order and re-arms at the next due
 time in D1. A separate class, not `TeamHub`'s alarm, which retries deliveries
 every few seconds and must not read D1 each time. Firing claims a row with a
-guarded UPDATE (`claimed_until`, a 60 s lease; `chat.deleteScheduledMessage`
-refuses a claimed row) and finishes it in the post's own batch:
-`postMessage()`'s `also` statements (the row's DELETE, a reminder's `fired = 1`)
-commit with the message, so a row posts once. At fire time the poster is
+guarded UPDATE (`claimed_until`, a 60 s lease, and a random `claim` token;
+`chat.deleteScheduledMessage` refuses a claimed row) and finishes it in the
+post's own batch: `postMessage()`'s `also` statements (`holdsClaim()`, which
+fails the batch through `claim_guards.lost NOT NULL` once the row no longer
+holds the token, then the row's DELETE or a reminder's `fired = 1`) commit with
+the message, so a row posts once even if its runner outlives the lease
+(`isClaimLost()`). At fire time the poster is
 checked again as they are then (`requireWritable` as a rebuilt actor with the
 scopes the scheduling token held, kept in `scheduled_messages.scopes`, so a bot
 without `chat:write.public` must still be a member; the token itself may be

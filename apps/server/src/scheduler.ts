@@ -1,10 +1,10 @@
 import { DurableObject } from "cloudflare:workers"
 import type { Actor } from "./api/context"
 import { CampflareError } from "./api/errors"
-import { nowSeconds } from "./api/ids"
+import { nowSeconds, randomSecret } from "./api/ids"
 import { requireWritable } from "./db/conversations"
 import { postMessage } from "./db/messages"
-import { first, run, stmt } from "./db/query"
+import { first, stmt } from "./db/query"
 import type { AppRow, ConversationRow, ReminderRow, ScheduledMessageRow, TeamRow, UserRow } from "./db/rows"
 import type { Env } from "./env"
 import { publish } from "./events"
@@ -24,6 +24,40 @@ export const MAX_ATTEMPTS = 5
 const PER_RUN = 50
 
 type WaitUntil = (p: Promise<unknown>) => void
+
+type Claimed = "scheduled_messages" | "reminders"
+
+/**
+ * A statement that fails, rolling back the batch it is in, unless the row
+ * still holds this runner's claim: one whose lease ran out and was taken over
+ * by another run, or that was deleted meanwhile, posts nothing. It inserts a
+ * NULL into claim_guards.lost (NOT NULL) only when the claim is gone.
+ */
+const holdsClaim = (db: D1Database, table: Claimed, id: string, claim: string) =>
+  stmt(
+    db,
+    `INSERT INTO claim_guards (lost) SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND claim = ?)`,
+    id,
+    claim,
+  )
+
+/** Whether an error is holdsClaim() failing: someone else has the row now, or nobody does. */
+export const isClaimLost = (error: unknown) => error instanceof Error && error.message.includes("claim_guards")
+
+/** Claims a due row for this runner, with a token only it knows; undefined if it isn't due or is someone else's. */
+export async function claimRow<T>(env: Env, table: Claimed, id: string, now = nowSeconds()): Promise<T | undefined> {
+  const due = table === "scheduled_messages" ? "post_at <= ?" : "time <= ? AND fired = 0 AND complete_ts = 0"
+  return first<T>(
+    env.DB,
+    `UPDATE ${table} SET claimed_until = ?, claim = ?, attempts = attempts + 1
+     WHERE id = ? AND ${due} AND (claimed_until IS NULL OR claimed_until <= ?) RETURNING *`,
+    now + CLAIM_SECONDS,
+    randomSecret(16),
+    id,
+    now,
+    now,
+  )
+}
 
 export class Scheduler extends DurableObject<Env> {
   /** Makes sure the alarm rings by `at` (epoch seconds). */
@@ -108,20 +142,13 @@ export async function fireScheduledMessage(
   waitUntil: WaitUntil,
   now = nowSeconds(),
 ) {
-  const row = await first<ScheduledMessageRow>(
-    env.DB,
-    `UPDATE scheduled_messages SET claimed_until = ?, attempts = attempts + 1
-     WHERE id = ? AND post_at <= ? AND (claimed_until IS NULL OR claimed_until <= ?) RETURNING *`,
-    now + CLAIM_SECONDS,
-    id,
-    now,
-    now,
-  )
+  const row = await claimRow<ScheduledMessageRow>(env, "scheduled_messages", id, now)
   if (!row) return
   try {
     const ts = await postScheduled(env, team, row, waitUntil)
     removed(env, row, waitUntil, { reason: "posted", ts })
   } catch (error) {
+    if (isClaimLost(error)) return
     if (!(error instanceof CampflareError) && row.attempts < MAX_ATTEMPTS) {
       // Something else broke (D1): the claim runs out and the next run tries again.
       console.error("scheduled message failed, will retry", row.id, error)
@@ -131,8 +158,12 @@ export async function fireScheduledMessage(
   }
 }
 
-/** Posts it as chat.postMessage would, as its poster, checking what posting checks now; the row goes with the post. */
-async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, waitUntil: WaitUntil) {
+/**
+ * Posts a claimed row as chat.postMessage would, as its poster, checking what
+ * posting checks now. The row goes in the post's batch, which fails unless the
+ * claim is still this runner's.
+ */
+export async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, waitUntil: WaitUntil) {
   const db = env.DB
   const [user, app, conversation] = await db.batch([
     stmt(db, "SELECT * FROM users WHERE id = ? AND deleted = 0", row.user_id),
@@ -167,7 +198,10 @@ async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, 
       thread_ts: row.thread_ts,
       subtype: row.thread_ts && row.reply_broadcast ? "thread_broadcast" : null,
     },
-    [stmt(db, "DELETE FROM scheduled_messages WHERE id = ?", row.id)],
+    [
+      holdsClaim(db, "scheduled_messages", row.id, row.claim!),
+      stmt(db, "DELETE FROM scheduled_messages WHERE id = ? AND claim = ?", row.id, row.claim),
+    ],
   )
   return posted.ts
 }
@@ -177,7 +211,7 @@ async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, 
  * DM from the built-in bot when they are a person still here to read it.
  */
 async function dropScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, error: string, waitUntil: WaitUntil) {
-  const drop = stmt(env.DB, "DELETE FROM scheduled_messages WHERE id = ?", row.id)
+  const drop = stmt(env.DB, "DELETE FROM scheduled_messages WHERE id = ? AND claim = ?", row.id, row.claim)
   const poster = row.app_id
     ? undefined
     : await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ? AND deleted = 0", row.user_id)
@@ -186,9 +220,10 @@ async function dropScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, 
     const ctx = serverCtx(env, await systemActor(env, team), row.origin, waitUntil)
     const excerpt = row.text.length > 200 ? `${row.text.slice(0, 200)}…` : row.text
     const text = `Your scheduled message to <#${row.channel_id}> couldn't be sent (${error})${excerpt ? `: ${excerpt}` : "."}`
-    await dmFromSystem(ctx, poster.id, text, [drop])
-  } catch {
-    await drop.run()
+    await dmFromSystem(ctx, poster.id, text, [holdsClaim(env.DB, "scheduled_messages", row.id, row.claim!), drop])
+  } catch (dmError) {
+    // Without the DM it still goes, unless the claim is someone else's now.
+    if (isClaimLost(dmError) || !(await drop.run()).meta.changes) return
   }
   removed(env, row, waitUntil, { reason: "failed", error })
 }
@@ -213,18 +248,14 @@ export function removed(
 
 /** One reminder, if this runner gets the claim: a DM from the built-in bot, unless its person has gone. */
 export async function fireReminder(env: Env, team: TeamRow, id: string, waitUntil: WaitUntil, now = nowSeconds()) {
-  const row = await first<ReminderRow>(
-    env.DB,
-    `UPDATE reminders SET claimed_until = ?, attempts = attempts + 1
-     WHERE id = ? AND time <= ? AND fired = 0 AND complete_ts = 0 AND (claimed_until IS NULL OR claimed_until <= ?)
-     RETURNING *`,
-    now + CLAIM_SECONDS,
-    id,
-    now,
-    now,
-  )
+  const row = await claimRow<ReminderRow>(env, "reminders", id, now)
   if (!row) return
-  const done = stmt(env.DB, "UPDATE reminders SET fired = 1, claimed_until = NULL WHERE id = ?", row.id)
+  const done = stmt(
+    env.DB,
+    "UPDATE reminders SET fired = 1, claimed_until = NULL WHERE id = ? AND claim = ?",
+    row.id,
+    row.claim,
+  )
   try {
     const person = await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ? AND deleted = 0", row.user_id)
     if (!person) {
@@ -232,11 +263,15 @@ export async function fireReminder(env: Env, team: TeamRow, id: string, waitUnti
       return
     }
     const ctx = serverCtx(env, await systemActor(env, team), row.origin, waitUntil)
-    await dmFromSystem(ctx, person.id, `Reminder: ${row.text}`, [done])
+    await dmFromSystem(ctx, person.id, `Reminder: ${row.text}`, [
+      holdsClaim(env.DB, "reminders", row.id, row.claim!),
+      done,
+    ])
     reminderChanged(env, { ...row, fired: 1, claimed_until: null }, waitUntil)
   } catch (error) {
+    if (isClaimLost(error)) return
     console.error("reminder failed", row.id, error)
-    if (row.attempts >= MAX_ATTEMPTS) await run(env.DB, "UPDATE reminders SET fired = 1 WHERE id = ?", row.id)
+    if (row.attempts >= MAX_ATTEMPTS) await done.run()
   }
 }
 

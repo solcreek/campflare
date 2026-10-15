@@ -81,6 +81,7 @@ method("chat.scheduleMessage", "actor", async (ctx) => {
     origin: ctx.origin,
     scopes: ctx.auth.scopes.join(","),
     claimed_until: null,
+    claim: null,
     attempts: 0,
   }
   await db

@@ -3,8 +3,9 @@ import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { issueToken } from "../src/api/auth"
 import { nowSeconds } from "../src/api/ids"
-import type { ScheduledMessageRow } from "../src/db/rows"
-import { CLAIM_SECONDS, MAX_ATTEMPTS, runDue } from "../src/scheduler"
+import { isUniqueViolation } from "../src/db/query"
+import type { ScheduledMessageRow, TeamRow } from "../src/db/rows"
+import { CLAIM_SECONDS, claimRow, isClaimLost, MAX_ATTEMPTS, postScheduled, runDue } from "../src/scheduler"
 import { call, connect, eventually, expectError, ok, workspace, type Workspace } from "./helpers"
 
 type Scheduled = { scheduled_message_id: string; post_at: number; channel: string; message: Record<string, unknown> }
@@ -414,6 +415,48 @@ describe("firing", () => {
     expect(await runDue(env, w.teamId, (p) => pending.push(p), now + CLAIM_SECONDS)).toBeUndefined()
     await Promise.allSettled(pending)
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).toContain("taken over")
+  })
+
+  it("posts nothing for a runner whose claim ran out and was taken over, or whose row was deleted", async () => {
+    const w = await workspace()
+    const team = (await env.DB.prepare("SELECT * FROM teams WHERE id = ?").bind(w.teamId).first<TeamRow>())!
+    const pending: Promise<unknown>[] = []
+    const waitUntil = (p: Promise<unknown>) => pending.push(p)
+    const now = nowSeconds()
+
+    const res = await schedule(w, { text: "taken over" })
+    await makeDue(res.scheduled_message_id)
+    const slow = await claimRow<ScheduledMessageRow>(env, "scheduled_messages", res.scheduled_message_id, now)
+    // The slow runner's lease ran out and another run took the row over.
+    const next = await claimRow<ScheduledMessageRow>(
+      env,
+      "scheduled_messages",
+      res.scheduled_message_id,
+      now + CLAIM_SECONDS,
+    )
+    expect(next!.claim).not.toBe(slow!.claim)
+    const lost = await postScheduled(env, team, slow!, waitUntil).catch((e: unknown) => e)
+    expect(isClaimLost(lost)).toBe(true)
+    // Not a ts clash, which postMessage would retry with another ts.
+    expect(isUniqueViolation(lost)).toBe(false)
+    await postScheduled(env, team, next!, waitUntil)
+    expect((await history(w.general, w.owner.token)).filter((m) => m.text === "taken over")).toHaveLength(1)
+
+    // Deleted once the lease ran out: the slow runner posts nothing.
+    const gone = await schedule(w, { text: "deleted meanwhile" })
+    await makeDue(gone.scheduled_message_id)
+    const stale = await claimRow<ScheduledMessageRow>(env, "scheduled_messages", gone.scheduled_message_id, now)
+    await env.DB.prepare("UPDATE scheduled_messages SET claimed_until = ? WHERE id = ?")
+      .bind(nowSeconds() - 1, gone.scheduled_message_id)
+      .run()
+    await ok(
+      "chat.deleteScheduledMessage",
+      { channel: w.general, scheduled_message_id: gone.scheduled_message_id },
+      w.owner.token,
+    )
+    expect(isClaimLost(await postScheduled(env, team, stale!, waitUntil).catch((e: unknown) => e))).toBe(true)
+    await Promise.allSettled(pending)
+    expect((await history(w.general, w.owner.token)).map((m) => m.text)).not.toContain("deleted meanwhile")
   })
 
   it("retries after an unexpected error, then gives up and says so", async () => {
