@@ -146,14 +146,14 @@ method("stars.remove", "user", async (ctx) => {
 /**
  * The person's stars they can still see, newest first: a conversation they
  * left, or a file no longer shared with them, drops out (and comes back if
- * they regain it). Parameters: the user, then the user again for readsOneOf.
+ * they regain it). The rules are files.list's (readsOneOf()); ?1 is the user.
  */
-const VISIBLE = `s.user_id = ?1 AND (
-  s.channel_id IS NULL OR EXISTS (
-    SELECT 1 FROM conversations c LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?1
-    WHERE c.id = s.channel_id AND (m.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))))
-  AND (s.file_id IS NULL OR EXISTS (
-    SELECT 1 FROM files WHERE files.id = s.file_id AND (files.user_id = ?1 OR ${readsOneOf("files.channels", "?1")})))`
+const VISIBLE = `s.user_id = ?1
+  AND (s.channel_id IS NULL OR ${readsOneOf("json_array(s.channel_id)", "?1")})
+  AND (s.file_id IS NULL OR EXISTS (SELECT 1 FROM files WHERE files.id = s.file_id
+    AND (files.user_id = ?1 OR ${readsOneOf("files.channels", "?1")})))`
+
+type ListedStar = StarRow & { c_kind: ConversationRow["kind"] | null; c_private: number | null }
 
 method("stars.list", "user", async (ctx) => {
   // Slack pages by count and page, and by limit and cursor; both work here.
@@ -165,26 +165,36 @@ method("stars.list", "user", async (ctx) => {
   const user = ctx.auth.user.id
   // Position: (created, item), newest first.
   const position = after ? "AND (s.created < ?2 OR (s.created = ?2 AND s.item > ?3))" : ""
-  const pageSql = `SELECT s.*, conv.kind AS c_kind, conv.is_private AS c_private FROM stars s
-    LEFT JOIN conversations conv ON conv.id = s.channel_id WHERE ${VISIBLE} ${position}
-    ORDER BY s.created DESC, s.item LIMIT ${limit + 1} OFFSET ${after ? 0 : (page - 1) * limit}`
-  const params = after ? [user, Number(after[0]), after[1]] : [user]
-  const messagesSql = `SELECT m.* FROM messages m JOIN (${pageSql}) s ON m.channel_id = s.channel_id AND m.ts = s.ts
-    WHERE m.deleted = 0`
-  // The page, its messages with their reactions, its files and the total: one round trip.
-  const [found, messages, reactions, files, total] = await db.batch([
-    stmt(db, pageSql, ...params),
-    stmt(db, messagesSql, ...params),
-    reactionsOfQuery(db, messagesSql, ...params),
-    stmt(db, `SELECT f.* FROM files f JOIN (${pageSql}) s ON f.id = s.file_id`, ...params),
+  // The page and the total first: the visibility rule runs once for each.
+  const [found, total] = await db.batch([
+    stmt(
+      db,
+      `SELECT s.*, conv.kind AS c_kind, conv.is_private AS c_private FROM stars s
+       LEFT JOIN conversations conv ON conv.id = s.channel_id WHERE ${VISIBLE} ${position}
+       ORDER BY s.created DESC, s.item LIMIT ? OFFSET ?`,
+      ...(after ? [user, Number(after[0]), after[1]] : [user]),
+      limit + 1,
+      after ? 0 : (page - 1) * limit,
+    ),
     stmt(db, `SELECT COUNT(*) AS n FROM stars s WHERE ${VISIBLE}`, user),
   ])
-  const rows = (found!.results as (StarRow & { c_kind: ConversationRow["kind"]; c_private: number })[]).slice(0, limit)
+  const rows = (found!.results as ListedStar[]).slice(0, limit)
   const hasMore = found!.results.length > limit
-  const messageRows = messages!.results as MessageRow[]
-  const extras = await loadExtras(ctx.env, messageRows, reactions!.results as ReactionRow[])
+  // Then what the page names, by id: its messages with their reactions, and its files.
+  const pairs = JSON.stringify(rows.filter((r) => r.type === "message").map((r) => [r.channel_id, r.ts]))
+  const fileIds = JSON.stringify(rows.filter((r) => r.type === "file").map((r) => r.file_id))
+  const pairsSql = "SELECT value ->> 0 AS channel_id, value ->> 1 AS ts FROM json_each(?)"
+  const [messages, reactions, files] = rows.length
+    ? await db.batch([
+        stmt(db, `SELECT * FROM messages WHERE (channel_id, ts) IN (${pairsSql}) AND deleted = 0`, pairs),
+        reactionsOfQuery(db, pairsSql, pairs),
+        stmt(db, "SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))", fileIds),
+      ])
+    : []
+  const messageRows = (messages?.results ?? []) as MessageRow[]
+  const extras = await loadExtras(ctx.env, messageRows, (reactions?.results ?? []) as ReactionRow[])
   const messageOf = new Map(messageRows.map((m) => [starKey.message(m.channel_id, m.ts), m]))
-  const fileOf = new Map((files!.results as FileRow[]).map((f) => [f.id, f]))
+  const fileOf = new Map(((files?.results ?? []) as FileRow[]).map((f) => [f.id, f]))
   const items = rows.flatMap((s): object[] => {
     if (s.type === "message") {
       const m = messageOf.get(s.item)
@@ -194,7 +204,7 @@ method("stars.list", "user", async (ctx) => {
       const f = fileOf.get(s.file_id!)
       return f ? [fileItem(ctx, f, s.created)] : []
     }
-    const type = conversationType({ kind: s.c_kind, is_private: s.c_private })
+    const type = conversationType({ kind: s.c_kind ?? "channel", is_private: s.c_private ?? 0 })
     return [{ type, channel: s.channel_id, date_create: s.created }]
   })
   const count = (total!.results[0] as { n: number }).n
