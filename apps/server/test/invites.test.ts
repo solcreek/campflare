@@ -5,6 +5,7 @@ import { setEmailSender, type EmailMessage } from "../src/email"
 import { joinedPage } from "../src/auth/links"
 import { isEmail, normalizeEmail } from "../src/api/email-address"
 import { IP_FREE_FAILURES, RATE_LIMIT } from "../src/auth/throttle"
+import { RESET_FREE_PER_ADDRESS, RESET_FREE_REQUESTS } from "../src/invites"
 import { browser } from "./browser"
 import { call, connect, eventually, expectError, ok, ORIGIN, workspace, type Body } from "./helpers"
 
@@ -591,12 +592,54 @@ describe("asking for your own reset", () => {
     expect(sent).toHaveLength(1)
   })
 
-  it("limits how many links one address is sent", async () => {
-    setEmailSender({ send: async () => {} })
+  it("limits how many links one client asks for one email, without locking the owner out", async () => {
+    const sent: EmailMessage[] = []
+    setEmailSender({ send: async (m) => void sent.push(m) })
+    const w = await workspace()
     const email = uniqueEmail("flood")
-    for (let i = 0; i < 3; i++) await anonymous("campflare.users.requestPasswordReset", { email })
-    const res = await anonymous("campflare.users.requestPasswordReset", { email })
+    await w.addUser("flood", { email })
+    const stranger = freshIp()
+    for (let i = 0; i < RESET_FREE_REQUESTS; i++) {
+      await anonymous("campflare.users.requestPasswordReset", { email }, stranger)
+    }
+    const res = await anonymous("campflare.users.requestPasswordReset", { email }, stranger)
     expect(res.error).toBe("too_many_attempts")
+    // The owner, from their own address, still gets their link.
+    await eventually(() => sent.length === RESET_FREE_REQUESTS)
+    expect((await anonymous("campflare.users.requestPasswordReset", { email }, freshIp())).ok).toBe(true)
+    await eventually(() => sent.length === RESET_FREE_REQUESTS + 1)
+  })
+
+  it("limits how many emails one client asks links for", async () => {
+    setEmailSender({ send: async () => {} })
+    const ip = freshIp()
+    for (let i = 0; i < RESET_FREE_PER_ADDRESS; i++) {
+      expect((await anonymous("campflare.users.requestPasswordReset", { email: uniqueEmail("spray") }, ip)).ok).toBe(
+        true,
+      )
+    }
+    const res = await anonymous("campflare.users.requestPasswordReset", { email: uniqueEmail("spray") }, ip)
+    expect(res.error).toBe("too_many_attempts")
+  })
+
+  it("answers before looking for the account, so timing says nothing", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const sent: EmailMessage[] = []
+    setEmailSender({
+      send: async (m) => {
+        await gate
+        sent.push(m)
+      },
+    })
+    const w = await workspace()
+    const email = uniqueEmail("timing")
+    await w.addUser("timing", { email })
+    // Sending is held, yet the answer comes: the per-account work is after it.
+    expect((await anonymous("campflare.users.requestPasswordReset", { email })).ok).toBe(true)
+    expect(sent).toHaveLength(0)
+    release()
+    await eventually(() => sent.length === 1)
   })
 
   it("has a form at /reset", async () => {
@@ -608,8 +651,9 @@ describe("asking for your own reset", () => {
     const bad = await postForm("/reset", { email: "nope" })
     expect(bad.status).toBe(400)
     const email = uniqueEmail("busy")
-    for (let i = 0; i < 3; i++) await postForm("/reset", { email })
-    expect((await postForm("/reset", { email })).status).toBe(429)
+    const ip = freshIp()
+    for (let i = 0; i < RESET_FREE_REQUESTS; i++) await postForm("/reset", { email }, ip)
+    expect((await postForm("/reset", { email }, ip)).status).toBe(429)
   })
 
   it("keeps answering when sending fails", async () => {

@@ -5,9 +5,9 @@ import { ids, nowSeconds, randomSecret } from "./api/ids"
 import { userJson } from "./api/shapes"
 import { checkPassword, hashPassword, setPassword } from "./auth/password"
 import { addressChecks, counter, countFailure, IP_FREE_FAILURES, keys, readCounter, waitFor } from "./auth/throttle"
-import { first, isUniqueViolation, run, stmt } from "./db/query"
+import { all, first, isUniqueViolation, run, stmt } from "./db/query"
 import type { UserRow } from "./db/rows"
-import { emailSender } from "./email"
+import { emailSender, type EmailSender } from "./email"
 import type { Env } from "./env"
 import { channelType, publish } from "./events"
 import { HANDLE } from "./api/roles"
@@ -23,8 +23,10 @@ export const INVITE_MAX_USES = 1000
 export const RESET_TTL = 3600
 export const RESET_MIN_TTL = 300
 export const RESET_MAX_TTL = 86_400
-/** Reset emails asked for one address before each further one waits. */
+/** Reset emails one client address may ask for one email before each further one waits. */
 export const RESET_FREE_REQUESTS = 3
+/** Reset emails one client address may ask for, whatever the emails, before each further one waits. */
+export const RESET_FREE_PER_ADDRESS = 10
 
 /** What acting on a link needs: the Worker's bindings, somewhere to finish work, and the public origin. */
 export interface LinkContext {
@@ -228,6 +230,26 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
   return user
 }
 
+/** The statements that store a person's reset link, replacing any earlier one of theirs. */
+function resetStatements(
+  env: Env,
+  r: { teamId: string; userId: string; createdBy: string | null; hash: string; expires: number; now: number },
+) {
+  return [
+    stmt(env.DB, "DELETE FROM password_resets WHERE user_id = ?", r.userId),
+    stmt(
+      env.DB,
+      "INSERT INTO password_resets (hash, team_id, user_id, created_by, expires, created) VALUES (?, ?, ?, ?, ?, ?)",
+      r.hash,
+      r.teamId,
+      r.userId,
+      r.createdBy,
+      r.expires,
+      r.now,
+    ),
+  ]
+}
+
 /** A new reset link for a person, replacing any earlier one of theirs. */
 export async function createReset(
   env: Env,
@@ -236,19 +258,7 @@ export async function createReset(
   const code = newCode()
   const now = nowSeconds()
   const expires = now + opts.ttl
-  await env.DB.batch([
-    stmt(env.DB, "DELETE FROM password_resets WHERE user_id = ?", opts.userId),
-    stmt(
-      env.DB,
-      "INSERT INTO password_resets (hash, team_id, user_id, created_by, expires, created) VALUES (?, ?, ?, ?, ?, ?)",
-      await sha256Hex(code),
-      opts.teamId,
-      opts.userId,
-      opts.createdBy,
-      expires,
-      now,
-    ),
-  ])
+  await env.DB.batch(resetStatements(env, { ...opts, hash: await sha256Hex(code), expires, now }))
   return { code, expires }
 }
 
@@ -300,7 +310,13 @@ export async function completeReset(
 /**
  * Mails a reset link to each active person with this email (in this workspace,
  * if given). Without an email sender, email_not_configured; with one, it
- * answers the same whether or not the address has an account.
+ * answers the same, and as fast, whether or not the address has an account:
+ * finding the people, making their links and sending happen after the answer.
+ *
+ * Throttled by client address, never by email alone (src/auth/throttle.ts):
+ * per email and address (RESET_FREE_REQUESTS, then backoff), so a stranger
+ * can't stop the owner from getting their email, and per address across emails
+ * (RESET_FREE_PER_ADDRESS), so one address can't spray mailboxes.
  */
 export async function requestReset(lc: LinkContext, opts: { email: string; workspace?: string; ip: string }) {
   const { env } = lc
@@ -318,31 +334,55 @@ export async function requestReset(lc: LinkContext, opts: { email: string; works
   if (!isEmail(email)) throw new CampflareError("invalid_email")
   const team = opts.workspace?.trim().toLowerCase() || null
   const now = nowSeconds()
+  const pair = keys.resetPair(email, opts.ip)
+  const address = keys.resetAddress(opts.ip)
   const results = await env.DB.batch([
     ...addressChecks(env.DB, opts.ip, now),
-    readCounter(env.DB, keys.reset(email), now),
-    stmt(
-      env.DB,
-      `SELECT u.id, u.team_id, u.name, t.name AS team_name FROM users u JOIN teams t ON t.id = u.team_id
-       WHERE u.email = ? AND u.deleted = 0 AND u.is_bot = 0
-         AND (?2 IS NULL OR lower(t.domain) = ?2 OR lower(t.name) = ?2)
-       LIMIT 20`,
-      email,
-      team,
-    ),
+    readCounter(env.DB, pair, now),
+    readCounter(env.DB, address, now),
   ])
-  const wait = waitFor(results, now, counter(results[3]))
+  const wait = waitFor(results, now, counter(results[3]), counter(results[4]))
   if (wait !== undefined) throw tooManyAttempts(wait)
-  await countFailure(env.DB, keys.reset(email), now, RESET_FREE_REQUESTS).run()
-  const people = results[4]!.results as { id: string; team_id: string; name: string; team_name: string }[]
-  for (const person of people) {
-    const { code } = await createReset(env, {
-      teamId: person.team_id,
-      userId: person.id,
-      createdBy: null,
-      ttl: RESET_TTL,
-    })
-    lc.waitUntil(
+  await env.DB.batch([
+    countFailure(env.DB, pair, now, RESET_FREE_REQUESTS),
+    countFailure(env.DB, address, now, RESET_FREE_PER_ADDRESS),
+  ])
+  lc.waitUntil(
+    mailResets(lc, sender, email, team).catch((error: unknown) => console.error("reset email failed", error)),
+  )
+}
+
+/** requestReset's work after the answer: one query, one batch making every link, then the emails. */
+async function mailResets(lc: LinkContext, sender: EmailSender, email: string, team: string | null) {
+  const { env } = lc
+  const people = await all<{ id: string; team_id: string; name: string; team_name: string }>(
+    env.DB,
+    `SELECT u.id, u.team_id, u.name, t.name AS team_name FROM users u JOIN teams t ON t.id = u.team_id
+     WHERE u.email = ?1 AND u.deleted = 0 AND u.is_bot = 0
+       AND (?2 IS NULL OR lower(t.domain) = ?2 OR lower(t.name) = ?2)
+     LIMIT 20`,
+    email,
+    team,
+  )
+  if (!people.length) return
+  const now = nowSeconds()
+  const links = await Promise.all(
+    people.map(async (person) => {
+      const code = newCode()
+      const statements = resetStatements(env, {
+        teamId: person.team_id,
+        userId: person.id,
+        createdBy: null,
+        hash: await sha256Hex(code),
+        expires: now + RESET_TTL,
+        now,
+      })
+      return { person, code, statements }
+    }),
+  )
+  await env.DB.batch(links.flatMap((l) => l.statements))
+  await Promise.all(
+    links.map(({ person, code }) =>
       sender
         .send({
           to: email,
@@ -353,8 +393,8 @@ export async function requestReset(lc: LinkContext, opts: { email: string; works
             "If it wasn't you, ignore this email: your password stays as it is.\n",
         })
         .catch((error: unknown) => console.error("reset email failed", error)),
-    )
-  }
+    ),
+  )
 }
 
 /** Seconds from an argument, checked against bounds (invalid_arguments outside them). */
