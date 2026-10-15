@@ -22,6 +22,8 @@ interface ExportFile {
   mode?: string
   url_private_download?: string
   url_private?: string
+  /** A link to a file elsewhere (Google Drive, Dropbox…), not Slack's to serve. */
+  is_external?: boolean
 }
 
 interface ExportMessage extends Json {
@@ -307,7 +309,8 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   }
 
   // Every file not attached yet, whatever the message cursors say: a re-run retries the ones that failed.
-  const failedFiles = options.files === "download" ? await transferPending(s, ex, job, options) : []
+  const transfers =
+    options.files === "download" ? await transferPending(s, ex, job, options) : { failed: [], external: [] }
 
   let emoji: { imported: number; skipped: number } | undefined
   if (options.sourceToken) emoji = await customEmoji(s, options)
@@ -323,12 +326,13 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   if (options.json) {
     s.print({
       job: finished,
-      ...(failedFiles.length ? { failed_files: failedFiles } : {}),
+      ...(transfers.failed.length ? { failed_files: transfers.failed } : {}),
+      ...(transfers.external.length ? { external_files: transfers.external } : {}),
       ...(emoji ? { emoji } : {}),
     })
     return
   }
-  io.stdout(summary(finished, failedFiles, emoji))
+  io.stdout(summary(finished, transfers, emoji))
 }
 
 interface Needed {
@@ -339,9 +343,32 @@ interface Needed {
   name: string
 }
 
-/** The files the server says are still to attach, page by page, transferred; the ones that failed. */
-async function transferPending(s: Session, ex: Export, job: string, options: Options): Promise<string[]> {
-  const failed: string[] = []
+/**
+ * Whether the source token may go to this URL: Slack's own https hosts
+ * (files.slack.com, a workspace's <name>.slack.com), or the origin of
+ * --slack-api. Anything else in an export (an external file, a crafted
+ * export) never sees it.
+ */
+export function tokenMayGoTo(url: string, sourceApi: string): boolean {
+  try {
+    const u = new URL(url)
+    if (u.username || u.password) return false
+    if (u.protocol === "https:" && (u.hostname === "slack.com" || u.hostname.endsWith(".slack.com"))) return true
+    return u.origin === new URL(sourceApi).origin
+  } catch {
+    return false
+  }
+}
+
+interface Transfers {
+  failed: string[]
+  /** Files elsewhere than the source: not fetched, left as a line. */
+  external: string[]
+}
+
+/** The files the server says are still to attach, page by page, transferred. */
+async function transferPending(s: Session, ex: Export, job: string, options: Options): Promise<Transfers> {
+  const done: Transfers = { failed: [], external: [] }
   const days = dayReader(ex)
   let after: string | null = null
   do {
@@ -349,10 +376,12 @@ async function transferPending(s: Session, ex: Export, job: string, options: Opt
       "campflare.import.status",
       { job, files_needed: true, files_after: after ?? undefined },
     )
-    failed.push(...(await transferFiles(s, job, page.files_needed, days, options)))
+    const res = await transferFiles(s, job, page.files_needed, days, options)
+    done.failed.push(...res.failed)
+    done.external.push(...res.external)
     after = page.files_after
   } while (after)
-  return failed
+  return done
 }
 
 /**
@@ -385,16 +414,17 @@ function dayReader(ex: Export) {
   }
 }
 
-/** Downloads files from the source, uploads them here, and attaches them; the ones that failed. */
+/** Downloads files from the source, uploads them here, and attaches them. */
 async function transferFiles(
   s: Session,
   job: string,
   needed: Needed[],
   find: ReturnType<typeof dayReader>,
   options: Options,
-): Promise<string[]> {
+): Promise<Transfers> {
   const fetch = s.io.fetch ?? globalThis.fetch
   const failed: string[] = []
+  const external: string[] = []
   const byMessage = new Map<
     string,
     { conversation: string; ts: string; files: { source_id: string; file_id: string; title: string }[] }
@@ -406,6 +436,10 @@ async function transferFiles(
     const name = need.name
     if (!url) {
       failed.push(`${name}: no download URL`)
+      continue
+    }
+    if (file?.is_external || !tokenMayGoTo(url, options.sourceApi)) {
+      external.push(name)
       continue
     }
     try {
@@ -436,7 +470,7 @@ async function transferFiles(
   for (const { conversation, ts, files } of byMessage.values()) {
     await s.client.call("campflare.import.files", { job, conversation, ts, files })
   }
-  return failed
+  return { failed, external }
 }
 
 async function customEmoji(s: Session, options: Options) {
@@ -455,7 +489,7 @@ async function customEmoji(s: Session, options: Options) {
   }
 }
 
-function summary(job: JobJson, failedFiles: string[], emoji?: { imported: number; skipped: number }): string {
+function summary(job: JobJson, transfers: Transfers, emoji?: { imported: number; skipped: number }): string {
   const c = job.counts
   const lines = [
     `Imported ${job.options.source_name ?? "the export"} as job ${job.id} (${job.state})`,
@@ -468,7 +502,10 @@ function summary(job: JobJson, failedFiles: string[], emoji?: { imported: number
       (job.options.files === "skip" && c.files_skipped ? " (--files download --slack-token to bring them)" : ""),
   ]
   if (c.unmapped_users.length) lines.push(`  unmapped       ${c.unmapped_users.join(", ")} (not in users.json)`)
-  for (const f of failedFiles) lines.push(`  file failed    ${f}`)
+  for (const f of transfers.failed) lines.push(`  file failed    ${f}`)
+  if (transfers.external.length) {
+    lines.push(`  external       ${transfers.external.join(", ")} (links elsewhere: not fetched, left as a line)`)
+  }
   if (emoji) lines.push(`  custom emoji   ${emoji.imported} imported, ${emoji.skipped} skipped (not supported yet)`)
   lines.push(`Undo (within 7 days): campflare import undo ${job.id}`)
   return `${lines.join("\n")}\n`

@@ -1,7 +1,7 @@
 import { createClient } from "@campflare/client"
 import { createServer, type Server } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { chunks, type JobJson } from "../src/import"
+import { chunks, tokenMayGoTo, type JobJson } from "../src/import"
 import { memoryAccess, openZip, ZipError } from "../src/zip"
 import { baseUrl, loggedIn, memoryIo } from "./harness"
 import { makeZip } from "./zip-writer"
@@ -14,6 +14,8 @@ let source: Server
 let sourceUrl = ""
 /** How many more downloads of plan.pdf fail with a 503. */
 let planFailures = 0
+/** Requests that reached the stand-in for somewhere that isn't Slack, with their authorization. */
+const elsewhere: (string | undefined)[] = []
 
 beforeAll(async () => {
   source = createServer((req, res) => {
@@ -25,6 +27,10 @@ beforeAll(async () => {
           ok ? { ok, emoji: { fiesta: "https://x/fiesta.png", party: "alias:fiesta" } } : { ok, error: "invalid_auth" },
         ),
       )
+    }
+    if (req.url?.startsWith("/elsewhere/")) {
+      elsewhere.push(req.headers.authorization)
+      return res.end("someone else's")
     }
     if (req.url === "/files/F01/plan.pdf") {
       if (planFailures > 0) {
@@ -125,6 +131,20 @@ function exportZip(email: string, opts: { zip64?: boolean; folder?: string } = {
         { id: "F04", name: "nolink.txt" },
       ],
     },
+    {
+      ts: "1700000750.000850",
+      user: "U04",
+      text: "Mira esto",
+      files: [
+        // Another host (a crafted export), and a link to a file elsewhere: neither may get the token.
+        {
+          id: "F05",
+          name: "trap.bin",
+          url_private_download: `${sourceUrl.replace("127.0.0.1", "localhost")}/elsewhere/F05`,
+        },
+        { id: "F06", name: "Drive doc", is_external: true, url_private: `${sourceUrl}/elsewhere/F06` },
+      ],
+    },
   ]
   const prefix = opts.folder ? `${opts.folder}/` : ""
   return makeZip(
@@ -181,8 +201,8 @@ describe("campflare import slack", () => {
     expect(admin.out).toContain("6: 1 match by email, 5 would be placeholders")
     expect(admin.out).toContain("ana → @ana")
     expect(admin.out).toContain("#café renamed #café-imported")
-    expect(admin.out).toContain("messages       13")
-    expect(admin.out).toContain("files          4 (left as a line each)")
+    expect(admin.out).toContain("messages       14")
+    expect(admin.out).toContain("files          6 (left as a line each)")
     admin.clear()
     expect(await admin.run("import", "slack", "export.zip", "--dry-run", "--merge-into-existing", "--json")).toBe(0)
     const plan = JSON.parse(admin.out) as { conversations: { clashes: string[] }; messages: number }
@@ -201,14 +221,14 @@ describe("campflare import slack", () => {
     withZip(admin, { "acme.zip": exportZip(email, { folder: "Acme Slack export" }) })
     expect(await admin.run("import", "slack", "acme.zip")).toBe(0)
     expect(admin.err).toContain("Started import J")
-    expect(admin.err).toContain("#general-imported: 8 messages")
+    expect(admin.err).toContain("#general-imported: 9 messages")
     expect(admin.err).toContain("#café-imported: 1 messages")
     expect(admin.out).toMatch(/^Imported acme\.zip as job J[A-Z0-9]+ \(finished\)/)
     expect(admin.out).toContain("1 matched by email, 5 placeholders (deactivated)")
     expect(admin.out).toContain("3 created, 3 renamed, 0 merged, 0 skipped")
-    expect(admin.out).toContain("messages       13, 2 reactions, 1 pins")
+    expect(admin.out).toContain("messages       14, 2 reactions, 1 pins")
     expect(admin.out).toContain(
-      "files          0 attached, 3 left as a line (--files download --slack-token to bring them)",
+      "files          0 attached, 5 left as a line (--files download --slack-token to bring them)",
     )
     const job = /job (J[A-Z0-9]+)/.exec(admin.out)![1]!
 
@@ -239,7 +259,7 @@ describe("campflare import slack", () => {
     expect(admin.out).toMatch(new RegExp(`^${job}  finished  acme\\.zip  `))
     admin.clear()
     expect(await admin.run("import", "status", job)).toBe(0)
-    expect(admin.out).toContain("13 messages, 5 placeholders, 6 conversations created")
+    expect(admin.out).toContain("14 messages, 5 placeholders, 6 conversations created")
     admin.clear()
     expect(await admin.run("import", "status", job, "--json")).toBe(0)
     expect(JSON.parse(admin.out)).toMatchObject({ job: { id: job, state: "finished" } })
@@ -251,7 +271,7 @@ describe("campflare import slack", () => {
 
     admin.clear()
     expect(await admin.run("import", "undo", job)).toBe(0)
-    expect(admin.out).toMatch(new RegExp(`Undid import ${job}: removed .*13 messages`))
+    expect(admin.out).toMatch(new RegExp(`Undid import ${job}: removed .*14 messages`))
     admin.clear()
     expect(await admin.run("import", "undo", job, "--json")).toBe(0)
     expect(JSON.parse(admin.out)).toMatchObject({ job: { state: "undone" }, removed: {} })
@@ -286,13 +306,15 @@ describe("campflare import slack", () => {
     // Merging was the first run's choice: the job keeps its options.
     expect(result.job.options).toMatchObject({ merge_into_existing: false, files: "download" })
     expect(result.job.counts).toMatchObject({
-      messages: 13,
-      files: 3,
+      messages: 14,
+      files: 5,
       files_attached: 1,
-      files_skipped: 2,
+      files_skipped: 4,
       reactions: 2,
     })
     expect(result.failed_files).toEqual(["gone.png: HTTP 404", "nolink.txt: no download URL"])
+    expect(result).toMatchObject({ external_files: ["trap.bin", "Drive doc"] })
+    expect(elsewhere).toEqual([])
     expect(result.emoji).toEqual({ imported: 0, skipped: 2 })
 
     const { channels } = await client.call<{ ok: boolean; channels: { id: string; name: string }[] }>(
@@ -331,6 +353,7 @@ describe("campflare import slack", () => {
       ),
     ).toBe(0)
     expect(admin.out).toContain("file failed    plan.pdf: not authorized (check --slack-token)")
+    expect(admin.out).toContain("external       trap.bin, Drive doc (links elsewhere: not fetched, left as a line)")
     expect(admin.err).toContain("Couldn't list the export's custom emoji: invalid_auth")
   })
 
@@ -401,6 +424,20 @@ describe("the zip reader", () => {
     await expect(zip.read(zip.entries[0]!)).rejects.toThrow("broken entry")
     const odd = await openZip(memoryAccess(good))
     await expect(odd.read({ ...odd.entries[0]!, method: 14 })).rejects.toThrow("compression method 14")
+  })
+})
+
+describe("tokenMayGoTo", () => {
+  it("allows Slack's https hosts and the --slack-api origin, nothing else", () => {
+    const api = "https://slack.com/api/"
+    expect(tokenMayGoTo("https://files.slack.com/files-pri/T1-F1/download/a.pdf", api)).toBe(true)
+    expect(tokenMayGoTo("https://acme.slack.com/files/U1/F1/a.pdf", api)).toBe(true)
+    expect(tokenMayGoTo("http://files.slack.com/files-pri/T1-F1/a.pdf", api)).toBe(false)
+    expect(tokenMayGoTo("https://files.slack.com.evil.example/a.pdf", api)).toBe(false)
+    expect(tokenMayGoTo("https://evilslack.com/a.pdf", api)).toBe(false)
+    expect(tokenMayGoTo("https://user:pw@files.slack.com/a.pdf", api)).toBe(false)
+    expect(tokenMayGoTo("not a url", api)).toBe(false)
+    expect(tokenMayGoTo("http://127.0.0.1:9/files/F1", "http://127.0.0.1:9/api/")).toBe(true)
   })
 })
 
