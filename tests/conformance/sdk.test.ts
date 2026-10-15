@@ -134,6 +134,49 @@ describe("@slack/web-api", () => {
     expect(res.message).toMatchObject({ bot_id: expect.any(String), user: app.botUserId })
   })
 
+  it("chat.scheduleMessage, scheduledMessages.list and deleteScheduledMessage; the alarm posts it", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const later = await owner.chat.scheduleMessage({ channel: general, text: "à demain", post_at: now + 3600 })
+    expect(later).toMatchObject({ ok: true, channel: general, post_at: now + 3600 })
+    const soon = await owner.chat.scheduleMessage({ channel: general, text: "すぐに, 곧, pronto", post_at: now + 2 })
+    const list = await owner.chat.scheduledMessages.list({ channel: general })
+    expect(list.scheduled_messages?.map((m) => m.id)).toEqual([soon.scheduled_message_id, later.scheduled_message_id])
+    await owner.chat.deleteScheduledMessage({ channel: general, scheduled_message_id: later.scheduled_message_id! })
+    await expect(
+      owner.chat.deleteScheduledMessage({ channel: general, scheduled_message_id: later.scheduled_message_id! }),
+    ).rejects.toMatchObject({ data: { ok: false, error: "invalid_scheduled_message_id" } })
+    await expect(owner.chat.scheduleMessage({ channel: general, text: "x", post_at: now - 60 })).rejects.toMatchObject({
+      data: { ok: false, error: "time_in_past" },
+    })
+    // The Scheduler's alarm, in wrangler dev, posts it at its time.
+    const deadline = Date.now() + 15_000
+    let texts: (string | undefined)[] = []
+    while (Date.now() < deadline) {
+      texts = (await owner.conversations.history({ channel: general, limit: 5 })).messages?.map((m) => m.text) ?? []
+      if (texts.includes("すぐに, 곧, pronto")) break
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    expect(texts).toContain("すぐに, 곧, pronto")
+    expect((await owner.chat.scheduledMessages.list({ channel: general })).scheduled_messages).toEqual([])
+  })
+
+  it("reminders.add, info, list, complete and delete", async () => {
+    const added = await bob.client.reminders.add({ text: "Rendre le livre", time: "in 2 hours" })
+    expect(added.reminder).toMatchObject({ text: "Rendre le livre", user: bob.id, recurring: false, complete_ts: 0 })
+    const id = added.reminder!.id!
+    expect((await bob.client.reminders.info({ reminder: id })).reminder?.id).toBe(id)
+    expect((await bob.client.reminders.list()).reminders?.map((r) => r.id)).toContain(id)
+    await bob.client.reminders.complete({ reminder: id })
+    expect((await bob.client.reminders.info({ reminder: id })).reminder?.complete_ts).toBeGreaterThan(0)
+    await bob.client.reminders.delete({ reminder: id })
+    await expect(bob.client.reminders.info({ reminder: id })).rejects.toMatchObject({
+      data: { ok: false, error: "not_found" },
+    })
+    await expect(bob.client.reminders.add({ text: "x", time: "someday" })).rejects.toMatchObject({
+      data: { ok: false, error: "cannot_parse" },
+    })
+  })
+
   it("streams a reply with chatStream (startStream, appendStream, stopStream) after setStatus", async () => {
     const bot = client(app.botToken)
     const question = await owner.chat.postMessage({ channel: general, text: "what's new?" })
