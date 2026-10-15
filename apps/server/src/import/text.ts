@@ -1,3 +1,5 @@
+import { CHANNEL_NAME_CHARS, MAX_CHANNEL_NAME, validChannelName } from "../db/conversations"
+
 // Rewriting an export's text for this workspace (docs/import.md, Mapping).
 
 const USER_MENTION = /<@([UW][A-Z0-9]+)(?:\|([^>]*))?>/g
@@ -67,13 +69,14 @@ export function handleFrom(name: string): string {
 
 /** A valid channel name from an export's (Slack's are valid already; this guards the rest). */
 export function channelNameFrom(name: string): string {
-  const normalized = name
+  // What validChannelName refuses becomes "-", and it's short enough for "-imported-10" after it.
+  const cleaned = name
     .replace(/^#/, "")
     .trim()
     .toLowerCase()
-    .replace(/[^\p{Ll}\p{Lo}\p{N}_-]+/gu, "-")
-    .slice(0, 64)
-  return normalized || "imported"
+    .replace(new RegExp(`[^${CHANNEL_NAME_CHARS}]+`, "gu"), "-")
+    .slice(0, MAX_CHANNEL_NAME - "-imported-10".length)
+  return cleaned ? validChannelName(cleaned) : "imported"
 }
 
 /** The names to try, in order: the name, then `-imported`, `-imported-2`… */
