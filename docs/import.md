@@ -199,7 +199,7 @@ finishing (`undo_window_passed` after). It deletes up to 2000 messages per call,
 with their reactions, stars and activity, answering `done: false` until none are
 left; then the memberships, files (and their R2 objects), the conversations the
 job created (with their bookmarks, stars, notification levels and activity) and
-the placeholder users. The job ends `undone`. After finishing, undo refuses with
+the placeholder users. The job ends `undone`. Undo refuses (before it starts) with
 `import_in_use` when a conversation the job created holds messages that didn't
 come from it: people have used it since, and removing it would take their
 messages too.
