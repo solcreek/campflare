@@ -5,6 +5,8 @@ import type { PushMessage } from "./send"
 
 /** The longest body, in characters: a lock screen shows a few lines anyway. */
 export const BODY_LIMIT = 300
+/** The longest title: a bot's name can be long. */
+export const TITLE_LIMIT = 100
 
 /** An activity item as activity_added carries it (activityJson()). */
 export interface PushItem {
@@ -38,6 +40,16 @@ export interface NotificationPayload {
 
 const ENTITIES: Record<string, string> = { "&lt;": "<", "&gt;": ">", "&amp;": "&" }
 
+/**
+ * A `<!…>` as text: the broadcasts and a user group as @mentions, a date as
+ * its fallback text, anything else as its label (or nothing).
+ */
+function special(command: string, label: string | undefined): string {
+  if (/^(here|channel|everyone)$/.test(command)) return `@${(label || command).replace(/^@/, "")}`
+  if (command.startsWith("subteam^")) return label ? `@${label.replace(/^@/, "")}` : "@group"
+  return label ?? ""
+}
+
 /** Slack mrkdwn as a notification shows it: mentions as @name, links as their label, entities decoded. */
 export function plainText(text: string, names: Names): string {
   return text
@@ -46,8 +58,7 @@ export function plainText(text: string, names: Names): string {
       if (target.startsWith("#")) {
         return `#${label || names.conversations.get(target.slice(1))?.name || "channel"}`
       }
-      if (target.startsWith("!subteam^")) return label || "@group"
-      if (target.startsWith("!")) return `@${label || target.slice(1)}`
+      if (target.startsWith("!")) return special(target.slice(1), label)
       return label || target.replace(/^mailto:/, "")
     })
     .replace(/&(lt|gt|amp);/g, (e) => ENTITIES[e]!)
@@ -75,12 +86,14 @@ export function itemPush(item: PushItem, names: Names): PushMessage & { payload:
     (item.actor && names.users.get(item.actor)) || item.message?.username || (item.actor ? "Someone" : "Campflare")
   const c = names.conversations.get(item.channel)
   const where = !c ? "" : c.kind === "im" ? "" : c.kind === "mpim" ? " in a group DM" : ` in #${c.name}`
-  const title =
+  const title = truncate(
     item.type === "reaction"
       ? `${who} reacted :${item.reaction ?? ""}:${where}`
       : item.type === "thread_reply"
         ? `${who} replied${where}`
-        : `${who}${where}`
+        : `${who}${where}`,
+    TITLE_LIMIT,
+  )
   const text = plainText(item.message?.text ?? "", names)
   const body = truncate(text || (item.message?.files?.length ? "sent a file" : "sent a message"), BODY_LIMIT)
   return {

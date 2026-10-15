@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { BODY_LIMIT, itemPush, plainText, routeOf, type Names } from "../src/push/payload"
+import { BODY_LIMIT, itemPush, plainText, routeOf, TITLE_LIMIT, type Names } from "../src/push/payload"
 import { fitPayload, PUSH_TIMEOUT_MS, sendPush, setPushFetch } from "../src/push/send"
 import { MAX_PLAINTEXT } from "../src/push/encrypt"
 import { loadVapid } from "../src/push/vapid"
@@ -25,6 +25,10 @@ describe("plainText", () => {
   it("turns mrkdwn into what a lock screen shows", () => {
     expect(plainText("<@U2> y <@U9> y <@U1|zoe>", names)).toBe("@李雷 y @someone y @zoe")
     expect(plainText("<#C1> <#C2|random> <#C3>", names)).toBe("#général #random #channel")
+    expect(plainText("<!date^1760000000^{date_short}|15 oct. 2026> à <!foo> <!foo|bar>.", names)).toBe(
+      "15 oct. 2026 à bar.",
+    )
+    expect(plainText("<!everyone|@everyone> <!subteam^S3|diseño>", names)).toBe("@everyone @diseño")
     expect(plainText("<!here> <!channel|channel> <!subteam^S1|@diseño> <!subteam^S2>", names)).toBe(
       "@here @channel @diseño @group",
     )
@@ -43,6 +47,11 @@ describe("itemPush", () => {
       names,
     )
     expect(push.payload.title).toBe("Deploy bot")
+    const named = itemPush(
+      { id: "5", type: "mention", channel: "C9", ts: "5", message: { text: "x", username: "ボット".repeat(100) } },
+      names,
+    )
+    expect([...named.payload.title]).toHaveLength(TITLE_LIMIT)
     expect([...push.payload.body]).toHaveLength(BODY_LIMIT)
     expect(push.payload.body.endsWith("…")).toBe(true)
     expect(push.urgency).toBe("high")
