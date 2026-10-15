@@ -601,4 +601,32 @@ describe("createWorkspace", () => {
     ])
     ws.stop()
   })
+
+  it("reads loaded pins and bookmarks again after a reconnect", async () => {
+    const pin = (ts: string) => ({ channel: "C1", created: 1, created_by: "U2", message: { ts, text: ts } })
+    const bookmark = (id: string) => ({ id, channel_id: "C1", title: id, link: `https://example.com/${id}`, rank: id })
+    const { api, ws } = await started(
+      {
+        "pins.list": () => ({ items: [pin("0000000100.000000")] }),
+        "bookmarks.list": () => ({ bookmarks: [bookmark("Bk1")] }),
+      },
+      "rtm",
+    )
+    await settle()
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    await ws.loadPins("C1")
+    await ws.loadBookmarks("C1")
+    // Missed while the link was down.
+    api.handlers["pins.list"] = () => ({ items: [pin("0000000300.000000"), pin("0000000100.000000")] })
+    api.handlers["bookmarks.list"] = () => ({ bookmarks: [] })
+    api.handlers["conversations.history"] = () => new Error("ratelimited")
+    FakeSocket.all[0]!.close()
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    await settle()
+    expect(ws.getState().pins.C1?.map((p) => p.ts)).toEqual(["0000000300.000000", "0000000100.000000"])
+    expect(ws.getState().bookmarks.C1).toEqual([])
+    ws.stop()
+  })
 })

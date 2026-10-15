@@ -157,7 +157,13 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   async function resync() {
     const conversations = await listConversations().catch(() => [])
     for (const conversation of conversations) dispatch({ type: "conversation", conversation })
-    await Promise.all([...Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})), loadViews()])
+    // Events missed while the link was down are lost: what's loaded is read again.
+    await Promise.all([
+      ...Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})),
+      ...Object.keys(state.pins).map((c) => loadPins(c).catch(() => {})),
+      ...Object.keys(state.bookmarks).map((c) => loadBookmarks(c).catch(() => {})),
+      loadViews(),
+    ])
   }
 
   function goLive() {
