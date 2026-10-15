@@ -75,6 +75,10 @@ export const NEEDS: Record<string, Need> = {
   "reactions.remove": ["reactions:write"],
   "reactions.get": ["reactions:read"],
 
+  "pins.add": ["pins:write"],
+  "pins.remove": ["pins:write"],
+  "pins.list": ["pins:read"],
+
   "files.getUploadURLExternal": ["files:write"],
   "files.completeUploadExternal": ["files:write"],
   "files.delete": ["files:write"],
@@ -186,6 +190,7 @@ const READ = [
   "search:read",
   "files:read",
   "reactions:read",
+  "pins:read",
   "emoji:read",
   "dnd:read",
   "team:read",
@@ -202,6 +207,7 @@ const WRITE = [
   ...CONVERSATION_SCOPES.filter((s) => s.endsWith(":write")),
   "chat:write",
   "reactions:write",
+  "pins:write",
   "files:write",
   "views:write",
 ]
@@ -244,6 +250,8 @@ export const DEFAULT_BOT_SCOPES = [
   "mpim:write",
   "reactions:read",
   "reactions:write",
+  "pins:read",
+  "pins:write",
   "team:read",
   "users:read",
   "users.profile:read",

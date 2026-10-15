@@ -7,13 +7,14 @@ import {
   MAX_TEXT,
   type NewMessage,
 } from "../db/messages"
+import { announcePin, pinCountFrom, pinCountStatement } from "../db/pins"
 import { stmt } from "../db/query"
 import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
 import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
-import { loadExtras, messageJson, permalink } from "../api/shapes"
+import { loadExtras, messageJson, permalink, type MessageExtras } from "../api/shapes"
 
 /** Who a message is from: the person, or the bot with its app. */
 export function authorOf(ctx: Ctx<Actor>): Pick<NewMessage, "user_id" | "bot_id" | "app_id" | "username"> {
@@ -269,11 +270,12 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
-    const [, tombstone, audience, reactions] = await db.batch([
+    const [, tombstone, audience, reactions, pins] = await db.batch([
       stmt(
         db,
         `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
-           bot_id = NULL, app_id = NULL, blocks = NULL, attachments = NULL, files = NULL, edited_ts = NULL
+           bot_id = NULL, app_id = NULL, blocks = NULL, attachments = NULL, files = NULL, edited_ts = NULL,
+           pinned_by = NULL, pinned_at = NULL
          WHERE channel_id = ? AND ts = ?`,
         c.id,
         message.ts,
@@ -281,21 +283,30 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       audienceStatement(db, c.id),
       reactionsStatement(db, c.id, message.ts),
+      pinCountStatement(db, c.id),
     ])
+    const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
     announceChanged(ctx, c, {
       before: message,
       after: tombstone!.results[0] as MessageRow,
       audience: audienceFrom(audience!),
-      extras: await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]),
+      extras,
     })
+    unpinned(ctx, c, message, { extras, audience: audienceFrom(audience!), count: pinCountFrom(pins!) })
   } else {
     // Its reactions are read for the event before they go; a reply's thread is recounted in the same batch.
     const isReply = Boolean(message.thread_ts && message.thread_ts !== message.ts)
-    const [reactions, audience] = await db.batch([
+    const [reactions, audience, , , pins] = await db.batch([
       reactionsStatement(db, c.id, message.ts),
       audienceStatement(db, c.id),
-      stmt(db, "UPDATE messages SET deleted = 1 WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+      stmt(
+        db,
+        "UPDATE messages SET deleted = 1, pinned_by = NULL, pinned_at = NULL WHERE channel_id = ? AND ts = ?",
+        c.id,
+        message.ts,
+      ),
       stmt(db, "DELETE FROM reactions WHERE channel_id = ? AND ts = ?", c.id, message.ts),
+      pinCountStatement(db, c.id),
       ...(isReply ? [recountThread(db, c.id, message.thread_ts!)] : []),
     ])
     const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
@@ -315,7 +326,18 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
         previous_message: messageJson(message, extras, ctx.origin),
       },
     })
+    unpinned(ctx, c, message, { extras, audience: audienceFrom(audience!), count: pinCountFrom(pins!) })
   }
+}
+
+/** Deleting a pinned message unpins it: say so, as pins.remove would. */
+function unpinned(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  message: MessageRow,
+  rest: { extras: MessageExtras; audience: string[]; count: number },
+) {
+  if (message.pinned_at) announcePin(ctx, c, { added: false, message, ...rest })
 }
 
 /**

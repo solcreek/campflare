@@ -127,6 +127,10 @@ export interface MessageRow {
   stream_stopped_by: string | null
   /** chat.startStream's task_display_mode when it's "plan"; null for the default timeline. */
   stream_task_display: string | null
+  /** Who pinned it to its conversation (migration 0022); null when it isn't pinned. */
+  pinned_by: string | null
+  /** When it was pinned, in seconds; null when it isn't. */
+  pinned_at: number | null
 }
 
 export interface ReactionRow {

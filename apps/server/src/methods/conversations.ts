@@ -118,10 +118,11 @@ method("conversations.history", "actor", async (ctx) => {
   const forward = Boolean(oldest && !latest)
   const db = ctx.env.DB
   const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ${forward ? "ASC" : "DESC"} LIMIT ?`
-  // The page and its reactions in one round trip.
-  const [found, reactions] = await db.batch([
+  // The page, its reactions and the pin count: one round trip.
+  const [found, reactions, pins] = await db.batch([
     stmt(db, pageSql, ...params, limit + 1),
     reactionsOfQuery(db, pageSql, ...params, limit + 1),
+    stmt(db, "SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL", c.id),
   ])
   const rows = found!.results as MessageRow[]
   const hasMore = rows.length > limit
@@ -130,7 +131,7 @@ method("conversations.history", "actor", async (ctx) => {
   return {
     messages: await messagesOut(ctx, page, reactions!),
     has_more: hasMore,
-    pin_count: 0,
+    pin_count: (pins!.results[0] as { n: number }).n,
     channel_actions_ts: null,
     channel_actions_count: 0,
     response_metadata: { next_cursor: hasMore && !forward ? encodeCursor(page.at(-1)!.ts) : "" },
@@ -166,17 +167,11 @@ method("conversations.replies", "actor", async (ctx) => {
   const db = ctx.env.DB
   const messageSql = "SELECT * FROM messages WHERE channel_id = ? AND ts = ? AND deleted = 0"
   const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ASC LIMIT ?`
+  const both = `SELECT channel_id, ts FROM (${messageSql}) UNION ALL SELECT channel_id, ts FROM (${pageSql})`
   const [head, found, reactions] = await db.batch([
     stmt(db, messageSql, c.id, ts),
     stmt(db, pageSql, ...params, limit + 1),
-    reactionsOfQuery(
-      db,
-      `SELECT channel_id, ts FROM (${messageSql}) UNION ALL SELECT channel_id, ts FROM (${pageSql})`,
-      c.id,
-      ts,
-      ...params,
-      limit + 1,
-    ),
+    reactionsOfQuery(db, both, c.id, ts, ...params, limit + 1),
   ])
   const message = head!.results[0] as MessageRow | undefined
   if (!message) throw new CampflareError("message_not_found")

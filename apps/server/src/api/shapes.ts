@@ -359,6 +359,8 @@ export function messageJson(m: MessageRow, extras: MessageExtras, origin: string
     ...(m.edited_ts ? { edited: { user: m.edited_user, ts: m.edited_ts } } : {}),
     ...(reactions.length > 0 ? { reactions } : {}),
     ...(m.stream_state ? { streaming_state: m.stream_state } : {}),
+    // A message is pinned only to its own conversation.
+    ...(m.pinned_at ? { pinned_to: [m.channel_id] } : {}),
   }
 }
 
