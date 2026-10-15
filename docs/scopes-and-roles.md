@@ -111,6 +111,8 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `admin.users:write`                | `campflare.users.createPasswordReset`                  | a role above the person's ([invites.md](invites.md))      |
 | `admin.invites:write`              | `campflare.invites.create`, `.revoke`                  | plus the admin role; an admin invite, owner               |
 | `admin.invites:read`               | `campflare.invites.list`                               | plus the admin role                                       |
+| `admin.import:write`               | `campflare.import.*` but `status` and `list`           | plus the admin role ([import.md](import.md))              |
+| `admin.import:read`                | `campflare.import.status`, `.list`                     | plus the admin role                                       |
 | `calls:read` / `calls:write`       | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
 | `activity:read` / `activity:write` | `campflare.activity.list` / `.mark`                    | a person's inbox ([activity.md](activity.md))             |
 | `prefs:read` / `prefs:write`       | `campflare.prefs.get` / `.set`                         | notification levels                                       |

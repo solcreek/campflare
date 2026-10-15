@@ -133,6 +133,7 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | other                    | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                                              |
 | admin (`campflare.*`)    | `bootstrap`, `methods.list`, `users.create`, `users.deactivate`, `users.setRole`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
 | invitations              | `campflare.invites.create`, `list`, `revoke`, `accept`; `campflare.users.createPasswordReset`, `resetPassword`, `requestPasswordReset`                                                                                                           |
+| import (`campflare.*`)   | `import.start`, `users`, `conversations`, `messages`, `files`, `finish`, `status`, `list`, `undo`: a Slack export, in chunks                                                                                                                     |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -187,6 +188,27 @@ signs them in and sends them to the app), or accepts from a terminal with
 `campflare join <link> <handle>`; agents call `campflare.invites.accept`. The
 workspace hears `team_join`. Codes are stored only as hashes, links expire, and
 using them is rate limited. See [docs/invites.md](docs/invites.md).
+
+### Importing from Slack
+
+An admin brings a Slack workspace export (the zip from Slack's export page)
+with its people, channels, private channels, DMs, threads, reactions, pins and
+edits:
+
+```sh
+campflare import slack export.zip --dry-run          # who matches by email, which names are taken; writes nothing
+campflare import slack export.zip                    # progress on stderr, a summary on stdout; re-run to continue
+campflare import slack export.zip --files download --slack-token xoxp-…   # bring the files too
+campflare import undo J…                             # take it all back (within 7 days of finishing)
+```
+
+People match by email; the rest become deactivated placeholders (add or invite
+people first to have their history under their own accounts). A channel whose
+name is taken becomes `name-imported` unless `--merge-into-existing`. The CLI
+reads the zip here and calls `campflare.import.*` in chunks, which write
+straight to D1: an import sends no events, activity or notifications. Every
+row carries its job, so `campflare.import.undo` can remove it. See
+[docs/import.md](docs/import.md).
 
 Search uses an FTS5 trigram index that ignores case and diacritics. It matches
 substrings in any script: words in Chinese, Japanese and Korean, which aren't
@@ -487,6 +509,7 @@ campflare api conversations.list limit=5                      # any method, raw 
 campflare profile --status 'En réunion' --emoji :calendar: --until 1h --photo me.png
 campflare group create oncall --name 'On call' --members @ana,@kenji   # then mention @oncall
 campflare join https://chat.example.com/join/<code> ana       # accept an invitation, log in as ana
+campflare import slack export.zip --dry-run                   # an admin bringing a Slack export
 ```
 
 Profiles are kept in `~/.config/campflare/config.json` (mode 0600).
@@ -537,6 +560,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Push notifications (activity items already say whether to `notify`).
+- Importing custom emoji, claiming an import's placeholder for a real account,
+  and Enterprise Grid exports ([docs/import.md](docs/import.md)).
 - Custom emoji, an admin setting restricting who may manage user groups,
   scheduled DND hours, setting a person's time zone (reminders read `tz`,
   which no method sets yet). Pinning files (pin the message that shares one),
