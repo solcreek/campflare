@@ -196,6 +196,13 @@ describe("MCP over Streamable HTTP", () => {
     })
     const all = await callTool<{ items: Record<string, unknown>[] }>(client, "get_activity", { unread_only: false })
     expect(all.items.map((i) => i.read ?? false)).toEqual([false, true])
+    for (const args of [{}, { ids: [] }, { all: false }]) {
+      const res = (await client.callTool({ name: "mark_activity_read", arguments: args })) as ToolResult
+      expect(res.isError).toBe(true)
+      expect(res.content[0]!.text).toBe(
+        "error: invalid_arguments\n[ERROR] give ids (the items' ids from get_activity) or all: true",
+      )
+    }
     expect(await callTool(client, "mark_activity_read", { all: true })).toMatchObject({ unread: { total: 0 } })
     expect((await callTool<{ items: unknown[] }>(client, "get_activity")).items).toEqual([])
     await client.close()

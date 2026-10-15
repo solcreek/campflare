@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server"
 import * as z from "zod"
-import { CampflareError } from "../api/errors"
+import { CampflareError, invalidArguments } from "../api/errors"
 import { first } from "../db/query"
 import type { MemberRow } from "../db/rows"
 import { author, compactMessage, directory, result, type Directory, type RawMessage } from "./format"
@@ -342,6 +342,9 @@ export function buildServer(caller: Caller): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     tool(async ({ ids, all }) => {
+      if (!all && !ids?.length) {
+        throw invalidArguments("give ids (the items' ids from get_activity) or all: true")
+      }
       const res = await invoke<{ marked: number; unread: Record<string, number> }>(
         caller,
         "campflare.activity.mark",
