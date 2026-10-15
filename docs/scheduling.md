@@ -80,11 +80,15 @@ poster, with what is true then:
   DM from the built-in bot: "Your scheduled message to #x couldn't be sent
   (not_in_channel): …". Slack does the same through Slackbot.
 - **Deactivated** person or bot user: dropped silently; nobody to tell.
-- **Token scopes no longer matter**: the scheduled message belongs to the
-  person or bot, not to the token that created it, as on Slack. Revoking or
-  expiring the token doesn't cancel it; `chat.deleteScheduledMessage` does
-  (any of the poster's tokens with `chat:write`). Deactivating a person
-  cancels theirs, as above.
+- **The token's scopes, as they were**: the row keeps the scopes the
+  scheduling token held, and the fire-time check uses them. So a bot whose
+  token lacks `chat:write.public` and that was removed from the channel is
+  dropped like a person who left; one with it may still post to a public
+  channel, as it could have when scheduling.
+- **The token itself no longer matters**: the scheduled message belongs to the
+  person or bot, as on Slack. Revoking or expiring the token doesn't cancel it;
+  `chat.deleteScheduledMessage` does (any of the poster's tokens with
+  `chat:write`). Deactivating a person cancels theirs, as above.
 
 Reminders for a deactivated person are dropped at fire time without a DM.
 

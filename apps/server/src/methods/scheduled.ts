@@ -79,13 +79,15 @@ method("chat.scheduleMessage", "actor", async (ctx) => {
     post_at: postAt,
     created: now,
     origin: ctx.origin,
+    scopes: ctx.auth.scopes.join(","),
     claimed_until: null,
     attempts: 0,
   }
   await db
     .prepare(
       `INSERT INTO scheduled_messages (id, team_id, channel_id, user_id, app_id, username, text, blocks, attachments,
-         metadata, thread_ts, reply_broadcast, post_at, created, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         metadata, thread_ts, reply_broadcast, post_at, created, origin, scopes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -103,6 +105,7 @@ method("chat.scheduleMessage", "actor", async (ctx) => {
       row.post_at,
       row.created,
       row.origin,
+      row.scopes,
     )
     .run()
   // Answered only once the alarm is set: an ok means it will fire.

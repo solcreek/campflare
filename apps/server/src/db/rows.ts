@@ -174,6 +174,8 @@ export interface ScheduledMessageRow {
   post_at: number
   created: number
   origin: string
+  /** The scheduling token's scopes, as it held them: what posting checks at fire time. */
+  scopes: string
   claimed_until: number | null
   attempts: number
 }

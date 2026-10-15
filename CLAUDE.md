@@ -504,8 +504,10 @@ guarded UPDATE (`claimed_until`, a 60 s lease; `chat.deleteScheduledMessage`
 refuses a claimed row) and finishes it in the post's own batch:
 `postMessage()`'s `also` statements (the row's DELETE, a reminder's `fired = 1`)
 commit with the message, so a row posts once. At fire time the poster is
-checked again as they are then (`requireWritable` as a rebuilt actor; scopes
-don't matter, the message is theirs, not the token's): a `CampflareError` drops
+checked again as they are then (`requireWritable` as a rebuilt actor with the
+scopes the scheduling token held, kept in `scheduled_messages.scopes`, so a bot
+without `chat:write.public` must still be a member; the token itself may be
+revoked since, the message is its poster's): a `CampflareError` drops
 it and the built-in bot DMs a person the reason; other errors keep the claim
 and retry, up to `MAX_ATTEMPTS`. The built-in bot (`src/system-bot.ts`,
 `systemActor()`) is made lazily, found by `apps.built_in = 'campflare'`, never

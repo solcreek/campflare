@@ -2,7 +2,6 @@ import { DurableObject } from "cloudflare:workers"
 import type { Actor } from "./api/context"
 import { CampflareError } from "./api/errors"
 import { nowSeconds } from "./api/ids"
-import { DEFAULT_BOT_SCOPES, FULL_USER_SCOPES } from "./api/scopes"
 import { requireWritable } from "./db/conversations"
 import { postMessage } from "./db/messages"
 import { first, run, stmt } from "./db/query"
@@ -145,10 +144,12 @@ async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, 
   const c = conversation!.results[0] as ConversationRow | undefined
   if (!poster || (row.app_id && !appRow)) throw new CampflareError("account_inactive")
   if (!c) throw new CampflareError("channel_not_found")
-  // The poster's scopes don't matter now: the message is theirs, not the token's (docs/scheduling.md).
+  // The scopes of the token that scheduled it, as they were: a bot without chat:write.public must
+  // still be in the channel. The token itself may be gone: the message is its poster's (docs/scheduling.md).
+  const scopes = row.scopes.split(",").filter(Boolean)
   const auth: Actor = appRow
-    ? { kind: "bot", team, user: poster, app: appRow, scopes: DEFAULT_BOT_SCOPES }
-    : { kind: "user", team, user: poster, scopes: FULL_USER_SCOPES }
+    ? { kind: "bot", team, user: poster, app: appRow, scopes }
+    : { kind: "user", team, user: poster, scopes }
   const ctx = serverCtx(env, auth, row.origin, waitUntil)
   await requireWritable(ctx, c)
   const { row: posted } = await postMessage(

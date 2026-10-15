@@ -22,6 +22,9 @@ CREATE TABLE scheduled_messages (
   created INTEGER NOT NULL,
   -- Where URLs in the posted message point (the origin it was scheduled at).
   origin TEXT NOT NULL,
+  -- The scheduling token's scopes (comma-separated, as expanded then): posting checks them at fire
+  -- time, so a bot without chat:write.public must still be in the channel.
+  scopes TEXT NOT NULL DEFAULT '',
   claimed_until INTEGER,
   attempts INTEGER NOT NULL DEFAULT 0
 );

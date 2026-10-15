@@ -513,6 +513,32 @@ describe("when the poster lost access", () => {
     await runDurableObjectAlarm(scheduler(w.teamId))
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).toContain("outlives its token")
   })
+
+  it("drops a bot's once it's removed from the channel, unless its token could post there anyway", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Narrow")
+    // A bot token without chat:write.public must be in the channel, then as at fire time.
+    const narrow = await issueToken(env, {
+      teamId: w.teamId,
+      kind: "bot",
+      userId: app.botUserId,
+      appId: app.id,
+      scopes: ["chat:write", "channels:read"],
+      label: "narrow bot",
+    })
+    const { channel } = await ok<{ channel: { id: string } }>("conversations.create", { name: "bots" }, w.owner.token)
+    await ok("conversations.invite", { channel: channel.id, users: app.botUserId }, w.owner.token)
+    const kept = await schedule(w, { channel: channel.id, text: "with chat:write.public" }, app.botToken)
+    const dropped = await schedule(w, { channel: channel.id, text: "without it" }, narrow)
+    await ok("conversations.kick", { channel: channel.id, user: app.botUserId }, w.owner.token)
+    await makeDue(kept.scheduled_message_id)
+    await makeDue(dropped.scheduled_message_id)
+    await runDurableObjectAlarm(scheduler(w.teamId))
+    const texts = (await history(channel.id, w.owner.token)).map((m) => m.text)
+    expect(texts).toContain("with chat:write.public")
+    expect(texts).not.toContain("without it")
+    expect(await rowOf(dropped.scheduled_message_id)).toBeNull()
+  })
 })
 
 describe("the built-in bot", () => {
