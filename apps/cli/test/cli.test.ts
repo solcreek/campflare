@@ -106,6 +106,63 @@ describe("accounts", () => {
     expect(await memoryIo({ env }).run("password", "show")).toBe(2)
   })
 
+  it("mints a narrow, expiring token for an agent, and says what a token may do", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("whoami")).toBe(0)
+    expect(cli.out).toContain("Role: owner. Scopes: ")
+    expect(cli.out).toContain("admin.users:write")
+    cli.clear()
+    expect(await cli.run("token", "create", "--preset", "read", "--scopes", "chat:write", "--expires", "2h")).toBe(0)
+    const agent = cli.out.trim()
+    expect(agent).toMatch(/^xoxp-\S+$/) // the token alone, for TOKEN=$(…)
+    expect(cli.err).toMatch(/^Scopes: .*chat:write; expires \d{4}-\d\d-\d\dT/)
+
+    const env = { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: agent }
+    const asAgent = memoryIo({ env })
+    expect(await asAgent.run("whoami", "--json")).toBe(0)
+    expect(JSON.parse(asAgent.out)).toMatchObject({ role: "owner", scopes: expect.arrayContaining(["chat:write"]) })
+    asAgent.clear()
+    expect(await asAgent.run("react", "#general", "1.000001", "eyes")).toBe(1)
+    expect(asAgent.err).toContain("error: missing_scope (needs reactions:write; this token has ")
+    expect(asAgent.err).toContain("campflare token create --scopes <scope>")
+    asAgent.clear()
+    expect(await asAgent.run("token", "create", "--json")).toBe(1)
+    expect(JSON.parse(asAgent.err)).toMatchObject({ ok: false, error: "missing_scope", needed: "tokens:write" })
+
+    cli.clear()
+    expect(await cli.run("token", "list")).toBe(0)
+    expect(cli.out).toMatch(/\[read,chat:write\]  expires /)
+    expect(await cli.run("token", "create", "--expires", "soon")).toBe(2)
+  })
+
+  it("lists the methods and the scopes they need, without a token", async () => {
+    const cli = memoryIo()
+    expect(await cli.run("api", "--list", "chat.post", "--url", baseUrl)).toBe(0)
+    expect(cli.out).toContain("chat.postMessage  (user, bot)  chat:write")
+    expect(cli.out).toContain("chat.postEphemeral")
+    expect(cli.out).not.toContain("reactions.add")
+    cli.clear()
+    expect(await cli.run("api", "--list", "conversations.history", "--url", baseUrl, "--json")).toBe(0)
+    const listed = JSON.parse(cli.out) as { methods: { conversation_scope?: string }[]; presets: Record<string, string[]> }
+    expect(listed.methods[0]!.conversation_scope).toBe("history")
+    expect(listed.presets.read).toContain("search:read")
+    expect(await memoryIo().run("api", "--list")).toBe(2)
+  })
+
+  it("changes a person's role", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("admin", "add-user", "bruno")).toBe(0)
+    cli.clear()
+    expect(await cli.run("admin", "role", "@bruno", "admin")).toBe(0)
+    expect(cli.out).toBe("@bruno is now an admin\n")
+    cli.clear()
+    expect(await cli.run("admin", "role", "@bruno", "member")).toBe(0)
+    expect(cli.out).toBe("@bruno is now a member\n")
+    expect(await cli.run("admin", "role", "@bruno")).toBe(2)
+    expect(await cli.run("admin", "role", "@owner", "admin")).toBe(1)
+    expect(cli.err).toContain("last_owner")
+  })
+
   it("manages tokens", async () => {
     const cli = await loggedIn()
     expect(await cli.run("token", "create")).toBe(0)
