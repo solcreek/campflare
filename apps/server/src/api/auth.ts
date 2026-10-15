@@ -37,7 +37,14 @@ export async function authenticate(env: Env, token: string): Promise<Auth> {
   const user = users!.results[0] as UserRow | undefined
   if (row.user_id && (!user || user.deleted)) throw new CampflareError("account_inactive")
   const app = apps!.results[0] as AppRow | undefined
-  return { kind, team, user, app, scopes: expandScopes(row.scopes) }
+  return {
+    kind,
+    team,
+    user,
+    app,
+    scopes: expandScopes(row.scopes),
+    ...(row.expires === null ? {} : { expires: row.expires }),
+  }
 }
 
 /** The identity of a Campflare user signed in some other way (an OAuth access token): as their user token would be. */

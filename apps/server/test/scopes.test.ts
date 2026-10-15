@@ -337,3 +337,24 @@ describe("campflare.methods.list", () => {
     expect(list.presets.full).toEqual(FULL_USER_SCOPES)
   })
 })
+
+describe("signing in with a token", () => {
+  const signIn = (token: string, ip: string) =>
+    SELF.fetch(`${ORIGIN}/auth/sign-in/campflare-token`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, "cf-connecting-ip": ip },
+      body: JSON.stringify({ token }),
+    })
+
+  it("takes only a token that is the whole person, so a narrow one can't be traded for more", async () => {
+    const w = await workspace()
+    const reader = await narrow(w.teamId, w.owner.id, ["read"])
+    const expiring = (await ok<{ token: string }>("campflare.tokens.create", { expires_in: 3600 }, w.owner.token)).token
+    const whole = (await ok<{ token: string }>("campflare.tokens.create", {}, w.owner.token)).token
+    const refused = await signIn(reader, "203.0.113.71")
+    expect(refused.status).toBe(401)
+    expect(await refused.text()).toContain("limited")
+    expect((await signIn(expiring, "203.0.113.72")).status).toBe(401)
+    expect((await signIn(whole, "203.0.113.73")).status).toBe(200)
+  })
+})

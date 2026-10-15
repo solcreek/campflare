@@ -13,6 +13,8 @@ export interface Auth {
   user?: UserRow
   app?: AppRow
   scopes: string[]
+  /** When the token stops working (epoch seconds), if it ever does. */
+  expires?: number
 }
 
 /** The acting identity of a user or bot token. */
