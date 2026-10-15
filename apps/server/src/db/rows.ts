@@ -174,3 +174,15 @@ export interface BookmarkRow {
   date_created: number
   date_updated: number
 }
+
+export interface StarRow {
+  user_id: string
+  /** "message:<channel>/<ts>", "file:<id>" or "channel:<id>". */
+  item: string
+  team_id: string
+  type: "message" | "file" | "channel"
+  channel_id: string | null
+  ts: string | null
+  file_id: string | null
+  created: number
+}

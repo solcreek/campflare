@@ -84,6 +84,10 @@ export const NEEDS: Record<string, Need> = {
   "bookmarks.remove": ["bookmarks:write"],
   "bookmarks.list": ["bookmarks:read"],
 
+  "stars.add": ["stars:write"],
+  "stars.remove": ["stars:write"],
+  "stars.list": ["stars:read"],
+
   "files.getUploadURLExternal": ["files:write"],
   "files.completeUploadExternal": ["files:write"],
   "files.delete": ["files:write"],
@@ -197,6 +201,7 @@ const READ = [
   "reactions:read",
   "pins:read",
   "bookmarks:read",
+  "stars:read",
   "emoji:read",
   "dnd:read",
   "team:read",
@@ -215,6 +220,7 @@ const WRITE = [
   "reactions:write",
   "pins:write",
   "bookmarks:write",
+  "stars:write",
   "files:write",
   "views:write",
 ]

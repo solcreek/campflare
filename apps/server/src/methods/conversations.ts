@@ -19,7 +19,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { requireConversationScope } from "../api/scopes"
 import { ids, nowSeconds } from "../api/ids"
-import { conversationJson, loadExtras, messageJson, reactionsOfQuery } from "../api/shapes"
+import { conversationJson, loadExtras, messageJson, reactionsOfQuery, starredFrom, starredOfQuery } from "../api/shapes"
 import { typesFilter } from "./users"
 
 /** Top-level messages: thread replies stay in their thread unless broadcast. */
@@ -90,8 +90,9 @@ method("conversations.list", "actor", async (ctx) => {
   }
 })
 
-async function messagesOut(ctx: Ctx<Actor>, rows: MessageRow[], reactions: D1Result) {
+async function messagesOut(ctx: Ctx<Actor>, rows: MessageRow[], reactions: D1Result, starred: D1Result) {
   const extras = await loadExtras(ctx.env, rows, reactions.results as ReactionRow[])
+  extras.starred = starredFrom(starred)
   return rows.map((m) => messageJson(m, extras, ctx.origin))
 }
 
@@ -118,10 +119,11 @@ method("conversations.history", "actor", async (ctx) => {
   const forward = Boolean(oldest && !latest)
   const db = ctx.env.DB
   const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ${forward ? "ASC" : "DESC"} LIMIT ?`
-  // The page, its reactions and the pin count: one round trip.
-  const [found, reactions, pins] = await db.batch([
+  // The page, its reactions, which of it the caller saved and the pin count: one round trip.
+  const [found, reactions, starred, pins] = await db.batch([
     stmt(db, pageSql, ...params, limit + 1),
     reactionsOfQuery(db, pageSql, ...params, limit + 1),
+    starredOfQuery(db, ctx.auth.user.id, pageSql, ...params, limit + 1),
     stmt(db, "SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL", c.id),
   ])
   const rows = found!.results as MessageRow[]
@@ -129,7 +131,7 @@ method("conversations.history", "actor", async (ctx) => {
   const page = rows.slice(0, limit)
   if (forward) page.reverse()
   return {
-    messages: await messagesOut(ctx, page, reactions!),
+    messages: await messagesOut(ctx, page, reactions!, starred!),
     has_more: hasMore,
     pin_count: (pins!.results[0] as { n: number }).n,
     channel_actions_ts: null,
@@ -168,17 +170,18 @@ method("conversations.replies", "actor", async (ctx) => {
   const messageSql = "SELECT * FROM messages WHERE channel_id = ? AND ts = ? AND deleted = 0"
   const pageSql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY ts ASC LIMIT ?`
   const both = `SELECT channel_id, ts FROM (${messageSql}) UNION ALL SELECT channel_id, ts FROM (${pageSql})`
-  const [head, found, reactions] = await db.batch([
+  const [head, found, reactions, starred] = await db.batch([
     stmt(db, messageSql, c.id, ts),
     stmt(db, pageSql, ...params, limit + 1),
     reactionsOfQuery(db, both, c.id, ts, ...params, limit + 1),
+    starredOfQuery(db, ctx.auth.user.id, both, c.id, ts, ...params, limit + 1),
   ])
   const message = head!.results[0] as MessageRow | undefined
   if (!message) throw new CampflareError("message_not_found")
   // A reply's ts gives just that reply, as Slack does; a parent's gives the thread.
   if (!message.thread_ts || message.thread_ts !== message.ts) {
     return {
-      messages: await messagesOut(ctx, [message], reactions!),
+      messages: await messagesOut(ctx, [message], reactions!, starred!),
       has_more: false,
       response_metadata: { next_cursor: "" },
     }
@@ -189,7 +192,7 @@ method("conversations.replies", "actor", async (ctx) => {
   // The parent leads every page, as Slack returns it.
   if (page[0]?.ts !== ts) page.unshift(message)
   return {
-    messages: await messagesOut(ctx, page, reactions!),
+    messages: await messagesOut(ctx, page, reactions!, starred!),
     has_more: hasMore,
     response_metadata: { next_cursor: hasMore ? encodeCursor(page.at(-1)!.ts) : "" },
   }
