@@ -40,14 +40,26 @@ const RECIPIENTS = `JOIN users u ON u.id = r.user_id AND u.deleted = 0
 /** A reply's thread, or null for a message outside one (a thread's head included). */
 const threadOf = (m: Pick<MessageRow, "ts" | "thread_ts">) => (m.thread_ts && m.thread_ts !== m.ts ? m.thread_ts : null)
 
+/** Who takes part in thread `?4` of conversation `?2` (thread_participants): one range of its key. */
+const PARTICIPANTS = "SELECT user_id FROM thread_participants WHERE channel_id = ?2 AND thread_ts = ?4"
+
 /**
- * Who takes part in a thread (`?4` in conversation `?2`): everyone who wrote in
- * it, deleted replies included (they followed it), and its head's author as
- * every reply recorded it (`parent_user_id`), which survives the head being
- * tombstoned. Two range scans of the thread index.
+ * A reply's author and its thread's head's author join the thread's
+ * participants: a statement to batch before messageActivity(), so the head's
+ * author is one when the first reply's items are made.
  */
-const PARTICIPANTS = `SELECT user_id FROM messages WHERE channel_id = ?2 AND thread_ts = ?4
-  UNION SELECT parent_user_id FROM messages WHERE channel_id = ?2 AND thread_ts = ?4`
+export function joinThread(db: D1Database, channelId: string, threadTs: string, users: (string | null)[]) {
+  const ids = [...new Set(users.filter((u): u is string => Boolean(u)))]
+  if (ids.length === 0) return undefined
+  return stmt(
+    db,
+    `INSERT OR IGNORE INTO thread_participants (channel_id, thread_ts, user_id)
+     SELECT ?, ?, value FROM json_each(?)`,
+    channelId,
+    threadTs,
+    JSON.stringify(ids),
+  )
+}
 
 /**
  * The items a new message makes, as one INSERT … RETURNING to batch with the

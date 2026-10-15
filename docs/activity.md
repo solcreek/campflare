@@ -48,9 +48,12 @@ The items are written by one `INSERT … SELECT … RETURNING` in the same batch
 the message (`messageActivity()` in `src/activity.ts`): the recipients come from
 `members` in SQL, looked up by the candidates (those named, the thread's
 participants) unless a broadcast or a DM reaches every member. A thread's
-participants are its messages' authors, deleted replies included, and its head's
-author as every reply recorded it (`parent_user_id`), which a tombstone doesn't
-erase: no table of its own, and two range scans of the thread index; the preferences and
+participants are kept in `thread_participants` (its head's author and every
+replier, deleted replies included), filled in the reply's batch by
+`joinThread()`: reading them is one key range, however long the thread, and a
+tombstoned head (whose `user_id` becomes `USLACKBOT`) keeps its author there.
+Each recipient costs a few lookups and one written row, so a reply in a thread of
+200 participants reads about 1,250 rows (214 before the inbox); the preferences and
 snooze from `notification_prefs` and `users`, so posting costs no extra round
 trip. A reaction's item is one more statement in `reactions.add`'s batch. The
 returned rows go out as `activity_added` RTM events (`rtmOnly`), one per

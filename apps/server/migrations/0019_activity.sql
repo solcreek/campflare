@@ -28,6 +28,23 @@ CREATE INDEX activity_message ON activity (channel_id, ts);
 -- One item per message per person, and per reaction for reactions.
 CREATE UNIQUE INDEX activity_once ON activity (user_id, channel_id, ts, kind, actor_id, reaction);
 
+-- Who takes part in each thread: its head's author and everyone who replied
+-- (deleted replies too: they followed it). Filled as replies are posted, so
+-- thread_reply items read the participants, not the whole thread, and a
+-- tombstoned head (whose user_id becomes USLACKBOT) keeps its author here.
+CREATE TABLE thread_participants (
+  channel_id TEXT NOT NULL,
+  thread_ts TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  PRIMARY KEY (channel_id, thread_ts, user_id)
+) WITHOUT ROWID;
+-- Threads from before: their repliers, and their heads' authors as replies recorded them.
+INSERT OR IGNORE INTO thread_participants (channel_id, thread_ts, user_id)
+  SELECT channel_id, thread_ts, user_id FROM messages
+  WHERE thread_ts IS NOT NULL AND thread_ts != ts AND user_id IS NOT NULL
+  UNION SELECT channel_id, thread_ts, parent_user_id FROM messages
+  WHERE thread_ts IS NOT NULL AND thread_ts != ts AND parent_user_id IS NOT NULL;
+
 -- Notification levels: 'all', 'mentions' or 'none'. conversation_id '' is the
 -- person's default for every conversation without its own.
 CREATE TABLE notification_prefs (

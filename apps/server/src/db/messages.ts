@@ -1,4 +1,4 @@
-import { activityAdded, messageActivity } from "../activity"
+import { activityAdded, joinThread, messageActivity } from "../activity"
 import { audienceFrom, audienceStatement, channelType, publish, publishEach } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
@@ -95,6 +95,8 @@ export async function postMessage(
       subtype: input.subtype ?? null,
       text: input.text,
     })
+  // A reply makes its author, and the head's (on the first reply), take part in the thread.
+  const joins = parent && joinThread(db, c.id, parent.ts, [parent.user_id, author])
   let hasItems = false
   const write = (ts: string) => {
     const items = activity(ts)
@@ -140,6 +142,7 @@ export async function postMessage(
           ]
         : []),
       stmt(db, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id),
+      ...(joins ? [joins] : []),
       ...(items ? [items] : []),
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, ts),
       audienceStatement(db, c.id),

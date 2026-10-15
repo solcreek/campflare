@@ -286,6 +286,12 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     ],
     messages,
   )
+  // Who takes part in each thread, as replies posted through the API would have recorded it (migration 0019).
+  lines.push(
+    `INSERT OR IGNORE INTO thread_participants (channel_id, thread_ts, user_id)
+     SELECT channel_id, thread_ts, user_id FROM messages WHERE thread_ts IS NOT NULL AND thread_ts != ts
+     UNION SELECT channel_id, thread_ts, parent_user_id FROM messages WHERE thread_ts IS NOT NULL AND thread_ts != ts;`,
+  )
   // Reactions may repeat (same user, same emoji): keep one.
   insert(
     "reactions",

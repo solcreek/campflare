@@ -497,7 +497,7 @@ of kind `mention` (`<@U…>`, `<!here|channel|everyone>`), `dm` (im/mpim),
 `thread_reply` (a thread they wrote or replied in) and `reaction` (to their
 message), one per message per person by that precedence, never for the author.
 `postMessage()` batches `messageActivity()`, one `INSERT … SELECT … RETURNING`
-over `members` (members only; the thread's participants from `messages`), and
+over `members` (members only; a thread's participants from `thread_participants`, filled by `joinThread()` in the reply's batch, so a tombstoned head keeps its author), and
 `reactions.add` batches `reactionActivity()`; only "saying" subtypes count, and
 edits record nothing. Each row stores `notify`, decided then: the
 conversation's level in `notification_prefs`, else the person's default
