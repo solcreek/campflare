@@ -6,7 +6,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { decodeCursor, encodeCursor } from "../api/args"
 import { invalidArguments } from "../api/errors"
 import { nowSeconds } from "../api/ids"
-import { loadExtras, messageJson, reactionsOfQuery } from "../api/shapes"
+import { loadExtras, messageJson } from "../api/shapes"
 
 // The activity inbox (docs/activity.md): list it, mark it read.
 
@@ -67,41 +67,71 @@ function itemId(raw: string): number {
   return Number(raw)
 }
 
+/** A row of a listed page: the item's own fields (a_*), then its message's. */
+type PageRow = MessageRow & {
+  a_id: number
+  a_kind: ActivityKind
+  a_thread_ts: string | null
+  a_actor_id: string
+  a_reaction: string
+  a_created: number
+  a_notify: number
+  a_read: number
+  a_reactions: string
+}
+
+const itemOf = (r: PageRow, user: string): ActivityRow => ({
+  id: r.a_id,
+  team_id: r.team_id,
+  user_id: user,
+  kind: r.a_kind,
+  channel_id: r.channel_id,
+  ts: r.ts,
+  thread_ts: r.a_thread_ts,
+  actor_id: r.a_actor_id,
+  reaction: r.a_reaction,
+  created: r.a_created,
+  notify: r.a_notify,
+  read: r.a_read,
+})
+
 method("campflare.activity.list", "actor", async (ctx) => {
   const limit = ctx.args.int("limit", 50, { min: 1, max: 200 })
   const cursor = decodeCursor(ctx.args.str("cursor"))
   const before = cursor === undefined ? Number.MAX_SAFE_INTEGER : itemId(cursor)
   const kinds = kindsOf(ctx)
   const db = ctx.env.DB
-  // One page, newest first; its messages and their reactions, and the unread counts, in one batch.
-  const page = `SELECT a.* ${LISTABLE} AND a.id < ?3 AND (?4 = 0 OR a.read = 0)
-    AND (?5 IS NULL OR a.kind IN (SELECT value FROM json_each(?5))) ORDER BY a.id DESC LIMIT ?6`
-  const params = [
+  // The page is computed once: each row is the item (a_*), its message (msg.*) and the message's
+  // reactions as JSON. The unread counts come in the same batch: one round trip.
+  const page = stmt(
+    db,
+    `SELECT a.id AS a_id, a.kind AS a_kind, a.thread_ts AS a_thread_ts, a.actor_id AS a_actor_id,
+       a.reaction AS a_reaction, a.created AS a_created, a.notify AS a_notify, a.read AS a_read, msg.*,
+       (SELECT json_group_array(json_object('channel_id', r.channel_id, 'ts', r.ts, 'name', r.name,
+          'user_id', r.user_id, 'created', r.created))
+        FROM reactions r WHERE r.channel_id = msg.channel_id AND r.ts = msg.ts) AS a_reactions
+     ${LISTABLE} AND a.id < ?3 AND (?4 = 0 OR a.read = 0)
+       AND (?5 IS NULL OR a.kind IN (SELECT value FROM json_each(?5)))
+     ORDER BY a.id DESC LIMIT ?6`,
     ctx.auth.user.id,
     historyTypes(ctx),
     before,
     ctx.args.bool("unread_only") ? 1 : 0,
     kinds ? JSON.stringify(kinds) : null,
     limit + 1,
-  ]
-  const [items, messages, reactions, unread] = await db.batch([
-    stmt(db, page, ...params),
-    stmt(db, `SELECT * FROM messages WHERE (channel_id, ts) IN (SELECT channel_id, ts FROM (${page}))`, ...params),
-    reactionsOfQuery(db, page, ...params),
-    unreadStatement(ctx),
-  ])
-  const rows = items!.results as ActivityRow[]
+  )
+  const [items, unread] = await db.batch([page, unreadStatement(ctx)])
+  const rows = items!.results as PageRow[]
   const shown = rows.slice(0, limit)
-  const messageRows = messages!.results as MessageRow[]
-  const extras = await loadExtras(ctx.env, messageRows, reactions!.results as ReactionRow[])
-  const byKey = new Map(messageRows.map((m) => [`${m.channel_id}/${m.ts}`, m]))
+  // Files and bot apps, if any, for the shown rows only; reactions are in hand.
+  const reactions = shown
+    .flatMap((r) => JSON.parse(r.a_reactions) as ReactionRow[])
+    .toSorted((x, y) => x.created - y.created)
+  const extras = await loadExtras(ctx.env, shown, reactions)
   return {
-    items: shown.map((row) => {
-      const m = byKey.get(`${row.channel_id}/${row.ts}`)
-      return activityJson(row, ctx.origin, m && messageJson(m, extras, ctx.origin))
-    }),
+    items: shown.map((r) => activityJson(itemOf(r, ctx.auth.user.id), ctx.origin, messageJson(r, extras, ctx.origin))),
     unread: unreadFrom(unread!),
-    response_metadata: { next_cursor: rows.length > limit ? encodeCursor(String(shown.at(-1)!.id)) : "" },
+    response_metadata: { next_cursor: rows.length > limit ? encodeCursor(String(shown.at(-1)!.a_id)) : "" },
   }
 })
 

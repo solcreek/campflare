@@ -241,7 +241,7 @@
       "bytes": 174,
       "rps": 254
     },
-    "chat.postMessage (mention)": {
+    "chat.postMessage (activity: mention)": {
       "p50": 9.04,
       "p95": 14.55,
       "p99": 20.89,

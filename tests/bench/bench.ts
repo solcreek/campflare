@@ -239,7 +239,7 @@ function scenarios(d: Dataset): Scenario[] {
       (i) => ({ method: "chat.postMessage", token: owner, args: { channel: "#busy", text: `by name ${i}` } }),
     ],
     [
-      "chat.postMessage (mention)",
+      "chat.postMessage (activity: mention)",
       (i) => ({
         method: "chat.postMessage",
         token: user(i),
