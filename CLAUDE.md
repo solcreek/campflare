@@ -584,6 +584,36 @@ messages, their reactions and the unread counts are one batch.
 INSERT, in SQL (`?7`, the groups named). CLI: `campflare inbox`,
 `campflare notify`; MCP: `get_activity`, `mark_activity_read`.
 
+**Slash commands and incoming webhooks** (`docs/commands-webhooks.md`,
+migration 0025). `app_commands` is keyed `(team_id, name)`, so a name is one
+app's; `campflare.apps.setCommands` (`src/methods/commands.ts`; the installer
+with `apps:write`, or the app's own bot with `commands`) replaces an app's set
+in one batch that first drops the clashing names of apps whose bot is
+deactivated (a clash is `command_taken`), and publishes RTM `commands_changed`.
+`campflare.commands.invoke` (xoxp, `chat:write`, `requireWritable`) builds
+Slack's fields and hands them to `invokeCommand()` (`src/commands.ts`):
+`TeamHub.interact()` with `type: "slash_commands"` and
+`acceptsResponse` (the trigger_id granted first), else a signed form POST to
+the command's `url` (`postSigned()`); `app_unreachable` when there's nowhere
+or no answer, `dispatch_failed` on non-2xx or broken JSON. The answer (the
+ack's payload, the body as JSON, or plain text) is shown as the app's bot
+(`asApp()` in `src/api/as-app.ts`, which `handleResponseUrl()` uses too):
+posted for `in_channel`, else `sendEphemeral()` to the invoker, and returned as
+`response`. Its `response_url` has no `ts` (`ResponseUrlClaims.ts` is
+optional): `delete_original` is `message_not_found`, `replace_original`
+posts anew. Incoming webhooks: `campflare.apps.createWebhook`,
+`.webhooks.list`, `.webhooks.revoke` (`src/methods/webhooks.ts`, `ownApp()`)
+keep a SHA-256 of the secret; `POST /services/:secret` (`handleWebhook()` in
+`src/webhooks.ts`) reads the body (JSON whatever the type, or a form's
+`payload`), then in one batch takes a token from the row's bucket (a guarded
+`UPDATE … RETURNING`, 10 burst, 1/s) and reads the webhook, app, team, bot,
+conversation and the bot's membership, and posts through `postMessage()`.
+Answers are plain text with Slack's statuses (`STATUS`); 429 carries
+`Retry-After`. Core keeps `state.commands` (reloaded on `commands_changed` and
+reconnect) with `invokeCommand()`, and `commandIn()`/`commandSuggestions()`
+for the composer, which runs a matching draft (not in threads) and shows a
+"Commands" listbox. MCP: `list_commands`, `run_command`.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, set roles
