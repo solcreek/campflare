@@ -165,6 +165,8 @@ describe("stars (saved items)", () => {
       "message_not_found",
     )
     await expectError("stars.remove", { channel: w.general }, bob.token, "not_starred")
+    await expectError("stars.remove", {}, bob.token, "no_item_specified")
+    await expectError("stars.remove", { file_comment: "Fc1" }, bob.token, "file_comment_not_found")
 
     const secret = await ok<{ channel: { id: string } }>(
       "conversations.create",
@@ -206,6 +208,45 @@ describe("stars (saved items)", () => {
     expect(theirs.frames.filter((f) => String(f.type).startsWith("star_"))).toEqual([])
     mine.close()
     theirs.close()
+  })
+
+  it("removes your own star after you lost access to what it names", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const { channel } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "für-kurz", is_private: true },
+      w.owner.token,
+    )
+    await ok("conversations.invite", { channel: channel.id, users: bob.id }, w.owner.token)
+    const ts = await post(w.owner.token, channel.id, "temporal · 一時的")
+    const file = await upload(w.owner.token, channel.id, "brouillon.txt")
+    await ok("stars.add", { channel: channel.id, timestamp: ts }, bob.token)
+    await ok("stars.add", { channel: channel.id }, bob.token)
+    await ok("stars.add", { file }, bob.token)
+    await ok("conversations.kick", { channel: channel.id, user: bob.id }, w.owner.token)
+    await expectError("stars.add", { channel: channel.id }, bob.token, "channel_not_found")
+
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
+    await ok("stars.remove", { channel: channel.id, timestamp: ts }, bob.token)
+    // The event names the item and nothing more: bob can't read it now.
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({
+      item: { type: "message", channel: channel.id, message: { ts, is_starred: false } },
+    })
+    await ok("stars.remove", { channel: channel.id }, bob.token)
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({
+      item: { type: "group", channel: channel.id },
+    })
+    await ok("stars.remove", { file }, bob.token)
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({
+      item: { type: "file", file: { id: file, is_starred: false } },
+    })
+    rtm.close()
+    await expectError("stars.remove", { channel: channel.id, timestamp: ts }, bob.token, "not_starred")
+    await expectError("stars.remove", { channel: "C0NOPE" }, bob.token, "not_starred")
+    await expectError("stars.remove", { file: "F0NOPE" }, bob.token, "not_starred")
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM stars WHERE user_id = ?").bind(bob.id).first("n")).toBe(0)
   })
 
   it("wants stars:read to list and stars:write to save", async () => {

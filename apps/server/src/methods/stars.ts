@@ -2,7 +2,7 @@ import { requireReadable, resolveConversation } from "../db/conversations"
 import { requireMessage } from "../db/messages"
 import { first, isUniqueViolation, run, stmt } from "../db/query"
 import type { ConversationRow, FileRow, MessageRow, ReactionRow, StarRow } from "../db/rows"
-import { starKey } from "../db/stars"
+import { starKey, unstarredItem } from "../db/stars"
 import { publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { decodeCursor, encodeCursor } from "../api/args"
@@ -14,7 +14,7 @@ import { canSee, getFile, readsOneOf } from "./files"
 // Saved items, Slack's stars: a person's own list of messages, files and
 // conversations. Nobody else sees it; the events go to the person alone.
 
-/** What stars.add and stars.remove name: a message (channel + timestamp), a file, or a conversation. */
+/** What stars.add names, which the caller must be able to see: a message (channel + timestamp), a file, or a conversation. */
 async function target(ctx: Ctx<Actor>) {
   if (ctx.args.has("file_comment")) throw new CampflareError("file_comment_not_found")
   const fileId = ctx.args.str("file")
@@ -41,77 +41,107 @@ function conversationType(c: Pick<ConversationRow, "kind" | "is_private">) {
   return c.kind === "mpim" || c.is_private ? "group" : "channel"
 }
 
-/** A saved message as stars.list and the star events carry it; `starred`: whether it still is. */
-const messageItem = (ctx: Ctx<Actor>, m: MessageRow, extras: MessageExtras, created: number, starred = true) => ({
+/** A saved message as stars.list and star_added carry it (star_removed's is unstarredItem()). */
+const messageItem = (ctx: Ctx<Actor>, m: MessageRow, extras: MessageExtras, created: number) => ({
   type: "message",
   channel: m.channel_id,
   message: {
     ...messageJson(m, extras, ctx.origin),
-    is_starred: starred,
+    is_starred: true,
     permalink: permalink(ctx.origin, m.channel_id, m.ts, m.thread_ts),
   },
   date_create: created,
 })
 
-const fileItem = (ctx: Ctx<Actor>, f: FileRow, created: number, starred = true) => ({
+const fileItem = (ctx: Ctx<Actor>, f: FileRow, created: number) => ({
   type: "file",
-  file: { ...fileJson(f, ctx.origin, Boolean(imagesOf(ctx.env))), is_starred: starred },
+  file: { ...fileJson(f, ctx.origin, Boolean(imagesOf(ctx.env))), is_starred: true },
   date_create: created,
 })
 
-async function itemJson(ctx: Ctx<Actor>, t: Target, created: number, starred: boolean) {
-  if (t.type === "file") return fileItem(ctx, t.file, created, starred)
+async function itemJson(ctx: Ctx<Actor>, t: Target, created: number) {
+  if (t.type === "file") return fileItem(ctx, t.file, created)
   if (t.type === "channel") return { type: conversationType(t.c), channel: t.c.id, date_create: created }
-  return messageItem(ctx, t.message, await loadExtras(ctx.env, [t.message]), created, starred)
+  return messageItem(ctx, t.message, await loadExtras(ctx.env, [t.message]), created)
 }
 
-async function star(ctx: Ctx<Actor>, added: boolean) {
+const eventTs = () => `${(Date.now() / 1000).toFixed(6)}`
+
+method("stars.add", "user", async (ctx) => {
   const t = await target(ctx)
   const user = ctx.auth.user.id
   const now = Math.floor(Date.now() / 1000)
-  if (added) {
-    try {
-      await run(
-        ctx.env.DB,
-        `INSERT INTO stars (user_id, item, team_id, type, channel_id, ts, file_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        user,
-        t.key,
-        ctx.auth.team.id,
-        t.type,
-        t.type === "file" ? null : t.c.id,
-        t.type === "message" ? t.message.ts : null,
-        t.type === "file" ? t.file.id : null,
-        now,
-      )
-    } catch (error) {
-      if (isUniqueViolation(error)) throw new CampflareError("already_starred")
-      throw error
-    }
-  } else {
-    const removed = await first<StarRow>(
+  try {
+    await run(
       ctx.env.DB,
-      "DELETE FROM stars WHERE user_id = ? AND item = ? RETURNING *",
+      `INSERT INTO stars (user_id, item, team_id, type, channel_id, ts, file_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       user,
       t.key,
+      ctx.auth.team.id,
+      t.type,
+      t.type === "file" ? null : t.c.id,
+      t.type === "message" ? t.message.ts : null,
+      t.type === "file" ? t.file.id : null,
+      now,
     )
-    if (!removed) throw new CampflareError("not_starred")
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new CampflareError("already_starred")
+    throw error
   }
   // The event's item (a message's reactions and files) is read after the response.
-  const eventTs = `${(Date.now() / 1000).toFixed(6)}`
+  const ts = eventTs()
   ctx.waitUntil(
-    itemJson(ctx, t, now, added).then((item) =>
+    itemJson(ctx, t, now).then((item) =>
       publish(ctx, {
         teamId: ctx.auth.team.id,
         audience: [user],
-        event: { type: added ? "star_added" : "star_removed", user, item, event_ts: eventTs },
+        event: { type: "star_added", user, item, event_ts: ts },
       }),
     ),
   )
   return {}
+})
+
+/**
+ * The key of the star stars.remove names. Removing touches only the caller's
+ * own row, so it needs no access to the item: someone who lost access to a
+ * conversation or file can still clear their star on it. Whatever doesn't
+ * name a star of theirs is not_starred.
+ */
+async function removalKey(ctx: Ctx<Actor>): Promise<{ key: string; kind?: string }> {
+  if (ctx.args.has("file_comment")) throw new CampflareError("file_comment_not_found")
+  const fileId = ctx.args.str("file")
+  if (fileId) return { key: starKey.file(fileId) }
+  const channel = ctx.args.str("channel")
+  if (!channel) throw new CampflareError("no_item_specified")
+  let c: ConversationRow
+  try {
+    c = await resolveConversation(ctx, channel)
+  } catch (error) {
+    if (error instanceof CampflareError && error.code === "channel_not_found") throw new CampflareError("not_starred")
+    throw error
+  }
+  const ts = ctx.args.ts("timestamp")
+  return ts ? { key: starKey.message(c.id, ts) } : { key: starKey.channel(c.id), kind: conversationType(c) }
 }
 
-method("stars.add", "user", (ctx) => star(ctx, true))
-method("stars.remove", "user", (ctx) => star(ctx, false))
+method("stars.remove", "user", async (ctx) => {
+  const { key, kind } = await removalKey(ctx)
+  const user = ctx.auth.user.id
+  const removed = await first<StarRow>(
+    ctx.env.DB,
+    "DELETE FROM stars WHERE user_id = ? AND item = ? RETURNING *",
+    user,
+    key,
+  )
+  if (!removed) throw new CampflareError("not_starred")
+  publish(ctx, {
+    teamId: ctx.auth.team.id,
+    audience: [user],
+    event: { type: "star_removed", user, item: unstarredItem(removed, kind), event_ts: eventTs() },
+  })
+  return {}
+})
 
 /**
  * The person's stars they can still see, newest first: a conversation they
