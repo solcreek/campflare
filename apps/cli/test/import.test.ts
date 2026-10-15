@@ -5,6 +5,7 @@ import { chunks, tokenMayGoTo, type JobJson } from "../src/import"
 import { memoryAccess, openZip, ZipError } from "../src/zip"
 import { baseUrl, loggedIn, memoryIo } from "./harness"
 import { makeZip } from "./zip-writer"
+import { sunsetPng } from "../../../scripts/seed"
 
 // `campflare import slack` against a real server: a synthetic Slack export,
 // zipped here, with a stand-in for Slack's file and emoji endpoints.
@@ -24,9 +25,24 @@ beforeAll(async () => {
       const ok = req.headers.authorization === `Bearer ${SOURCE_TOKEN}`
       return res.end(
         JSON.stringify(
-          ok ? { ok, emoji: { fiesta: "https://x/fiesta.png", party: "alias:fiesta" } } : { ok, error: "invalid_auth" },
+          ok
+            ? {
+                ok,
+                emoji: {
+                  fiesta: `${sourceUrl}/emoji/fiesta.png`,
+                  party: "alias:fiesta",
+                  ruta: "http://elsewhere.example/emoji/ruta.png",
+                },
+              }
+            : { ok, error: "invalid_auth" },
         ),
       )
+    }
+    if (req.url === "/emoji/fiesta.png") {
+      // Served without a token, as Slack's emoji are.
+      if (req.headers.authorization) elsewhere.push(req.headers.authorization)
+      res.setHeader("content-type", "image/png")
+      return void sunsetPng(32, 32).then((png) => res.end(Buffer.from(png)))
     }
     if (req.url?.startsWith("/elsewhere/")) {
       elsewhere.push(req.headers.authorization)
@@ -315,7 +331,15 @@ describe("campflare import slack", () => {
     expect(result.failed_files).toEqual(["gone.png: HTTP 404", "nolink.txt: no download URL"])
     expect(result).toMatchObject({ external_files: ["trap.bin", "Drive doc"] })
     expect(elsewhere).toEqual([])
-    expect(result.emoji).toEqual({ imported: 0, skipped: 2 })
+    // Brought over on an earlier run; a plain-http image from elsewhere is never fetched.
+    expect(result.emoji).toEqual({
+      imported: 0,
+      skipped: 2,
+      failed: ["ruta: not fetched: http: URL"],
+    })
+    const list = await client.call<{ ok: boolean; emoji: Record<string, string> }>("emoji.list")
+    expect(list.emoji.party).toBe("alias:fiesta")
+    expect(list.emoji.fiesta).toMatch(/^http.*\/emoji\//)
 
     const { channels } = await client.call<{ ok: boolean; channels: { id: string; name: string }[] }>(
       "conversations.list",

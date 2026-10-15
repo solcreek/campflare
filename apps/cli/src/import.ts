@@ -1,4 +1,4 @@
-import type { Client } from "@campflare/client"
+import { ApiError, type Client } from "@campflare/client"
 import { basename } from "node:path"
 import { UsageError, type Io } from "./io"
 import { parse, session, str, type Session } from "./run"
@@ -188,13 +188,40 @@ export function chunks(messages: Json[], maxCount = CHUNK_MESSAGES, maxBytes = C
 }
 
 /**
- * Custom emoji: the seam for the emoji feature (docs/import.md). Today it
- * imports none and says how many it skipped; wiring it means adding each here
- * through that feature's method, the image fetched from `url` (an `alias:`
- * url is an alias).
+ * The source workspace's custom emoji (its emoji.list): each image is fetched
+ * from its URL, with no token (Slack serves emoji publicly), and added with
+ * campflare.emoji.add; then each alias with admin.emoji.addAlias, so it finds
+ * its target. A name taken already is left as it is. Images come only over
+ * https, or from the source API's own origin (a stand-in for Slack in tests).
  */
-export async function importCustomEmoji(_s: Session, emoji: Record<string, string>) {
-  return { imported: 0, skipped: Object.keys(emoji).length }
+export async function importCustomEmoji(s: Session, emoji: Record<string, string>, sourceApi: string) {
+  const fetch = s.io.fetch ?? globalThis.fetch
+  const sourceOrigin = new URL(sourceApi).origin
+  const result = { imported: 0, skipped: 0, failed: [] as string[] }
+  const add = async (name: string, call: () => Promise<unknown>) => {
+    try {
+      await call()
+      result.imported++
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "error_name_taken") result.skipped++
+      else result.failed.push(`${name}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  const entries = Object.entries(emoji)
+  for (const [name, url] of entries.filter(([, value]) => !value.startsWith("alias:"))) {
+    await add(name, async () => {
+      const at = new URL(url)
+      if (at.protocol !== "https:" && at.origin !== sourceOrigin) throw new Error(`not fetched: ${at.protocol} URL`)
+      const res = await fetch(at.href)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const bytes = new Uint8Array(await res.arrayBuffer())
+      await s.client.call("campflare.emoji.add", { name, image: new File([bytes], at.pathname.split("/").at(-1)!) })
+    })
+  }
+  for (const [name, url] of entries.filter(([, value]) => value.startsWith("alias:"))) {
+    await add(name, () => s.client.call("admin.emoji.addAlias", { name, alias_for: url.slice("alias:".length) }))
+  }
+  return result
 }
 
 interface Options {
@@ -312,7 +339,7 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   const transfers =
     options.files === "download" ? await transferPending(s, ex, job, options) : { failed: [], external: [] }
 
-  let emoji: { imported: number; skipped: number } | undefined
+  let emoji: { imported: number; skipped: number; failed: string[] } | undefined
   if (options.sourceToken) emoji = await customEmoji(s, options)
 
   let finished: JobJson
@@ -482,14 +509,18 @@ async function customEmoji(s: Session, options: Options) {
     })
     const body = (await res.json()) as { ok: boolean; emoji?: Record<string, string>; error?: string }
     if (!body.ok) throw new Error(body.error ?? "not ok")
-    return await importCustomEmoji(s, body.emoji ?? {})
+    return await importCustomEmoji(s, body.emoji ?? {}, options.sourceApi)
   } catch (error) {
     s.io.stderr(`Couldn't list the export's custom emoji: ${error instanceof Error ? error.message : String(error)}\n`)
     return undefined
   }
 }
 
-function summary(job: JobJson, transfers: Transfers, emoji?: { imported: number; skipped: number }): string {
+function summary(
+  job: JobJson,
+  transfers: Transfers,
+  emoji?: { imported: number; skipped: number; failed: string[] },
+): string {
   const c = job.counts
   const lines = [
     `Imported ${job.options.source_name ?? "the export"} as job ${job.id} (${job.state})`,
@@ -506,7 +537,12 @@ function summary(job: JobJson, transfers: Transfers, emoji?: { imported: number;
   if (transfers.external.length) {
     lines.push(`  external       ${transfers.external.join(", ")} (links elsewhere: not fetched, left as a line)`)
   }
-  if (emoji) lines.push(`  custom emoji   ${emoji.imported} imported, ${emoji.skipped} skipped (not supported yet)`)
+  if (emoji) {
+    lines.push(
+      `  custom emoji   ${emoji.imported} imported, ${emoji.skipped} already there` +
+        (emoji.failed.length ? `, ${emoji.failed.length} failed: ${emoji.failed.join("; ")}` : ""),
+    )
+  }
   lines.push(`Undo (within 7 days): campflare import undo ${job.id}`)
   return `${lines.join("\n")}\n`
 }

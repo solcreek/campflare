@@ -734,7 +734,7 @@ and read markers (only for memberships the job added), 10 conversations per
 call. The CLI sends the source token only to Slack's https hosts. Files are a
 `[file not imported: name]` line unless the client uploads them
 (`files.getUploadURLExternal`) and `campflare.import.files` attaches them.
-Custom emoji is a seam (`importCustomEmoji()` in the CLI).
+Custom emoji come over with `--slack-token` (`importCustomEmoji()` in the CLI: images fetched without a token, added with `campflare.emoji.add`, aliases after; undo leaves them).
 
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches

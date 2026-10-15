@@ -236,15 +236,16 @@ workspace's people and conversations, and says what would happen (who maps by
 email, which channels would be renamed or merged, how many messages and files)
 without writing anything.
 
-## Custom emoji (a seam)
+## Custom emoji
 
-An export has no emoji images, and custom emoji storage is another feature.
-With `--slack-token`, the CLI reads Slack's `emoji.list` and hands it to
-`importCustomEmoji()` in `apps/cli/src/import.ts`, which today only counts
-them as skipped (`emoji` in the summary). `--slack-api` points it at another
-Slack API base (the tests' stand-in). Wiring it is one function:
-call the emoji feature's add method per entry (an alias as an alias), with the
-image downloaded from Slack.
+An export has no emoji images. With `--slack-token`, the CLI reads Slack's
+`emoji.list` and `importCustomEmoji()` (`apps/cli/src/import.ts`) adds them:
+each image is fetched from its URL with no token (Slack serves emoji
+publicly; only https, or the `--slack-api` origin, the tests' stand-in) and
+uploaded with `campflare.emoji.add`, then each alias with
+`admin.emoji.addAlias`. A name already taken is left alone and counted as
+already there, so a re-run adds nothing twice. Imported emoji are not tagged
+with the job: undo leaves them.
 
 ## Later
 
