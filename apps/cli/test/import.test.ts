@@ -71,6 +71,7 @@ function exportZip(email: string, opts: { zip64?: boolean; folder?: string } = {
       members: ["U02", "U04"],
       topic: { value: "Café · カフェ" },
     },
+    { id: "C03", name: "東京", created: 1_600_000_200, creator: "U03", members: ["U03"] },
   ]
   const groups = [{ id: "G01", name: "secret-plans", creator: "U02", members: ["U02", "U03"] }]
   const dms = [{ id: "D01", members: ["U02", "U05"] }]
@@ -132,6 +133,7 @@ function exportZip(email: string, opts: { zip64?: boolean; folder?: string } = {
       [`${prefix}café/2023-11-14.json`]: json([
         { ts: "1700000000.000001", user: "U04", text: "Un café, s'il vous plaît" },
       ]),
+      [`${prefix}東京/2023-11-14.json`]: json([{ ts: "1700000000.000005", user: "U03", text: "東京の天気は晴れ" }]),
       [`${prefix}secret-plans/2023-11-14.json`]: json([{ ts: "1700000000.000002", user: "U03", text: "秘密の計画" }]),
       [`${prefix}D01/2023-11-14.json`]: json([{ ts: "1700000000.000003", user: "U05", text: "비밀이에요" }]),
       [`${prefix}mpdm-ana--jose--minjun-1/2023-11-14.json`]: json([
@@ -150,6 +152,8 @@ async function setUp() {
   const email = `ana-${crypto.randomUUID().slice(0, 8)}@example.test`
   expect(await admin.run("admin", "add-user", "ana", "--email", email)).toBe(0)
   expect(await admin.run("create-channel", "café")).toBe(0)
+  // Private here, public in the export: never merged.
+  expect(await admin.run("create-channel", "東京", "--private")).toBe(0)
   admin.clear()
   const token = admin.config!.profiles.default!.token!
   return { admin, email, client: createClient({ url: baseUrl, token }) }
@@ -170,7 +174,7 @@ describe("campflare import slack", () => {
     expect(admin.out).toContain("6: 1 match by email, 5 would be placeholders")
     expect(admin.out).toContain("ana → @ana")
     expect(admin.out).toContain("#café renamed #café-imported")
-    expect(admin.out).toContain("messages       12")
+    expect(admin.out).toContain("messages       13")
     expect(admin.out).toContain("files          4 (left as a line each)")
     admin.clear()
     expect(await admin.run("import", "slack", "export.zip", "--dry-run", "--merge-into-existing", "--json")).toBe(0)
@@ -178,6 +182,7 @@ describe("campflare import slack", () => {
     expect(plan.conversations.clashes).toEqual([
       "#general merged into the existing one",
       "#café merged into the existing one",
+      "#東京 renamed #東京-imported",
     ])
     admin.clear()
     expect(await admin.run("import", "status")).toBe(0)
@@ -193,8 +198,8 @@ describe("campflare import slack", () => {
     expect(admin.err).toContain("#café-imported: 1 messages")
     expect(admin.out).toMatch(/^Imported acme\.zip as job J[A-Z0-9]+ \(finished\)/)
     expect(admin.out).toContain("1 matched by email, 5 placeholders (deactivated)")
-    expect(admin.out).toContain("3 created, 2 renamed, 0 merged, 0 skipped")
-    expect(admin.out).toContain("messages       12, 2 reactions, 1 pins")
+    expect(admin.out).toContain("3 created, 3 renamed, 0 merged, 0 skipped")
+    expect(admin.out).toContain("messages       13, 2 reactions, 1 pins")
     expect(admin.out).toContain(
       "files          0 attached, 3 left as a line (--files download --slack-token to bring them)",
     )
@@ -227,7 +232,7 @@ describe("campflare import slack", () => {
     expect(admin.out).toMatch(new RegExp(`^${job}  finished  acme\\.zip  `))
     admin.clear()
     expect(await admin.run("import", "status", job)).toBe(0)
-    expect(admin.out).toContain("12 messages, 5 placeholders, 5 conversations created")
+    expect(admin.out).toContain("13 messages, 5 placeholders, 6 conversations created")
     admin.clear()
     expect(await admin.run("import", "status", job, "--json")).toBe(0)
     expect(JSON.parse(admin.out)).toMatchObject({ job: { id: job, state: "finished" } })
@@ -239,7 +244,7 @@ describe("campflare import slack", () => {
 
     admin.clear()
     expect(await admin.run("import", "undo", job)).toBe(0)
-    expect(admin.out).toMatch(new RegExp(`Undid import ${job}: removed .*12 messages`))
+    expect(admin.out).toMatch(new RegExp(`Undid import ${job}: removed .*13 messages`))
     admin.clear()
     expect(await admin.run("import", "undo", job, "--json")).toBe(0)
     expect(JSON.parse(admin.out)).toMatchObject({ job: { state: "undone" }, removed: {} })
@@ -265,7 +270,7 @@ describe("campflare import slack", () => {
     // Merging was the first run's choice: the job keeps its options.
     expect(result.job.options).toMatchObject({ merge_into_existing: false, files: "download" })
     expect(result.job.counts).toMatchObject({
-      messages: 12,
+      messages: 13,
       files: 3,
       files_attached: 1,
       files_skipped: 2,

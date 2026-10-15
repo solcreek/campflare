@@ -428,11 +428,11 @@ async function dryRun(s: Session, ex: Export, options: Options) {
     "members",
   )
   const emails = new Map(people.flatMap((p) => (p.profile?.email ? [[p.profile.email.toLowerCase(), p.name]] : [])))
-  const channels = await client.paginate<{ name: string; is_general?: boolean }>("conversations.list", "channels", {
+  const channels = await client.paginate<{ name: string; is_private?: boolean }>("conversations.list", "channels", {
     types: "public_channel,private_channel",
     exclude_archived: false,
   })
-  const names = new Set(channels.map((c) => c.name))
+  const privacy = new Map(channels.map((c) => [c.name, Boolean(c.is_private)]))
   const matched: string[] = []
   const placeholders: string[] = []
   for (const u of ex.users) {
@@ -442,8 +442,11 @@ async function dryRun(s: Session, ex: Export, options: Options) {
   }
   const clashes: string[] = []
   for (const c of ex.conversations) {
-    if ((c.type === "channel" || c.type === "group") && c.name && names.has(c.name.toLowerCase())) {
-      clashes.push(`#${c.name} ${options.merge ? "merged into the existing one" : `renamed #${c.name}-imported`}`)
+    const taken = c.name === undefined ? undefined : privacy.get(c.name.toLowerCase())
+    if ((c.type === "channel" || c.type === "group") && taken !== undefined) {
+      // Merged only into one as private as it was, as the server does.
+      const merge = options.merge && taken === (c.type === "group")
+      clashes.push(`#${c.name} ${merge ? "merged into the existing one" : `renamed #${c.name}-imported`}`)
     }
   }
   let messages = 0

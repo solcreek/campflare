@@ -80,7 +80,8 @@ export async function importConversations(ctx: Ctx<Actor>) {
     ),
     stmt(
       db,
-      "SELECT id, name FROM conversations WHERE team_id = ? AND kind = 'channel' AND name IN (SELECT value FROM json_each(?))",
+      `SELECT id, name, is_private FROM conversations
+       WHERE team_id = ? AND kind = 'channel' AND name IN (SELECT value FROM json_each(?))`,
       team,
       JSON.stringify(names),
     ),
@@ -92,7 +93,9 @@ export async function importConversations(ctx: Ctx<Actor>) {
   const userOf = new Map(
     (users!.results as { source_id: string; user_id: string }[]).map((r) => [r.source_id, r.user_id]),
   )
-  const channelByName = new Map((channels!.results as { id: string; name: string }[]).map((r) => [r.name, r.id]))
+  const channelByName = new Map(
+    (channels!.results as { id: string; name: string; is_private: number }[]).map((r) => [r.name, r]),
+  )
   const generalId = (general!.results[0] as { id: string } | undefined)?.id
 
   // DMs and group DMs go into the existing one with the same people: read those in one more query.
@@ -155,15 +158,17 @@ export async function importConversations(ctx: Ctx<Actor>) {
       }
     } else {
       const base = channelNameFrom(c.name || c.id)
-      const existing = c.is_general && generalId ? generalId : channelByName.get(base)
-      if (existing && options.merge_into_existing) {
-        target = existing
+      const isPrivate = c.type === "group" ? 1 : 0
+      const existing = c.is_general && generalId ? { id: generalId, is_private: 0 } : channelByName.get(base)
+      // Merged only into one as private as it was: never a private channel's history into a public one, nor back.
+      if (existing && options.merge_into_existing && existing.is_private === isPrivate) {
+        target = existing.id
         action = "merged"
       } else {
         name = candidates(base).find((n) => !channelByName.has(n)) ?? `${base}-${randomId("", 4).toLowerCase()}`
         action = name === base ? "created" : "renamed"
         target = ids.channel()
-        channelByName.set(name, target)
+        channelByName.set(name, { id: target, name, is_private: isPrivate })
         created.push(newConversation(c, target, "channel", name, creator, null))
       }
     }

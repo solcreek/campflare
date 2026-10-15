@@ -470,10 +470,18 @@ describe("campflare.import", () => {
   it("merges into existing conversations only when asked, and never touches their messages", async () => {
     const { w, design, name } = await setUp()
     const existing = await ok<{ ts: string }>("chat.postMessage", { channel: design, text: "Ours" }, w.owner.token)
+    const create = (name: string, is_private: boolean) =>
+      ok<{ channel: { id: string } }>("conversations.create", { name, is_private }, w.owner.token)
+    const tokyo = (await create("東京", true)).channel.id
+    const plans = (await create("secret-plans", true)).channel.id
     const job = await start(w.owner.token, { merge_into_existing: true })
     const { conversation } = await prepare(w.owner.token, name, job.id)
     expect(conversation.get("C01")).toMatchObject({ action: "merged", conversation_id: w.general })
     expect(conversation.get("C02")).toMatchObject({ action: "merged", conversation_id: design })
+    // Only into one as private as it was.
+    expect(conversation.get("G01")).toMatchObject({ action: "merged", conversation_id: plans })
+    expect(conversation.get("C03")).toMatchObject({ action: "renamed", name: "東京-imported" })
+    expect(conversation.get("C03")!.conversation_id).not.toBe(tokyo)
     const res = await messages(w.owner.token, job.id, "C02", [
       { ts: existing.ts, user: "U03", text: "Would overwrite" },
       { ts: "1700000000.000001", user: "U03", text: "Mise à jour du design · デザイン更新" },
