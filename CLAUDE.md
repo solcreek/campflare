@@ -498,6 +498,40 @@ workspace, its owner and #general; others add people, set roles
 `preset`/`scopes`/`expires_in`, never beyond the calling token's scopes) and
 create apps (an app is a bot user + xoxb + xapp).
 
+**Profiles.** `users.setPhoto` (multipart `image`: PNG, JPEG, WebP or a still
+GIF, sniffed from its bytes; animated is `too_many_frames`; optional square
+crop `crop_x`/`crop_y`/`crop_w`) stores the original in R2 at
+`<team>/avatars/<user>/<photo>/original` and sets `users.photo` (a random id),
+`photo_type`, `photo_crop` (migration 0021). `src/api/photos.ts`: `userJson`'s
+`image_24` … `image_1024` and `image_original` (plus `is_custom_image`) are
+`/avatars/<user>/<photo>_<size>.<png|jpg>`, made by the Images binding on first
+fetch (crop as a `trim`, then a `cover` square) and kept in R2 beside it; without
+the binding, or when it fails, the original is served, briefly cached. No token,
+as the initials (`/avatars/:id?s=n`, still the fallback) need none: `<img>` can't
+send one; the id is unguessable and new with each photo, so the URLs are served
+`immutable` and change when the photo does. `users.deletePhoto` and a new photo
+drop the old objects. A status past `status_expiration` reads as empty
+(`status()` in shapes). `users.profile.set`, `setPhoto` and `deletePhoto`
+publish `user_change` (`userChanged()` in `src/events.ts`, shared with roles).
+
+**User groups.** `src/methods/usergroups.ts`, tables `usergroups` and
+`usergroup_members` (migration 0021). Slack's shape (`usergroupJson()`),
+codes (`no_such_subteam`, `handle_already_exists`, `name_already_exists`,
+`invalid_handle`, `invalid_users`, `invalid_channel`) and events:
+`subteam_created`, `subteam_updated` (update, disable, enable, members), and on a
+member change `subteam_members_changed` (counts as strings, as Slack) to the team
+plus `subteam_self_added`/`_removed` to those people. Handles share a namespace
+with people's names: triggers refuse a clash on either side in the writing
+statement. `usergroups.users.update` replaces the members in one batch that reads
+the old list first, so the events describe exactly that change. Anyone may manage
+any group (Slack's default; no admin restriction yet); `usergroups:read` is in
+`read` and the bot defaults, `usergroups:write` only in `full`. Mentions are
+`<!subteam^S…|@handle>`: core's mrkdwn parses them as `usergroup` nodes;
+`groupMembers(env, teamId, ids)` and `subteamMentions(text)` in
+`src/db/usergroups.ts` resolve one to its people (enabled groups, active members)
+for whatever notifies them. CLI: `campflare profile`, `groups`, `group …`; MCP:
+`list_groups`.
+
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
 the Worker: browsers send WebRTC to Cloudflare's Realtime SFU, and

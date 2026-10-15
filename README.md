@@ -120,7 +120,8 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | reactions             | `add`, `remove`, `get`                                                                                                                                                                                                                           |
 | files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
 | search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
-| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                                                      |
+| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set` (with `status_expiration`), `setPhoto`, `deletePhoto`; `user_change` on every change                                                                 |
+| usergroups            | `create`, `list`, `update`, `disable`, `enable`, `users.list`, `users.update`; `subteam_*` events; mentioned as `<!subteam^S…\|@handle>`                                                                                                         |
 | dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                                           |
 | realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
 | interactivity         | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
@@ -155,6 +156,18 @@ Search uses an FTS5 trigram index that ignores case and diacritics. It matches
 substrings in any script: words in Chinese, Japanese and Korean, which aren't
 separated by spaces, as well as `cafe` for `Café` and `munchen` for `München`.
 Terms shorter than three characters fall back to a LIKE scan.
+
+### Profiles and user groups
+
+`users.setPhoto` takes a PNG, JPEG, WebP or still GIF (optionally cropped
+with `crop_x`, `crop_y`, `crop_w`); `image_24` … `image_1024` are squares
+made from it by the Images binding (the original without it), at URLs that
+change with every photo, so clients refetch. Like the drawn initials people
+have without a photo, they need no token. A status past its
+`status_expiration` reads as none. User groups are Slack's: a `@handle` (in
+one namespace with people's names), members and default channels; anyone in
+the workspace may manage them, as on Slack by default, with a token holding
+`usergroups:write` (not in the `write` preset).
 
 ## Realtime
 
@@ -344,6 +357,7 @@ or a bot:
 | `search_messages`                             | search, with the same syntax as `search.messages`            |
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
+| `list_groups`                                 | user groups, their members, and how to mention each          |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
 
@@ -400,6 +414,8 @@ campflare stop '#dev' 1791990000.000200                       # as a person: sto
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
+campflare profile --status 'En réunion' --emoji :calendar: --until 1h --photo me.png
+campflare group create oncall --name 'On call' --members @ana,@kenji   # then mention @oncall
 ```
 
 Profiles are kept in `~/.config/campflare/config.json` (mode 0600).
@@ -449,8 +465,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
   when one person is in several.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
-  emoji, scheduled DND hours, time zones.
+- Pins, bookmarks, stars, reminders, scheduled messages, custom
+  emoji, an admin setting restricting who may manage user groups, scheduled DND hours, time zones.
 - Sharding a very large workspace's hub across several Durable Objects.
 - Huddles: expiring the seat of a browser that died without leaving, and
   Slack's `calls.*` API (see [docs/huddles.md](docs/huddles.md)).
