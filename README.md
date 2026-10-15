@@ -127,6 +127,7 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | views (modals)        | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                                   |
 | other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                                              |
 | admin (`campflare.*`) | `bootstrap`, `methods.list`, `users.create`, `users.deactivate`, `users.setRole`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
+| invitations           | `campflare.invites.create`, `list`, `revoke`, `accept`; `campflare.users.createPasswordReset`, `resetPassword`, `requestPasswordReset`                                                                                                           |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -150,6 +151,23 @@ never gets a scope the token minting it lacks. Roles are Slack's: owners
 manage roles (`campflare.users.setRole`), admins manage members, and acting on
 someone takes a role above theirs. See
 [docs/scopes-and-roles.md](docs/scopes-and-roles.md).
+
+### Inviting people
+
+An admin makes an invitation link, to one email or open to a number of people,
+and hands it over (no email is sent unless a sender is configured):
+
+```sh
+campflare admin invite --email ana@example.com --channel '#dev'   # prints https://<host>/join/<code>
+campflare admin invite --uses 20 --expires 3d                      # an open link for a team
+campflare admin reset-password @ana                                # a single-use https://<host>/reset/<code>
+```
+
+The person opens it and picks a handle and a password (a script-free page that
+signs them in and sends them to the app), or accepts from a terminal with
+`campflare join <link> <handle>`; agents call `campflare.invites.accept`. The
+workspace hears `team_join`. Codes are stored only as hashes, links expire, and
+using them is rate limited. See [docs/invites.md](docs/invites.md).
 
 Search uses an FTS5 trigram index that ignores case and diacritics. It matches
 substrings in any script: words in Chinese, Japanese and Korean, which aren't
@@ -400,6 +418,7 @@ campflare stop '#dev' 1791990000.000200                       # as a person: sto
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
+campflare join https://chat.example.com/join/<code> ana       # accept an invitation, log in as ana
 ```
 
 Profiles are kept in `~/.config/campflare/config.json` (mode 0600).
@@ -445,8 +464,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
 
 - Guests (multi- and single-channel), and filtering the live event feeds by a
   token's scopes ([docs/scopes-and-roles.md](docs/scopes-and-roles.md)).
-- Signing in with a password, passkey or email link, and choosing a workspace
-  when one person is in several.
+- Passkeys, and an email provider behind the email seam (invitations and
+  resets are links today; [docs/invites.md](docs/invites.md)).
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom

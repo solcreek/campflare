@@ -498,6 +498,32 @@ workspace, its owner and #general; others add people, set roles
 `preset`/`scopes`/`expires_in`, never beyond the calling token's scopes) and
 create apps (an app is a bot user + xoxb + xapp).
 
+**Invitations and resets** (`docs/invites.md`, migration 0020). Links, not
+email: `campflare.invites.create` (`admin.invites:write`, admin; `role: admin`
+owners only; `email` binds it and makes it single use; `channels`,
+`expires_in`, `max_uses`) answers `<origin>/join/<code>`, and
+`campflare.users.createPasswordReset` (`admin.users:write`, `requireOutranks`)
+answers `<origin>/reset/<code>`. Codes are 32 random bytes; `invites.hash` and
+`password_resets.hash` keep only their SHA-256. Using one takes no token:
+`campflare.invites.accept` / `campflare.users.resetPassword` (methods in
+`src/methods/invites.ts`) and the `/join/:code`, `/reset/:code` pages
+(`src/auth/links.ts`, script-free like `/login`) call the same functions in
+`src/invites.ts`, which read the sign-in throttle (`addressChecks`) in the
+batch that finds the code and count an unknown one against `ip:`.
+`acceptInvite()` is one batch whose user INSERT … SELECT runs only while the
+invite is pending and its inviter is still an active admin (an owner, for an
+admin invite); the use, password and memberships follow only if that row went
+in, and a taken handle or email fails the whole batch, spending nothing. It
+publishes `team_join` and `member_joined_channel`; the API answers a `full`
+token, the page signs the person in through `signInCampflareUser`, a
+server-only Better Auth endpoint (`createAuthEndpoint.serverOnly`, not on the
+router), and redirects to `APP_URL` (added to the page's `form-action`). A
+reset spends the link only once the password passes `checkPassword()`, then
+calls `setPassword()`. Email is a seam (`src/email.ts`): `emailSender(env)` is
+undefined by default, so `campflare.users.requestPasswordReset` answers
+`email_not_configured`; tests install one with `setEmailSender()`. Pages send
+`referrer-policy: no-referrer`, since their URLs hold codes.
+
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
 the Worker: browsers send WebRTC to Cloudflare's Realtime SFU, and

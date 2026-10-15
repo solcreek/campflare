@@ -102,6 +102,9 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `tokens:read` / `tokens:write` | `campflare.tokens.list` / `.create`, `.revoke`         | minting tokens is how a token would escalate              |
 | `users.password:write`         | `campflare.users.setPassword`                          | a password is the whole account                           |
 | `admin.users:write`            | `campflare.users.create`, `.deactivate`, `.setRole`    | plus the admin or owner role                              |
+| `admin.users:write`            | `campflare.users.createPasswordReset`                  | a role above the person's ([invites.md](invites.md))      |
+| `admin.invites:write`          | `campflare.invites.create`, `.revoke`                  | plus the admin role; an admin invite, owner               |
+| `admin.invites:read`           | `campflare.invites.list`                               | plus the admin role                                       |
 | `calls:read` / `calls:write`   | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
@@ -198,6 +201,9 @@ send `false` today, and adding them is a new role here plus a channel check.
 | delete anyone's message or file                                 |        | ✓     | ✓     |
 | manage anyone's app                                             |        | ✓     | ✓     |
 | add a person (`campflare.users.create`), mint a token for one   |        | ✓     | ✓     |
+| invite a member; list or revoke invitations                     |        | ✓     | ✓     |
+| reset a member's password (a link)                              |        | ✓     | ✓     |
+| invite an admin, reset an admin's password                      |        |       | ✓     |
 | deactivate a member                                             |        | ✓     | ✓     |
 | deactivate an admin                                             |        |       | ✓     |
 | make someone member, admin or owner (`campflare.users.setRole`) |        |       | ✓     |
