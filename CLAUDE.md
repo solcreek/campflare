@@ -510,9 +510,13 @@ an unknown id; members change them, readers list them; `bookmark_added`/
 are Slack's stars (`src/methods/stars.ts`, user tokens only, table `stars` keyed
 `message:<channel>/<ts>`, `file:<id>` or `channel:<id>`): `stars.list` pages by
 cursor and by `count`/`page`, newest first, and its query leaves out what the
-person can no longer read (`VISIBLE`, the files' `readsOneOf()`); deleting a
-message or file deletes its stars in the same batch; `star_added`/`star_removed`
-go to the person alone. `conversations.history` and `.replies` mark the caller's
+person can no longer read (`VISIBLE`, the files' `readsOneOf()`, run for the page
+and the total; the page's messages and files are read after it by id).
+`stars.remove` needs no access to the item, only the caller's own row
+(`not_starred` otherwise). Deleting a message or file deletes its stars in the
+same batch (`RETURNING`) and sends each saver `star_removed`;
+`star_added`/`star_removed` go to the person alone, `star_removed` with only what
+the row says (`unstarredItem()`). `conversations.history` and `.replies` mark the caller's
 saved messages `is_starred` with `starredOfQuery()` (shapes.ts) in the page's
 batch, as `reactionsOfQuery()` does; other serialisations don't. Scopes
 `pins:*`, `bookmarks:*` (read/write presets and the bot defaults) and `stars:*`
