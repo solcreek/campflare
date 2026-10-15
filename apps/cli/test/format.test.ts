@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { deliveryLines, messageLine, plain, time } from "../src/format"
 import { matchUsers } from "../src/resolve"
+import { deviceLine } from "../src/run"
 
 describe("plain", () => {
   it("renders mrkdwn entities for a terminal", () => {
@@ -66,5 +67,19 @@ describe("deliveryLines", () => {
       `Event delivery: OFF since ${time(String(at))}: 100% of 20 attempts failed`,
       "  Set the Request URL again (--request-url) to turn it back on.",
     ])
+  })
+})
+
+describe("deviceLine", () => {
+  it("says what a device is and when it was last pushed to", () => {
+    const created = Date.UTC(2026, 9, 15) / 1000
+    const line = deviceLine({
+      id: "P1",
+      label: "",
+      service: "fcm.googleapis.com",
+      created,
+      last_used: created + 86_400,
+    })
+    expect(line).toBe("P1  (no label)  fcm.googleapis.com  since 2026-10-15, last 2026-10-16")
   })
 })

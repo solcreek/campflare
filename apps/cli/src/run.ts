@@ -77,6 +77,9 @@ Attention (Campflare)
   notify <#channel|@person> all|mentions|none|default
   notify --default all|mentions|none   when to notify: every item, mentions and DMs only,
                                    or never (items are recorded either way)
+  push list [--json]               the devices you get push notifications on (turned on in the app)
+  push remove <id>                 stop pushing to one
+  push test [<id>] [--json]        send a test notification to your devices (or one) now
 
 Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
@@ -545,6 +548,22 @@ async function conversationNames(s: Session): Promise<Map<string, string>> {
       c.is_im ? `@${names.get(c.user ?? "") ?? c.user}` : c.is_mpim ? (c.name ?? c.id) : `#${c.name}`,
     ]),
   )
+}
+
+interface PushDevice {
+  id: string
+  label: string
+  service: string
+  created: number
+  last_used: number
+}
+
+const day = (epoch: number) => new Date(epoch * 1000).toISOString().slice(0, 10)
+
+/** One device line: "PABC123  Firefox on Linux  updates.push.services.mozilla.com  since 2026-10-15, last 2026-10-15". */
+export function deviceLine(d: PushDevice): string {
+  const used = d.last_used ? `last ${day(d.last_used)}` : "not used yet"
+  return `${d.id}  ${d.label || "(no label)"}  ${d.service}  since ${day(d.created)}, ${used}`
 }
 
 /** One inbox line: "* 42  2026-10-15 09:30  mention       #general  bob: text". */
@@ -1537,6 +1556,40 @@ const commands: Record<string, Command> = {
     if (entries.length === 0) return
     const where = await conversationNames(s)
     for (const [id, l] of entries) io.stdout(`${where.get(id) ?? id}  ${l}\n`)
+  },
+
+  async push(argv, io) {
+    const { values, positionals } = parse(argv, {})
+    const [sub, id, ...extra] = positionals
+    if (!["list", "remove", "test"].includes(sub ?? "") || extra.length || (sub === "list" && id)) {
+      throw new UsageError("push list | push remove <id> | push test [<id>]")
+    }
+    const s = await session(io, values)
+    if (sub === "list") {
+      const { subscriptions } = await s.client.call<{ ok: boolean; subscriptions: PushDevice[] }>("campflare.push.list")
+      if (values.json) return s.print(subscriptions)
+      if (subscriptions.length === 0) {
+        io.stderr("No devices: turn notifications on in the app (the workspace menu).\n")
+        return
+      }
+      for (const d of subscriptions) io.stdout(`${deviceLine(d)}\n`)
+      return
+    }
+    if (sub === "remove") {
+      if (!id) throw new UsageError("push remove needs a device id (see push list)")
+      await s.client.call("campflare.push.unsubscribe", { id })
+      io.stdout(`Removed ${id}\n`)
+      return
+    }
+    const res = await s.client.call<{ ok: boolean; sent: number; failed: number; removed: number }>(
+      "campflare.push.test",
+      id ? { id } : {},
+    )
+    if (values.json) return s.print(res)
+    const parts = [`Sent to ${res.sent} device${res.sent === 1 ? "" : "s"}`]
+    if (res.failed) parts.push(`${res.failed} failed (retry later)`)
+    if (res.removed) parts.push(`${res.removed} gone and removed`)
+    io.stdout(`${parts.join("; ")}\n`)
   },
 
   async api(argv, io) {

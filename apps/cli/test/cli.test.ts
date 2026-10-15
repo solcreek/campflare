@@ -1254,3 +1254,49 @@ describe("inbox and notify", () => {
     expect(await owner.run("notify", "#general", "--default", "all")).toBe(2)
   })
 })
+
+describe("push", () => {
+  /** A browser's subscription, at an https endpoint nothing answers (so a push fails, and is retried later). */
+  async function device() {
+    const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+    const p256dh = Buffer.from(await crypto.subtle.exportKey("raw", pair.publicKey)).toString("base64url")
+    const auth = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url")
+    return { endpoint: `https://127.0.0.1:1/push/${crypto.randomUUID()}`, keys: { p256dh, auth } }
+  }
+
+  it("lists your devices, sends a test and removes one", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("push", "list")).toBe(0)
+    expect(cli.err).toContain("No devices")
+    expect(await cli.run("push", "test")).toBe(0)
+    expect(cli.out).toBe("Sent to 0 devices\n")
+    cli.clear()
+
+    const sub = await device()
+    const label = "label=Navigateur · 浏览器"
+    expect(await cli.run("api", "campflare.push.subscribe", `subscription=${JSON.stringify(sub)}`, label)).toBe(0)
+    cli.clear()
+    expect(await cli.run("push", "list")).toBe(0)
+    expect(cli.out).toMatch(
+      /^P[A-Z0-9]+ {2}Navigateur · 浏览器 {2}127\.0\.0\.1:1 {2}since \d{4}-\d\d-\d\d, not used yet\n$/,
+    )
+    cli.clear()
+    expect(await cli.run("push", "list", "--json")).toBe(0)
+    const [listed] = JSON.parse(cli.out) as { id: string }[]
+    cli.clear()
+    expect(await cli.run("push", "test", listed!.id)).toBe(0)
+    expect(cli.out).toBe("Sent to 0 devices; 1 failed (retry later)\n")
+    cli.clear()
+    expect(await cli.run("push", "test", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toMatchObject({ sent: 0, failed: 1, removed: 0 })
+    cli.clear()
+    expect(await cli.run("push", "remove", listed!.id)).toBe(0)
+    expect(cli.out).toBe(`Removed ${listed!.id}\n`)
+    expect(await cli.run("push", "remove", listed!.id)).toBe(1)
+    expect(cli.err).toContain("subscription_not_found")
+
+    expect(await cli.run("push")).toBe(2)
+    expect(await cli.run("push", "remove")).toBe(2)
+    expect(await cli.run("push", "list", "extra")).toBe(2)
+  })
+})
