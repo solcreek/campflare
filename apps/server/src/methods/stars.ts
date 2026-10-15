@@ -41,26 +41,28 @@ function conversationType(c: Pick<ConversationRow, "kind" | "is_private">) {
   return c.kind === "mpim" || c.is_private ? "group" : "channel"
 }
 
-const messageItem = (ctx: Ctx<Actor>, m: MessageRow, extras: MessageExtras, created: number) => ({
+/** A saved message as stars.list and the star events carry it; `starred`: whether it still is. */
+const messageItem = (ctx: Ctx<Actor>, m: MessageRow, extras: MessageExtras, created: number, starred = true) => ({
   type: "message",
   channel: m.channel_id,
   message: {
-    ...messageJson(m, { ...extras, starred: new Set([`${m.channel_id}/${m.ts}`]) }, ctx.origin),
+    ...messageJson(m, extras, ctx.origin),
+    is_starred: starred,
     permalink: permalink(ctx.origin, m.channel_id, m.ts, m.thread_ts),
   },
   date_create: created,
 })
 
-const fileItem = (ctx: Ctx<Actor>, f: FileRow, created: number) => ({
+const fileItem = (ctx: Ctx<Actor>, f: FileRow, created: number, starred = true) => ({
   type: "file",
-  file: { ...fileJson(f, ctx.origin, Boolean(imagesOf(ctx.env))), is_starred: true },
+  file: { ...fileJson(f, ctx.origin, Boolean(imagesOf(ctx.env))), is_starred: starred },
   date_create: created,
 })
 
-async function itemJson(ctx: Ctx<Actor>, t: Target, created: number) {
-  if (t.type === "file") return fileItem(ctx, t.file, created)
+async function itemJson(ctx: Ctx<Actor>, t: Target, created: number, starred: boolean) {
+  if (t.type === "file") return fileItem(ctx, t.file, created, starred)
   if (t.type === "channel") return { type: conversationType(t.c), channel: t.c.id, date_create: created }
-  return messageItem(ctx, t.message, await loadExtras(ctx.env, [t.message]), created)
+  return messageItem(ctx, t.message, await loadExtras(ctx.env, [t.message]), created, starred)
 }
 
 async function star(ctx: Ctx<Actor>, added: boolean) {
@@ -97,7 +99,7 @@ async function star(ctx: Ctx<Actor>, added: boolean) {
   // The event's item (a message's reactions and files) is read after the response.
   const eventTs = `${(Date.now() / 1000).toFixed(6)}`
   ctx.waitUntil(
-    itemJson(ctx, t, now).then((item) =>
+    itemJson(ctx, t, now, added).then((item) =>
       publish(ctx, {
         teamId: ctx.auth.team.id,
         audience: [user],

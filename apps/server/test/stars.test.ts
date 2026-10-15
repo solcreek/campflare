@@ -194,7 +194,10 @@ describe("stars (saved items)", () => {
       item: { type: "message", channel: w.general, message: { ts, is_starred: true } },
     })
     await ok("stars.remove", { channel: w.general, timestamp: ts }, bob.token)
-    expect(await mine.next((f) => f.type === "star_removed")).toMatchObject({ user: bob.id, item: { type: "message" } })
+    expect(await mine.next((f) => f.type === "star_removed")).toMatchObject({
+      user: bob.id,
+      item: { type: "message", message: { ts, is_starred: false } },
+    })
     await ok("stars.add", { channel: w.general }, bob.token)
     expect(await mine.next((f) => f.type === "star_added")).toMatchObject({
       item: { type: "channel", channel: w.general },
