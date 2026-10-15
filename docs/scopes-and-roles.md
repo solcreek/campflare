@@ -83,7 +83,7 @@ and, when the method asks for any, `x-accepted-oauth-scopes`. The official
 | `bookmarks.add`, `.edit`, `.remove` / `bookmarks.list`                                                                                            | `bookmarks:write` / `bookmarks:read`         |
 | `stars.add`, `.remove` / `stars.list` (user tokens)                                                                                               | `stars:write` / `stars:read`                 |
 | `team.info`                                                                                                                                       | `team:read`                                  |
-| `emoji.list`                                                                                                                                      | `emoji:read`                                 |
+| `emoji.list`, `admin.emoji.list`                                                                                                                  | `emoji:read`                                 |
 | `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`                                                                                | `dnd:read` / `dnd:write`                     |
 | `chat.scheduleMessage`, `.scheduledMessages.list`, `.deleteScheduledMessage`                                                                      | `chat:write`                                 |
 | `reminders.info`, `.list` / `reminders.add`, `.complete`, `.delete`                                                                               | `reminders:read` / `reminders:write`         |
@@ -114,6 +114,7 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `calls:read` / `calls:write`       | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
 | `activity:read` / `activity:write` | `campflare.activity.list` / `.mark`                    | a person's inbox ([activity.md](activity.md))             |
 | `prefs:read` / `prefs:write`       | `campflare.prefs.get` / `.set`                         | notification levels                                       |
+| `emoji:write`                      | `admin.emoji.*` but `list`, `campflare.emoji.add`      | not in `write`: it changes everyone's emoji               |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
 could see, not only those their other scopes allow. Until events are filtered
@@ -145,8 +146,9 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
   `bookmarks:write`, `stars:write`, `files:write`, `reminders:write`, the
   conversation `:write` scopes, `views:write`, `activity:write`,
   `prefs:write`. What a chat agent needs.
-- `full`: every user scope (`usergroups:write` is here only: changing who a
-  `@handle` reaches is rarely a chat agent's job). What a person's own sign-in gets.
+- `full`: every user scope (`usergroups:write` and `emoji:write` are here only:
+  changing who a `@handle` reaches, or the workspace's emoji, is rarely a chat
+  agent's job). What a person's own sign-in gets.
 
 A token stores presets by name (`tokens.scopes` holds `full`, or
 `read,chat:write`), and they are expanded on every call (`expandScopes()`), so
@@ -170,7 +172,7 @@ without it never expire, as before.
   `full`.
 - `campflare.apps.create`: the bot gets `bot` (`DEFAULT_BOT_SCOPES`, now with
   `assistant:write`, `mpim:write`, `channels:manage`, `rtm:stream`,
-  `events:read`, `activity:read` and `activity:write`), the app token
+  `events:read`, `activity:read`, `activity:write` and `emoji:read`), the app token
   `connections:write`.
 - `oauth.v2.access`: what the person consented to, out of the known user
   scopes and presets. The CLI, the web app and the desktop app ask for

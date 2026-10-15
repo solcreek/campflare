@@ -130,7 +130,8 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | realtime                 | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
 | interactivity            | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
 | views (modals)           | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                                   |
-| other                    | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                                              |
+| emoji                    | `emoji.list` (with `include_categories`), `admin.emoji.add` (from a URL), `addAlias`, `rename`, `remove`, `list`; uploads by `campflare.emoji.add`; `emoji_changed`                                                                              |
+| other                    | `team.info`, `bots.info`, `apps.list`                                                                                                                                                                                                            |
 | admin (`campflare.*`)    | `bootstrap`, `methods.list`, `users.create`, `users.deactivate`, `users.setRole`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
 | invitations              | `campflare.invites.create`, `list`, `revoke`, `accept`; `campflare.users.createPasswordReset`, `resetPassword`, `requestPasswordReset`                                                                                                           |
 
@@ -204,6 +205,21 @@ have without a photo, they need no token. A status past its
 one namespace with people's names), members and default channels; anyone in
 the workspace may manage them, as on Slack by default, with a token holding
 `usergroups:write` (not in the `write` preset).
+
+### Custom emoji
+
+A workspace's own `:name:`: an image (PNG, GIF, JPEG or WebP, up to 128 KB,
+scaled down to 128 px by the Images binding when bigger) or an alias of
+another emoji, custom or standard. `emoji.list` answers Slack's map (name →
+image URL, or `alias:<name>`); the images need no token, like Slack's. Slack's
+`admin.emoji.*` (Enterprise there) work in any workspace: `admin.emoji.add`
+fetches its `url` (https to a public address only, no redirects), and
+`campflare.emoji.add` takes the file itself as a multipart `image`. Names follow
+Slack's rules (lowercase letters, digits, `-` and `_`, up to 100) and can't take
+a standard emoji's. Anyone may add, with a token holding `emoji:write` (in
+`full`, not `write`); the creator or an admin may rename or remove one, and
+removing an image removes its aliases. Each change is `emoji_changed` to the
+workspace, and the app draws custom emoji in messages and reactions.
 
 ### The activity inbox
 
@@ -420,6 +436,7 @@ or a bot:
 | `list_pins`, `list_saved`                     | what's pinned in a conversation; what you saved for later    |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
 | `list_groups`                                 | user groups, their members, and how to mention each          |
+| `list_emoji`                                  | the workspace's custom emoji and aliases                     |
 | `get_activity`, `mark_activity_read`          | what needs your attention (unread by default), and done with |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
@@ -486,6 +503,7 @@ campflare inbox --unread --type mention,dm                    # what needs you (
 campflare api conversations.list limit=5                      # any method, raw JSON
 campflare profile --status 'En réunion' --emoji :calendar: --until 1h --photo me.png
 campflare group create oncall --name 'On call' --members @ana,@kenji   # then mention @oncall
+campflare emoji add shipit shipit.gif                         # custom emoji; emoji alias, rename, remove
 campflare join https://chat.example.com/join/<code> ana       # accept an invitation, log in as ana
 ```
 
@@ -537,7 +555,7 @@ client and CLI bundles. The Worker is bundled by wrangler.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Push notifications (activity items already say whether to `notify`).
-- Custom emoji, an admin setting restricting who may manage user groups,
+- An admin setting restricting who may manage user groups or custom emoji,
   scheduled DND hours, setting a person's time zone (reminders read `tz`,
   which no method sets yet). Pinning files (pin the message that shares one),
   file comments, bookmark folders and message or file bookmarks.
