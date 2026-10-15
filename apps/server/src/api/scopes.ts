@@ -91,6 +91,8 @@ export const NEEDS: Record<string, Need> = {
   "users.setPresence": ["users:write"],
   "users.profile.get": ["users.profile:read"],
   "users.profile.set": ["users.profile:write"],
+  "users.setPhoto": ["users.profile:write"],
+  "users.deletePhoto": ["users.profile:write"],
 
   "team.info": ["team:read"],
   "emoji.list": ["emoji:read"],

@@ -1,7 +1,8 @@
 import { all } from "./db/query"
-import type { ConversationRow } from "./db/rows"
+import type { ConversationRow, UserRow } from "./db/rows"
 import type { PublishInput } from "./hub"
-import type { Ctx } from "./api/context"
+import type { Actor, Ctx } from "./api/context"
+import { userJson } from "./api/shapes"
 
 /** Sends an event to the workspace's live connections, after the response. */
 export function publish(ctx: Pick<Ctx, "env" | "waitUntil">, input: PublishInput): void {
@@ -11,6 +12,15 @@ export function publish(ctx: Pick<Ctx, "env" | "waitUntil">, input: PublishInput
       console.error("publish failed", input.event.type, error)
     }),
   )
+}
+
+/** Everyone in the workspace learns of a change to a person (role, profile, photo), as Slack's user_change. */
+export function userChanged(ctx: Pick<Ctx<Actor>, "env" | "waitUntil" | "origin" | "auth">, user: UserRow): void {
+  publish(ctx, {
+    teamId: ctx.auth.team.id,
+    event: { type: "user_change", user: userJson(user, ctx.origin) },
+    audience: "team",
+  })
 }
 
 /** audienceOf() as a statement, to read the audience in the same batch as a change. */

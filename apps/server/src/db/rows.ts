@@ -27,6 +27,11 @@ export interface UserRow {
   manual_presence: string
   last_activity: number
   snooze_until: number
+  /** The profile photo's id (migration 0021), or null: the initials are drawn instead. */
+  photo: string | null
+  photo_type: string | null
+  /** users.setPhoto's crop square, as JSON {x, y, w}, or null. */
+  photo_crop: string | null
   updated: number
   created: number
 }

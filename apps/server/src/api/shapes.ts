@@ -2,6 +2,7 @@ import { all } from "../db/query"
 import type { AppRow, ConversationRow, FileRow, MessageRow, ReactionRow, TeamRow, UserRow } from "../db/rows"
 import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
+import { PHOTO_SIZES, photoJson } from "./photos"
 import { imagesOf, thumbsJson } from "./thumbs"
 
 // Rows → the JSON shapes Slack's Web API returns. Fields Slack always sends
@@ -16,16 +17,20 @@ function color(id: string) {
   return COLORS[h % COLORS.length]!
 }
 
-function avatar(origin: string, user: UserRow) {
+/** The profile's image_* fields: the photo's sizes (photos.ts), else the drawn initials, any size. */
+function avatar(origin: string, user: UserRow): Record<string, string | boolean> {
+  const photo = photoJson(origin, user)
+  if (photo) return photo
   const base = `${origin}/avatars/${user.id}`
-  return {
-    image_24: `${base}?s=24`,
-    image_32: `${base}?s=32`,
-    image_48: `${base}?s=48`,
-    image_72: `${base}?s=72`,
-    image_192: `${base}?s=192`,
-    image_512: `${base}?s=512`,
-  }
+  return Object.fromEntries(PHOTO_SIZES.map((n) => [`image_${n}`, `${base}?s=${n}`]))
+}
+
+/** A status past its status_expiration reads as none, as Slack clears it. */
+function status(user: UserRow) {
+  const expired = user.status_expiration > 0 && user.status_expiration <= Math.floor(Date.now() / 1000)
+  return expired
+    ? { status_text: "", status_emoji: "", status_expiration: 0 }
+    : { status_text: user.status_text, status_emoji: user.status_emoji, status_expiration: user.status_expiration }
 }
 
 export function teamJson(team: TeamRow, origin: string) {
@@ -63,11 +68,10 @@ export function userJson(user: UserRow, origin: string) {
       display_name: user.display_name,
       display_name_normalized: user.display_name,
       fields: null,
-      status_text: user.status_text,
-      status_emoji: user.status_emoji,
+      ...status(user),
       status_emoji_display_info: [],
-      status_expiration: user.status_expiration,
-      avatar_hash: user.id.slice(-8).toLowerCase(),
+      // Changes with the photo, as Slack's does.
+      avatar_hash: (user.photo ?? user.id).slice(-8).toLowerCase(),
       email: user.email ?? undefined,
       first_name: firstName,
       last_name: rest.join(" "),
