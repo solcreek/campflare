@@ -58,7 +58,7 @@ const exportConversations = [
     is_general: true,
     created: 1_600_000_000,
     creator: "U01",
-    members: ["U01", "U02", "U03", "U04", "U05", "U06"],
+    members: ["U01", "U02", "U03", "U04", "U05", "U06", "USLACKBOT"],
     topic: { value: "Tout le monde · みんな", creator: "U01", last_set: 1_600_000_001 },
     purpose: { value: "Company-wide", creator: "U01", last_set: 1_600_000_002 },
   },
@@ -69,6 +69,9 @@ const exportConversations = [
   { id: "G02", type: "mpim", name: "mpdm-olive--ana--jose-1", members: ["U01", "U02", "U04"] },
   // Someone not in users.json: there's no one to give it to.
   { id: "D02", type: "im", members: ["U01", "U99"] },
+  // Every export has DMs with Slackbot: it's no one here, so they're skipped too.
+  { id: "D03", type: "im", members: ["U01", "USLACKBOT"] },
+  { id: "G03", type: "group", name: "bots-and-me", creator: "USLACKBOT", members: ["U01", "USLACKBOT"] },
 ]
 
 const HEAD = "1700000100.000200"
@@ -247,6 +250,17 @@ describe("campflare.import", () => {
     expect(conversation.get("D01")!.action).toBe("created")
     expect(conversation.get("G02")!.action).toBe("created")
     expect(conversation.get("D02")).toMatchObject({ action: "skipped", conversation_id: null })
+    expect(conversation.get("D03")).toMatchObject({ action: "skipped", conversation_id: null })
+    const bots = conversation.get("G03")!.conversation_id!
+    expect(
+      (await ok<{ members: string[] }>("conversations.members", { channel: bots }, w.owner.token)).members,
+    ).toEqual([w.owner.id])
+    await expectError(
+      "campflare.import.messages",
+      { job: job.id, conversation: "D03", messages: [] },
+      w.owner.token,
+      "channel_not_found",
+    )
     const general = conversation.get("C01")!.conversation_id!
     expect(general).not.toBe(w.general)
     const designCopy = conversation.get("C02")!.conversation_id!
@@ -357,9 +371,9 @@ describe("campflare.import", () => {
     expect(counted.counts).toMatchObject({
       users_mapped: 3,
       users_created: 6,
-      conversations_created: 4,
+      conversations_created: 5,
       conversations_renamed: 2,
-      conversations_skipped: 1,
+      conversations_skipped: 2,
       messages: 14,
       messages_skipped: 0,
       reactions: 2,
@@ -501,7 +515,7 @@ describe("campflare.import", () => {
 
     const { removed, job: undone } = await undo(w.owner.token, job.id)
     expect(undone.state).toBe("undone")
-    expect(removed).toMatchObject({ messages: 13, conversations: 4, users: 6 })
+    expect(removed).toMatchObject({ messages: 13, conversations: 5, users: 6 })
     const general = await history(w.owner.token, w.general)
     expect(general.map((m) => m.ts)).toEqual([ours.ts])
     const usersAfter = await env.DB.prepare("SELECT count(*) AS n FROM users WHERE team_id = ?")

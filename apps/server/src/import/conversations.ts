@@ -3,7 +3,7 @@ import { invalidArguments } from "../api/errors"
 import { ids, nowSeconds, randomId } from "../api/ids"
 import { stmt } from "../db/query"
 import { bump, limitExceeded, LIMITS, loadJob, type JobOptions } from "./job"
-import { candidates, channelNameFrom } from "./text"
+import { candidates, channelNameFrom, SYSTEM_USER_ID } from "./text"
 
 // campflare.import.conversations: channels, private channels, group DMs and
 // DMs, mapped to new or existing conversations (docs/import.md, Mapping).
@@ -100,7 +100,8 @@ export async function importConversations(ctx: Ctx<Actor>) {
   for (const c of list) {
     if (done.has(c.id) || (c.type !== "im" && c.type !== "mpim")) continue
     const members = (c.members ?? []).map((m) => userOf.get(m))
-    if (members.length === 0 || members.some((m) => !m)) continue
+    // Someone not in users.json, or the source's system user (Slackbot), which is no one here: skipped.
+    if (members.length === 0 || members.some((m) => !m || m === SYSTEM_USER_ID)) continue
     memberKeys.set(c.id, [...new Set(members as string[])].toSorted().join(","))
   }
   const byKey = new Map<string, string>()
@@ -126,7 +127,11 @@ export async function importConversations(ctx: Ctx<Actor>) {
       out.push({ source_id: c.id, conversation_id: already, action: "known" })
       continue
     }
-    const mapped = (id?: string) => (id ? userOf.get(id) : undefined)
+    // The system user is never a member or a creator: it has no row in users.
+    const mapped = (id?: string) => {
+      const user = id ? userOf.get(id) : undefined
+      return user === SYSTEM_USER_ID ? undefined : user
+    }
     const creator = mapped(c.creator) ?? ctx.auth.user.id
     let target: string | undefined
     let action: Action
@@ -134,7 +139,7 @@ export async function importConversations(ctx: Ctx<Actor>) {
     if (c.type === "im" || c.type === "mpim") {
       const key = memberKeys.get(c.id)
       if (!key) {
-        // Someone in it isn't in users.json: there's no one to give it to.
+        // Someone in it isn't anyone here: there's no one to give it to.
         counts.skipped++
         out.push({ source_id: c.id, conversation_id: null, action: "skipped" })
         continue
