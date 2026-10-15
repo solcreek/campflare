@@ -998,6 +998,11 @@ const commands: Record<string, Command> = {
         const ids = new Set(await users(people))
         const before = group.users ?? []
         const after = sub === "add" ? [...new Set([...before, ...ids])] : before.filter((u) => !ids.has(u))
+        if (after.length === 0) {
+          throw new UsageError(
+            `a group keeps at least one member: to retire @${group.handle}, campflare group disable ${group.handle}`,
+          )
+        }
         const res = await s.client.call<Answer>("usergroups.users.update", {
           usergroup: group.id,
           users: after.join(","),

@@ -1000,6 +1000,9 @@ describe("profiles and groups", () => {
 
     expect(await cli.run("group", "show", "nope")).toBe(2)
     expect(await cli.run("group", "add", "design")).toBe(2)
+    cli.clear()
+    expect(await cli.run("group", "remove", "design", "@minjun", "@me")).toBe(2)
+    expect(cli.err).toContain("campflare group disable design")
     expect(await cli.run("group", "frobnicate", "design")).toBe(2)
     expect(await cli.run("group")).toBe(2)
     cli.clear()

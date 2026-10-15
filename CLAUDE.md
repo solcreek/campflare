@@ -517,7 +517,7 @@ publish `user_change` (`userChanged()` in `src/events.ts`, shared with roles).
 **User groups.** `src/methods/usergroups.ts`, tables `usergroups` and
 `usergroup_members` (migration 0021). Slack's shape (`usergroupJson()`),
 codes (`no_such_subteam`, `handle_already_exists`, `name_already_exists`,
-`invalid_handle`, `invalid_users`, `invalid_channel`) and events:
+`invalid_handle`, `invalid_users`, `no_users_provided`, `invalid_channel`) and events:
 `subteam_created`, `subteam_updated` (update, disable, enable, members), and on a
 member change `subteam_members_changed` (counts as strings, as Slack) to the team
 plus `subteam_self_added`/`_removed` to those people. Handles share a namespace

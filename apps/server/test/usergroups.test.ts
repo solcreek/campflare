@@ -189,11 +189,9 @@ describe("usergroups", () => {
     })
     // The same list again changes nothing.
     await ok("usergroups.users.update", { usergroup: g.id, users: `${chloe.id},${bob.id}` }, w.owner.token)
-    // Emptied.
-    expect(
-      (await ok<{ usergroup: Group }>("usergroups.users.update", { usergroup: g.id, users: "" }, w.owner.token))
-        .usergroup.users,
-    ).toEqual([])
+    // Never emptied, as on Slack: disable it instead.
+    await expectError("usergroups.users.update", { usergroup: g.id, users: "" }, w.owner.token, "no_users_provided")
+    await expectError("usergroups.users.update", { usergroup: g.id }, w.owner.token, "no_users_provided")
 
     const app = await w.addApp("Groupbot")
     await expectError(
@@ -203,7 +201,6 @@ describe("usergroups", () => {
       "invalid_users",
     )
     await expectError("usergroups.users.update", { usergroup: g.id, users: "UNOPE" }, w.owner.token, "invalid_users")
-    await expectError("usergroups.users.update", { usergroup: g.id }, w.owner.token, "invalid_arguments")
     await expectError(
       "usergroups.users.update",
       { usergroup: "SNOPE", users: ana.id },

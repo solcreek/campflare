@@ -206,13 +206,14 @@ method("usergroups.users.list", "actor", async (ctx) => {
 
 /**
  * Replaces a group's members with `users` (people of this workspace; not apps'
- * bot users). Slack's events follow: subteam_updated and subteam_members_changed
+ * bot users; at least one, as on Slack). Slack's events follow: subteam_updated and subteam_members_changed
  * to everyone, subteam_self_added / _removed to those added and removed.
  */
 method("usergroups.users.update", "actor", async (ctx) => {
   const id = ctx.args.req("usergroup", "no_such_subteam")
-  if (!ctx.args.given("users")) throw invalidArguments("missing required field: users")
   const wanted = [...new Set(ctx.args.list("users"))]
+  // As Slack: a group keeps at least one member; disable it instead of emptying it.
+  if (wanted.length === 0) throw new CampflareError("no_users_provided")
   const db = ctx.env.DB
   const [found, valid] = await db.batch([
     groupStatement(ctx, id),
