@@ -143,7 +143,10 @@ describe("accounts", () => {
     expect(cli.out).not.toContain("reactions.add")
     cli.clear()
     expect(await cli.run("api", "--list", "conversations.history", "--url", baseUrl, "--json")).toBe(0)
-    const listed = JSON.parse(cli.out) as { methods: { conversation_scope?: string }[]; presets: Record<string, string[]> }
+    const listed = JSON.parse(cli.out) as {
+      methods: { conversation_scope?: string }[]
+      presets: Record<string, string[]>
+    }
     expect(listed.methods[0]!.conversation_scope).toBe("history")
     expect(listed.presets.read).toContain("search:read")
     expect(await memoryIo().run("api", "--list")).toBe(2)

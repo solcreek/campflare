@@ -117,7 +117,10 @@ describe("OAuth v2 sign-in for a user token", () => {
     // Stored hashed and labelled, like any token; listed among the person's tokens.
     expect(await labels(bob.token)).toContain("OAuth: Campflare CLI")
     // It holds what the person consented to, and nothing more.
-    expect(await call("campflare.tokens.list", {}, token)).toMatchObject({ error: "missing_scope", needed: "tokens:read" })
+    expect(await call("campflare.tokens.list", {}, token)).toMatchObject({
+      error: "missing_scope",
+      needed: "tokens:read",
+    })
     const stored = await env.DB.prepare("SELECT COUNT(*) AS n FROM tokens WHERE hash = ?")
       .bind(token)
       .first<{ n: number }>()

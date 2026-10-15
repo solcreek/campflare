@@ -23,14 +23,7 @@ describe("the scope table", () => {
       .filter(([name, def]) => def.access !== "none" && acceptedScopes(NEEDS[name]!).length === 0)
       .map(([name]) => name)
       .toSorted()
-    expect(none).toEqual([
-      "auth.revoke",
-      "auth.test",
-      "chat.getPermalink",
-      "views.open",
-      "views.push",
-      "views.update",
-    ])
+    expect(none).toEqual(["auth.revoke", "auth.test", "chat.getPermalink", "views.open", "views.push", "views.update"])
   })
 })
 
@@ -130,8 +123,8 @@ describe("missing_scope", () => {
     const w = await workspace()
     const app = await w.addApp("Heraldo")
     // Not #general: everyone, bots too, is in that.
-    const plaza = (await ok<{ channel: { id: string } }>("conversations.create", { name: "plaza" }, w.owner.token)).channel
-      .id
+    const plaza = (await ok<{ channel: { id: string } }>("conversations.create", { name: "plaza" }, w.owner.token))
+      .channel.id
     const bot = await issueToken(env, {
       teamId: w.teamId,
       kind: "bot",
@@ -175,7 +168,9 @@ describe("stored scopes", () => {
     await ok("conversations.history", { channel: w.general }, reader)
     await ok("search.messages", { query: "café" }, reader)
     await expectError("chat.postMessage", { channel: w.general, text: "no" }, reader, "missing_scope")
-    const res = await SELF.fetch(new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${reader}` } }))
+    const res = await SELF.fetch(
+      new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${reader}` } }),
+    )
     expect(res.headers.get("x-oauth-scopes")!.split(",")).toEqual(PRESETS.read)
   })
 
@@ -183,8 +178,10 @@ describe("stored scopes", () => {
     const w = await workspace()
     const app = await w.addApp("Vigía")
     const scopesOf = async (token: string) =>
-      (await SELF.fetch(new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${token}` } })))
-        .headers.get("x-oauth-scopes")!
+      (
+        await SELF.fetch(new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${token}` } }))
+      ).headers
+        .get("x-oauth-scopes")!
         .split(",")
     expect(await scopesOf(w.owner.token)).toEqual(FULL_USER_SCOPES)
     expect(await scopesOf(app.botToken)).toEqual(DEFAULT_BOT_SCOPES)
@@ -193,8 +190,20 @@ describe("stored scopes", () => {
   it("refuses an expired token with token_expired", async () => {
     const w = await workspace()
     const now = Math.floor(Date.now() / 1000)
-    const live = await issueToken(env, { teamId: w.teamId, kind: "user", userId: w.owner.id, scopes: ["full"], expires: now + 60 })
-    const dead = await issueToken(env, { teamId: w.teamId, kind: "user", userId: w.owner.id, scopes: ["full"], expires: now })
+    const live = await issueToken(env, {
+      teamId: w.teamId,
+      kind: "user",
+      userId: w.owner.id,
+      scopes: ["full"],
+      expires: now + 60,
+    })
+    const dead = await issueToken(env, {
+      teamId: w.teamId,
+      kind: "user",
+      userId: w.owner.id,
+      scopes: ["full"],
+      expires: now,
+    })
     await ok("auth.test", {}, live)
     await expectError("auth.test", {}, dead, "token_expired")
   })
@@ -215,7 +224,14 @@ describe("migration 0018", () => {
     const app = await w.addApp("Antiguo")
     const old = "channels:history,channels:read,chat:write"
     const mint = (kind: "user" | "bot", userId: string, clientId?: string) =>
-      issueToken(env, { teamId: w.teamId, kind, userId, scopes: [old], clientId, ...(kind === "bot" ? { appId: app.id } : {}) })
+      issueToken(env, {
+        teamId: w.teamId,
+        kind,
+        userId,
+        scopes: [old],
+        clientId,
+        ...(kind === "bot" ? { appId: app.id } : {}),
+      })
     const [hand, cli, other, bot] = await Promise.all([
       mint("user", w.owner.id),
       mint("user", w.owner.id, "campflare-cli"),
@@ -227,7 +243,8 @@ describe("migration 0018", () => {
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))]
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("")
-      return (await env.DB.prepare("SELECT scopes FROM tokens WHERE hash = ?").bind(hash).first<{ scopes: string }>())!.scopes
+      return (await env.DB.prepare("SELECT scopes FROM tokens WHERE hash = ?").bind(hash).first<{ scopes: string }>())!
+        .scopes
     }
     expect(await stored(hand)).toBe("full")
     expect(await stored(cli)).toBe("full")
@@ -249,9 +266,17 @@ describe("campflare.tokens.create", () => {
     )
     expect(made.scopes).toEqual([...PRESETS.read!, "chat:write"])
     await ok("chat.postMessage", { channel: w.general, text: "Hallo, こんにちは" }, made.token)
-    await expectError("reactions.add", { channel: w.general, name: "eyes", timestamp: "1.000001" }, made.token, "missing_scope")
+    await expectError(
+      "reactions.add",
+      { channel: w.general, name: "eyes", timestamp: "1.000001" },
+      made.token,
+      "missing_scope",
+    )
     const listed = await ok<Listed>("campflare.tokens.list", {}, w.owner.token)
-    expect(listed.tokens.find((t) => t.label === "agente")).toMatchObject({ scopes: ["read", "chat:write"], expires: null })
+    expect(listed.tokens.find((t) => t.label === "agente")).toMatchObject({
+      scopes: ["read", "chat:write"],
+      expires: null,
+    })
   })
 
   it("copies the caller's scopes when asked for none, and never grants more than the caller holds", async () => {
@@ -271,7 +296,9 @@ describe("campflare.tokens.create", () => {
 
   it("refuses a scope or preset it doesn't know", async () => {
     const w = await workspace()
-    expect(await call("campflare.tokens.create", { scopes: "chat:write,admin:everything" }, w.owner.token)).toMatchObject({
+    expect(
+      await call("campflare.tokens.create", { scopes: "chat:write,admin:everything" }, w.owner.token),
+    ).toMatchObject({
       error: "invalid_arguments",
       response_metadata: { messages: ["[ERROR] unknown scopes or presets: admin:everything"] },
     })
@@ -296,8 +323,15 @@ describe("campflare.methods.list", () => {
     }
     const list = await ok<Listed>("campflare.methods.list")
     const byName = new Map(list.methods.map((m) => [m.name, m]))
-    expect(byName.get("chat.postMessage")).toEqual({ name: "chat.postMessage", tokens: ["user", "bot"], scopes: ["chat:write"] })
-    expect(byName.get("conversations.history")).toMatchObject({ conversation_scope: "history", scopes: expect.arrayContaining(["groups:history"]) })
+    expect(byName.get("chat.postMessage")).toEqual({
+      name: "chat.postMessage",
+      tokens: ["user", "bot"],
+      scopes: ["chat:write"],
+    })
+    expect(byName.get("conversations.history")).toMatchObject({
+      conversation_scope: "history",
+      scopes: expect.arrayContaining(["groups:history"]),
+    })
     expect(byName.get("apps.connections.open")!.tokens).toEqual(["app"])
     expect(byName.size).toBe(methods.size)
     expect(list.presets.full).toEqual(FULL_USER_SCOPES)

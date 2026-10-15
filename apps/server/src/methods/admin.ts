@@ -33,7 +33,8 @@ const rank = (u: Pick<UserRow, "is_admin" | "is_owner">) => (u.is_owner ? 2 : u.
 /** Acting for someone else (deactivating them, minting their token) takes a role above theirs. */
 function requireOutranks(ctx: Ctx<Actor>, target: UserRow) {
   requireAdmin(ctx)
-  if (rank(ctx.auth.user) <= rank(target)) throw new CampflareError(target.is_owner ? "cant_act_on_owner" : "not_an_owner")
+  if (rank(ctx.auth.user) <= rank(target))
+    throw new CampflareError(target.is_owner ? "cant_act_on_owner" : "not_an_owner")
 }
 
 /** A person of the caller's workspace, active; a bot user only with `bots`. */
@@ -51,7 +52,11 @@ async function activePerson(ctx: Ctx<Actor>, id: string, { bots = false } = {}):
 
 /** Everyone in the workspace learns of a change to a person, as Slack's user_change. */
 function userChanged(ctx: Ctx<Actor>, user: UserRow) {
-  publish(ctx, { teamId: ctx.auth.team.id, event: { type: "user_change", user: userJson(user, ctx.origin) }, audience: "team" })
+  publish(ctx, {
+    teamId: ctx.auth.team.id,
+    event: { type: "user_change", user: userJson(user, ctx.origin) },
+    audience: "team",
+  })
 }
 
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,79}$/
@@ -285,7 +290,8 @@ function grantedScopes(ctx: Ctx<Actor>): string[] {
   const unknown = asked.filter((s) => !GRANTABLE_USER_SCOPES.has(s))
   if (unknown.length) throw invalidArguments(`unknown scopes or presets: ${unknown.join(", ")}`)
   const missing = expandScopes(asked.join(",")).filter((s) => !held.has(s))
-  if (missing.length) throw new CampflareError("missing_scope", { needed: missing.join(","), provided: ctx.auth.scopes.join(",") })
+  if (missing.length)
+    throw new CampflareError("missing_scope", { needed: missing.join(","), provided: ctx.auth.scopes.join(",") })
   // A preset grows as features add scopes; stored by name only when the caller holds everything it can grow into.
   return full ? [...new Set(asked)] : expandScopes(asked.join(","))
 }

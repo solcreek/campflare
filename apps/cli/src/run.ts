@@ -1129,12 +1129,21 @@ const commands: Record<string, Command> = {
     } else if (sub === "list") {
       const res = await s.client.call<{
         ok: boolean
-        tokens: { id: string; kind: string; label: string; created: number; scopes?: string[]; expires?: number | null }[]
+        tokens: {
+          id: string
+          kind: string
+          label: string
+          created: number
+          scopes?: string[]
+          expires?: number | null
+        }[]
       }>("campflare.tokens.list")
       if (values.json) return s.print(res.tokens)
       for (const t of res.tokens) {
         const expiry = t.expires ? `  expires ${isoTime(t.expires)}` : ""
-        io.stdout(`${t.id}  ${t.kind}  ${time(String(t.created))}  ${t.label}  [${(t.scopes ?? []).join(",")}]${expiry}\n`)
+        io.stdout(
+          `${t.id}  ${t.kind}  ${time(String(t.created))}  ${t.label}  [${(t.scopes ?? []).join(",")}]${expiry}\n`,
+        )
       }
     } else if (sub === "revoke") {
       const [id] = positionals

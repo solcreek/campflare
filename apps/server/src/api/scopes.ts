@@ -214,7 +214,6 @@ export const FULL_USER_SCOPES = [
   "admin.users:write",
 ]
 
-
 export const DEFAULT_BOT_SCOPES = [
   "channels:history",
   "channels:join",
