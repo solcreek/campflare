@@ -244,11 +244,12 @@ export async function importMessages(ctx: Ctx<Actor>) {
     ...groups(files.map((f) => [f.ts, f.id, f.name])).flatMap((group) => [
       stmt(
         db,
-        `INSERT OR IGNORE INTO import_files (job_id, source_id, file_id, channel_id, ts, name)
-         SELECT ?2, value ->> 1, NULL, ?1, value ->> 0, value ->> 2 FROM json_each(?3) WHERE ${ours}`,
+        `INSERT OR IGNORE INTO import_files (job_id, source_id, source_conversation, file_id, channel_id, ts, name)
+         SELECT ?2, value ->> 1, ?4, NULL, ?1, value ->> 0, value ->> 2 FROM json_each(?3) WHERE ${ours}`,
         c.id,
         job.id,
         JSON.stringify(group),
+        source,
       ),
       bump(db, job.id, { files: CHANGES }),
     ]),

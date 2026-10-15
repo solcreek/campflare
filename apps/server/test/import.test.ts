@@ -572,6 +572,16 @@ describe("campflare.import", () => {
     await prepare(w.owner.token, name, job.id)
     const res = await messages(w.owner.token, job.id, "C01", chunk2)
     expect(res.files_needed).toEqual([{ id: "F01", ts: "1700000700.000800" }])
+    const before = await ok<{ files_needed: unknown[]; files_after: string | null }>(
+      "campflare.import.status",
+      { job: job.id, files_needed: true },
+      w.owner.token,
+    )
+    expect(before).toMatchObject({
+      files_needed: [{ id: "F01", conversation: "C01", ts: "1700000700.000800", name: "plan.pdf" }],
+      files_after: null,
+    })
+    expect(await ok("campflare.import.status", { job: job.id }, w.owner.token)).not.toHaveProperty("files_needed")
     const ts = "1700000700.000800"
 
     const upload = async (bytes: string) => {
@@ -640,6 +650,13 @@ describe("campflare.import", () => {
       w.owner.token,
     )
     expect(again).toMatchObject({ attached: 0, skipped: 1 })
+    // What a re-run asks: every file still to attach, whatever the message cursors say.
+    const pendingFiles = async (args = {}) =>
+      ok<{
+        files_needed: { id: string; conversation: string; ts: string; name: string }[]
+        files_after: string | null
+      }>("campflare.import.status", { job: job.id, files_needed: true, ...args }, w.owner.token)
+    expect((await pendingFiles()).files_needed).toEqual([])
     // Re-sent, the chunk needs nothing more.
     expect((await messages(w.owner.token, job.id, "C01", chunk2)).files_needed).toEqual([])
     expect((await status(w.owner.token, job.id)).counts).toMatchObject({
@@ -754,10 +771,23 @@ describe("campflare.import", () => {
       user: i % 2 ? "U03" : "U04",
       text,
       reactions: [{ name: "eyes", users: ["U01"] }],
+      files: [{ id: `F${String(i).padStart(4, "0")}`, name: `photo-${i}.jpg` }],
     }))
     const res = await messages(w.owner.token, job.id, "C03", list)
     expect(res.imported).toBe(1000)
-    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 1000, reactions: 1000 })
+    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 1000, reactions: 1000, files: 1000 })
+    // The files still to attach, a page at a time.
+    type Page = { files_needed: { id: string }[]; files_after: string | null }
+    const first = await ok<Page>("campflare.import.status", { job: job.id, files_needed: true }, w.owner.token)
+    expect(first.files_needed).toHaveLength(500)
+    expect(first.files_after).toBe("F0499")
+    const second = await ok<Page>(
+      "campflare.import.status",
+      { job: job.id, files_needed: true, files_after: first.files_after },
+      w.owner.token,
+    )
+    expect(second.files_needed[0]!.id).toBe("F0500")
+    expect(second.files_after).toBeNull()
   })
 })
 

@@ -52,6 +52,8 @@ CREATE TABLE import_conversations (
 CREATE TABLE import_files (
   job_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
+  -- The export's conversation, and ours, that the message is in.
+  source_conversation TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   ts TEXT NOT NULL,
   name TEXT NOT NULL,

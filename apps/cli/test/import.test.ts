@@ -12,6 +12,8 @@ import { makeZip } from "./zip-writer"
 const SOURCE_TOKEN = "xoxp-exported-workspace"
 let source: Server
 let sourceUrl = ""
+/** How many more downloads of plan.pdf fail with a 503. */
+let planFailures = 0
 
 beforeAll(async () => {
   source = createServer((req, res) => {
@@ -25,6 +27,11 @@ beforeAll(async () => {
       )
     }
     if (req.url === "/files/F01/plan.pdf") {
+      if (planFailures > 0) {
+        planFailures--
+        res.statusCode = 503
+        return res.end("try later")
+      }
       // Slack answers a wrong token with its sign-in page.
       if (req.headers.authorization !== `Bearer ${SOURCE_TOKEN}`) {
         res.setHeader("content-type", "text/html")
@@ -255,17 +262,26 @@ describe("campflare import slack", () => {
     withZip(admin, { "export.zip": exportZip(email, { zip64: true }) })
     // The first run dies after a few chunks.
     let calls = 0
+    let finishing = 0
     admin.io.fetch = async (input, init) => {
       if (String(input).endsWith("campflare.import.messages") && ++calls === 2) throw new Error("connection reset")
+      if (String(input).endsWith("campflare.import.finish") && ++finishing === 1) throw new Error("lost the network")
       return fetch(input, init)
     }
     const args = ["import", "slack", "export.zip", "--files", "download", "--slack-token", SOURCE_TOKEN]
     expect(await admin.run(...args, "--slack-api", `${sourceUrl}/api`)).toBe(1)
     expect(admin.err).toContain("connection reset")
+    // The second sends the rest, fails to fetch plan.pdf once, and dies finishing.
+    admin.clear()
+    planFailures = 1
+    expect(await admin.run(...args, "--slack-api", `${sourceUrl}/api`)).toBe(1)
+    expect(admin.err).toContain("(resumed after 2023-11-14.json)")
+    expect(admin.err).toContain("lost the network")
+    // The third has no messages left to send, but still retries the file.
     admin.clear()
     expect(await admin.run(...args, "--slack-api", `${sourceUrl}/api`, "--merge-into-existing", "--json")).toBe(0)
     expect(admin.err).toContain("Resuming import J")
-    expect(admin.err).toContain("(resumed after 2023-11-14.json)")
+    expect(admin.err).toContain("(resumed after 2023-11-15.json)")
     const result = JSON.parse(admin.out) as { job: JobJson; failed_files: string[]; emoji: unknown }
     // Merging was the first run's choice: the job keeps its options.
     expect(result.job.options).toMatchObject({ merge_into_existing: false, files: "download" })

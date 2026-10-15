@@ -2,7 +2,7 @@ import { method } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
 import { requireAdmin } from "../api/roles"
-import { all, first, run } from "../db/query"
+import { all, first, run, stmt } from "../db/query"
 import { importConversations } from "../import/conversations"
 import { importFiles } from "../import/files"
 import { finishImport } from "../import/finish"
@@ -71,23 +71,56 @@ method("campflare.import.files", "user", importFiles)
 method("campflare.import.finish", "user", finishImport)
 method("campflare.import.undo", "user", undoImport)
 
-/** A job, with where each conversation's messages got to (`cursor`): what a client resumes from. */
+/** Files still to attach answered per call, with `files_after` for the next page. */
+export const FILES_NEEDED_PER_PAGE = 500
+
+/**
+ * A job, with where each conversation's messages got to (`cursor`): what a
+ * client resumes from. With `files_needed`, the export's files not attached
+ * yet (a page, after `files_after`), whatever the message cursors say, so a
+ * re-run retries the transfers that failed.
+ */
 method("campflare.import.status", "user", async (ctx) => {
   const job = await loadJob(ctx)
-  const conversations = await all<{
+  const db = ctx.env.DB
+  const files = ctx.args.bool("files_needed")
+  const [conversations, needed] = await db.batch([
+    stmt(
+      db,
+      "SELECT source_id, conversation_id, action, cursor, finished FROM import_conversations WHERE job_id = ? ORDER BY source_id",
+      job.id,
+    ),
+    stmt(
+      db,
+      `SELECT source_id AS id, source_conversation AS conversation, ts, name FROM import_files
+       WHERE job_id = ? AND file_id IS NULL AND source_id > ? AND ? ORDER BY source_id LIMIT ?`,
+      job.id,
+      ctx.args.str("files_after") ?? "",
+      files ? 1 : 0,
+      FILES_NEEDED_PER_PAGE + 1,
+    ),
+  ])
+  const rows = conversations!.results as {
     source_id: string
     conversation_id: string
     action: string
     cursor: string | null
     finished: number
-  }>(
-    ctx.env.DB,
-    "SELECT source_id, conversation_id, action, cursor, finished FROM import_conversations WHERE job_id = ? ORDER BY source_id",
-    job.id,
-  )
+  }[]
+  const page = (needed!.results as { id: string }[]).slice(0, FILES_NEEDED_PER_PAGE)
   return {
     job: jobJson(job),
-    conversations: conversations.map((c) => ({ ...c, finished: Boolean(c.finished) })),
+    conversations: rows.map((c) => ({
+      ...c,
+      conversation_id: c.conversation_id || null,
+      finished: Boolean(c.finished),
+    })),
+    ...(files
+      ? {
+          files_needed: page,
+          files_after: needed!.results.length > FILES_NEEDED_PER_PAGE ? page.at(-1)!.id : null,
+        }
+      : {}),
   }
 })
 

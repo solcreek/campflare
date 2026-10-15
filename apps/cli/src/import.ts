@@ -139,12 +139,6 @@ function conversationArgs(c: ExportConversation): Json {
   return out
 }
 
-/** A ts as the server stores it: fixed width. */
-const normalTs = (ts: string) => {
-  const [seconds = "0", micros = ""] = ts.split(".")
-  return `${seconds.padStart(10, "0")}.${micros.padEnd(6, "0").slice(0, 6)}`
-}
-
 /** What the server reads of a message: the rest of an export's (user profiles, block details) stays here. */
 function trim(m: ExportMessage): Json {
   const keep = [
@@ -288,7 +282,6 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   }
   progress(`Conversations: ${ex.conversations.length}`)
 
-  const failedFiles: string[] = []
   for (const c of ex.conversations) {
     const target = mapped.get(c.id)
     if (!target?.conversation_id) continue
@@ -300,19 +293,21 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
       const parts = chunks(list.map(trim))
       for (const [i, part] of parts.entries()) {
         const last = i === parts.length - 1
-        const res = await client.call<{ ok: boolean; files_needed: { id: string; ts: string }[] }>(
-          "campflare.import.messages",
-          { job, conversation: c.id, messages: part, ...(last ? { cursor: dayOf(day) } : {}) },
-        )
+        await client.call("campflare.import.messages", {
+          job,
+          conversation: c.id,
+          messages: part,
+          ...(last ? { cursor: dayOf(day) } : {}),
+        })
         sent += part.length
-        if (options.files === "download" && res.files_needed.length) {
-          failedFiles.push(...(await transferFiles(s, job, c.id, list, res.files_needed, options.sourceToken!)))
-        }
       }
     }
     const label = c.type === "channel" || c.type === "group" ? `#${target.name ?? c.name}` : `${c.type} ${c.id}`
     progress(`${label}: ${sent} messages${cursor ? ` (resumed after ${cursor})` : ""}`)
   }
+
+  // Every file not attached yet, whatever the message cursors say: a re-run retries the ones that failed.
+  const failedFiles = options.files === "download" ? await transferPending(s, ex, job, options) : []
 
   let emoji: { imported: number; skipped: number } | undefined
   if (options.sourceToken) emoji = await customEmoji(s, options)
@@ -336,29 +331,85 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   io.stdout(summary(finished, failedFiles, emoji))
 }
 
-/** Downloads the files a chunk still needs from Slack, uploads them here, and attaches them; the ones that failed. */
+interface Needed {
+  id: string
+  /** The export's conversation. */
+  conversation: string
+  ts: string
+  name: string
+}
+
+/** The files the server says are still to attach, page by page, transferred; the ones that failed. */
+async function transferPending(s: Session, ex: Export, job: string, options: Options): Promise<string[]> {
+  const failed: string[] = []
+  const days = dayReader(ex)
+  let after: string | null = null
+  do {
+    const page: { ok: boolean; files_needed: Needed[]; files_after: string | null } = await s.client.call(
+      "campflare.import.status",
+      { job, files_needed: true, files_after: after ?? undefined },
+    )
+    failed.push(...(await transferFiles(s, job, page.files_needed, days, options)))
+    after = page.files_after
+  } while (after)
+  return failed
+}
+
+/**
+ * Finds a message of the export by conversation and ts: in the day file of its
+ * date (UTC), or the days either side (an export's days follow its time zone).
+ * The last few day files read are kept.
+ */
+function dayReader(ex: Export) {
+  const cache = new Map<string, ExportMessage[]>()
+  const byId = new Map(ex.conversations.map((c) => [c.id, c]))
+  return async (conversation: string, ts: string): Promise<ExportMessage | undefined> => {
+    const c = byId.get(conversation)
+    const entries = c ? (ex.days.get(folderOf(c)) ?? []) : []
+    const at = Number(ts.split(".")[0]) * 1000
+    for (const offset of [0, -1, 1]) {
+      const name = `${new Date(at + offset * 86_400_000).toISOString().slice(0, 10)}.json`
+      const entry = entries.find((e) => dayOf(e) === name)
+      if (!entry) continue
+      let list = cache.get(entry.name)
+      if (!list) {
+        if (cache.size >= 16) cache.clear()
+        list = await ex.json<ExportMessage[]>(entry)
+        cache.set(entry.name, list)
+      }
+      // Slack's ts are fixed width already, as the server stores them.
+      const m = list.find((x) => x.ts === ts)
+      if (m) return m
+    }
+    return undefined
+  }
+}
+
+/** Downloads files from the source, uploads them here, and attaches them; the ones that failed. */
 async function transferFiles(
   s: Session,
   job: string,
-  conversation: string,
-  day: ExportMessage[],
-  needed: { id: string; ts: string }[],
-  sourceToken: string,
+  needed: Needed[],
+  find: ReturnType<typeof dayReader>,
+  options: Options,
 ): Promise<string[]> {
   const fetch = s.io.fetch ?? globalThis.fetch
   const failed: string[] = []
-  const byTs = new Map<string, { source_id: string; file_id: string; title: string }[]>()
+  const byMessage = new Map<
+    string,
+    { conversation: string; ts: string; files: { source_id: string; file_id: string; title: string }[] }
+  >()
   for (const need of needed) {
-    const m = day.find((x) => normalTs(String(x.ts)) === need.ts)
+    const m = await find(need.conversation, need.ts)
     const file = m?.files?.find((f) => f.id === need.id)
     const url = file?.url_private_download ?? file?.url_private
-    const name = file?.name ?? need.id
+    const name = need.name
     if (!url) {
       failed.push(`${name}: no download URL`)
       continue
     }
     try {
-      const res = await fetch(url, { headers: { authorization: `Bearer ${sourceToken}` } })
+      const res = await fetch(url, { headers: { authorization: `Bearer ${options.sourceToken}` } })
       // Slack answers a wrong token with its sign-in page, not an error status.
       if (!res.ok || (res.headers.get("content-type") ?? "").startsWith("text/html")) {
         throw new Error(res.ok ? "not authorized (check --slack-token)" : `HTTP ${res.status}`)
@@ -374,12 +425,15 @@ async function transferFiles(
         body: bytes,
       })
       if (!put.ok) throw new Error(`upload: HTTP ${put.status}`)
-      byTs.set(need.ts, [...(byTs.get(need.ts) ?? []), { source_id: need.id, file_id, title: file?.title ?? name }])
+      const key = `${need.conversation}/${need.ts}`
+      const entry = byMessage.get(key) ?? { conversation: need.conversation, ts: need.ts, files: [] }
+      entry.files.push({ source_id: need.id, file_id, title: file?.title ?? name })
+      byMessage.set(key, entry)
     } catch (error) {
       failed.push(`${name}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  for (const [ts, files] of byTs) {
+  for (const { conversation, ts, files } of byMessage.values()) {
     await s.client.call("campflare.import.files", { job, conversation, ts, files })
   }
   return failed
