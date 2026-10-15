@@ -18,26 +18,37 @@ const TYPE_OF = `CASE c.kind WHEN 'im' THEN 'im' WHEN 'mpim' THEN 'mpim'
 
 /**
  * The items a token may list, from `a`: the recipient's (?1), while they are
- * still in the conversation and the message is there, in conversation types
- * whose :history the token holds (?2, a JSON list of prefixes).
+ * still in the conversation, in conversation types whose :history the token
+ * holds (?2, a JSON list of prefixes). A token holding every type's (`all`)
+ * needs no look at the conversation. With `message`, its message too (`msg`).
+ * Without it, items are trusted to be there only while their message is:
+ * deleting or tombstoning a message deletes its items in the same batch.
  */
-const LISTABLE = `FROM activity a
+export function visible({ all, message = false }: { all: boolean; message?: boolean }) {
+  return `FROM activity a
   JOIN members m ON m.conversation_id = a.channel_id AND m.user_id = a.user_id
-  JOIN conversations c ON c.id = a.channel_id
-  JOIN messages msg ON msg.channel_id = a.channel_id AND msg.ts = a.ts AND msg.deleted = 0
-    AND msg.subtype IS NOT 'tombstone'
-  WHERE a.user_id = ?1 AND ${TYPE_OF} IN (SELECT value FROM json_each(?2))`
+  ${all ? "" : "JOIN conversations c ON c.id = a.channel_id"}
+  ${message ? "JOIN messages msg ON msg.channel_id = a.channel_id AND msg.ts = a.ts AND msg.deleted = 0 AND msg.subtype IS NOT 'tombstone'" : ""}
+  WHERE a.user_id = ?1 AND ${all ? "?2 IS NOT NULL" : `${TYPE_OF} IN (SELECT value FROM json_each(?2))`}`
+}
 
-const historyTypes = (ctx: Ctx<Actor>) =>
-  JSON.stringify(TYPE_PREFIXES.filter((p) => ctx.auth.scopes.includes(`${p}:history`)))
+/** The type prefixes whose :history the token holds, and whether that's all of them. */
+function historyTypes(ctx: Ctx<Actor>) {
+  const types = TYPE_PREFIXES.filter((p) => ctx.auth.scopes.includes(`${p}:history`))
+  return { json: JSON.stringify(types), all: types.length === TYPE_PREFIXES.length }
+}
 
-/** Unread counts by kind: `a.read = 0` lets it read only activity_unread's rows. */
-export const UNREAD_COUNTS = `SELECT a.kind, COUNT(*) AS n ${LISTABLE} AND a.read = 0 GROUP BY a.kind`
+/** Unread counts by kind: `a.read = 0` lets it read only activity_unread's rows, and a member lookup each. */
+export const unreadCounts = (all: boolean) =>
+  `SELECT a.kind, COUNT(*) AS n ${visible({ all })} AND a.read = 0 GROUP BY a.kind`
 
 /** Unread counts by kind, as a statement to batch with a read or a change. */
-const unreadStatement = (ctx: Ctx<Actor>) => stmt(ctx.env.DB, UNREAD_COUNTS, ctx.auth.user.id, historyTypes(ctx))
+const unreadStatement = (ctx: Ctx<Actor>) => {
+  const types = historyTypes(ctx)
+  return stmt(ctx.env.DB, unreadCounts(types.all), ctx.auth.user.id, types.json)
+}
 
-/** Read items are kept this long, then pruned; unread ones stay until their message goes. */
+/** Read items are kept this long after they were read, then pruned; unread ones stay until their message goes. */
 export const READ_RETENTION_SECONDS = 90 * 24 * 60 * 60
 
 /** Read items pruned per mark, at most: a bounded delete, after the response. */
@@ -101,6 +112,7 @@ method("campflare.activity.list", "actor", async (ctx) => {
   const before = cursor === undefined ? Number.MAX_SAFE_INTEGER : itemId(cursor)
   const kinds = kindsOf(ctx)
   const db = ctx.env.DB
+  const types = historyTypes(ctx)
   // The page is computed once: each row is the item (a_*), its message (msg.*) and the message's
   // reactions as JSON. The unread counts come in the same batch: one round trip.
   const page = stmt(
@@ -110,11 +122,11 @@ method("campflare.activity.list", "actor", async (ctx) => {
        (SELECT json_group_array(json_object('channel_id', r.channel_id, 'ts', r.ts, 'name', r.name,
           'user_id', r.user_id, 'created', r.created))
         FROM reactions r WHERE r.channel_id = msg.channel_id AND r.ts = msg.ts) AS a_reactions
-     ${LISTABLE} AND a.id < ?3 AND (?4 = 0 OR a.read = 0)
+     ${visible({ all: types.all, message: true })} AND a.id < ?3 AND (?4 = 0 OR a.read = 0)
        AND (?5 IS NULL OR a.kind IN (SELECT value FROM json_each(?5)))
      ORDER BY a.id DESC LIMIT ?6`,
     ctx.auth.user.id,
-    historyTypes(ctx),
+    types.json,
     before,
     ctx.args.bool("unread_only") ? 1 : 0,
     kinds ? JSON.stringify(kinds) : null,
@@ -150,12 +162,14 @@ method("campflare.activity.mark", "actor", async (ctx) => {
       : upTo !== undefined
         ? ["a.id <= ?3", itemId(upTo)]
         : ["?3 IS NULL", null]
+  const types = historyTypes(ctx)
   const change = stmt(
     db,
-    `UPDATE activity SET read = 1 WHERE id IN (SELECT a.id ${LISTABLE} AND a.read = 0 AND ${condition})`,
+    `UPDATE activity SET read = ?4 WHERE id IN (SELECT a.id ${visible(types)} AND a.read = 0 AND ${condition})`,
     user,
-    historyTypes(ctx),
+    types.json,
     value,
+    nowSeconds(),
   )
   const [changed, counts] = await db.batch([change, unreadStatement(ctx)])
   const unread = unreadFrom(counts!)
@@ -175,7 +189,7 @@ method("campflare.activity.mark", "actor", async (ctx) => {
     stmt(
       db,
       `DELETE FROM activity WHERE id IN (
-         SELECT id FROM activity WHERE user_id = ? AND read = 1 AND created < ? ORDER BY id LIMIT ?)`,
+         SELECT id FROM activity WHERE user_id = ? AND read > 0 AND read < ? ORDER BY id LIMIT ?)`,
       user,
       nowSeconds() - READ_RETENTION_SECONDS,
       PRUNE_BATCH,

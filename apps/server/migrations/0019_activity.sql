@@ -17,6 +17,8 @@ CREATE TABLE activity (
   reaction TEXT NOT NULL DEFAULT '',
   created INTEGER NOT NULL,
   notify INTEGER NOT NULL DEFAULT 1,
+  -- When the person read it (epoch seconds), or 0 while unread. Read items are
+  -- pruned some time after (READ_RETENTION_SECONDS in src/methods/activity.ts).
   read INTEGER NOT NULL DEFAULT 0
 );
 -- A person's inbox, newest first.

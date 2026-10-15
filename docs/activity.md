@@ -72,16 +72,22 @@ reaction's own batch.
   recipient is still in the conversation. Rejoining brings them back. This also
   covers a private conversation one can no longer see, with nothing to keep in
   step on the membership paths.
-- Listing also joins the message, so anything the delete path missed never shows.
+- A listed page also joins the message, which it returns anyway.
 - A token sees the items of the conversation types it holds `:history` for
   (`channels:`, `groups:`, `im:`, `mpim:`), as `conversations.history` would
   refuse it the rest: an item carries the message.
 
-Retention: unread items are kept until their message goes; read items are
-kept 90 days (`READ_RETENTION_SECONDS`). Each `campflare.activity.mark` prunes
-up to 100 of the person's read items older than that, after the response, so the
-table stays bounded without a timer. Unread counts read only the unread rows,
-through a partial index (`activity_unread`, `WHERE read = 0`).
+Retention: unread items are kept until their message goes; read items 90 days
+after they were read (`read` holds when, 0 while unread;
+`READ_RETENTION_SECONDS`). Each `campflare.activity.mark` prunes up to 100 of
+the person's items read longer ago than that, after the response, so the table
+stays bounded without a timer.
+
+Unread counts come with every list and mark, so they read as little as they
+can: the unread rows alone, through a partial index (`activity_unread`,
+`WHERE read = 0`), and a membership lookup each; the conversation only when the
+token lacks some type's `:history`, and never the message, since a message's
+deletion deletes its items in the same batch. Marking uses the same filter.
 
 ## Methods
 

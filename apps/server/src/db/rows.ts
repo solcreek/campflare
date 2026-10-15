@@ -172,6 +172,7 @@ export interface ActivityRow {
   reaction: string
   created: number
   notify: number
+  /** When it was read (epoch seconds), 0 while unread. */
   read: number
 }
 

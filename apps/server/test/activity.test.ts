@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { issueToken } from "../src/api/auth"
 import { PRESETS } from "../src/api/scopes"
 import { mentionsOf } from "../src/activity"
-import { READ_RETENTION_SECONDS, UNREAD_COUNTS } from "../src/methods/activity"
+import { READ_RETENTION_SECONDS, unreadCounts } from "../src/methods/activity"
 import { call, connect, eventually, expectError, ok, workspace } from "./helpers"
 
 interface Item {
@@ -217,36 +217,42 @@ describe("the activity table", () => {
     await expect(insert()).rejects.toThrow(/UNIQUE/)
   })
 
-  it("counts unread items from the unread index alone", async () => {
-    const { results } = await env.DB.prepare(`EXPLAIN QUERY PLAN ${UNREAD_COUNTS}`).bind("U1", '["channels"]').all<{
-      detail: string
-    }>()
-    expect(results.map((r) => r.detail).join("\n")).toMatch(/activity_unread/)
+  it("counts unread items from the unread index, with or without every type's history", async () => {
+    for (const all of [true, false]) {
+      const { results } = await env.DB.prepare(`EXPLAIN QUERY PLAN ${unreadCounts(all)}`)
+        .bind("U1", '["channels"]')
+        .all<{ detail: string }>()
+      const plan = results.map((r) => r.detail).join("\n")
+      expect(plan).toMatch(/activity_unread/)
+      expect(plan).not.toMatch(/messages/)
+      expect(plan.includes("conversations")).toBe(!all)
+    }
   })
 
-  it("prunes read items past the retention when marking, and keeps the rest", async () => {
+  it("prunes items read longer ago than the retention when marking, and keeps the rest", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
-    await post(w.owner.token, w.general, `<@${bob.id}> nuevo 新`)
-    const old = Math.floor(Date.now() / 1000) - READ_RETENTION_SECONDS - 60
-    const insert = (ts: string, read: number) =>
+    const ts = await post(w.owner.token, w.general, `<@${bob.id}> viejo 旧`)
+    const long = Math.floor(Date.now() / 1000) - READ_RETENTION_SECONDS - 60
+    // Recorded long ago and read long ago: pruned. Recorded long ago, read just now: kept.
+    const insert = (kind: string, read: number) =>
       env.DB.prepare(
-        `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, created, read) VALUES (?, ?, 'mention', ?, ?, ?, ?)`,
+        `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, created, read) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-        .bind(w.teamId, bob.id, w.general, ts, old, read)
+        .bind(w.teamId, bob.id, kind, w.general, ts, long, read)
         .run()
-    await insert("1.000001", 1)
-    await insert("1.000002", 0)
+    await insert("thread_reply", long)
+    await env.DB.prepare("UPDATE activity SET created = ? WHERE user_id = ? AND kind = 'mention'")
+      .bind(long, bob.id)
+      .run()
     await ok("campflare.activity.mark", { all: true }, bob.token)
     const left = await eventually(async () => {
-      const { results } = await env.DB.prepare("SELECT ts FROM activity WHERE user_id = ? ORDER BY id")
+      const { results } = await env.DB.prepare("SELECT kind FROM activity WHERE user_id = ?")
         .bind(bob.id)
-        .all<{ ts: string }>()
-      return results.length === 2 ? results : undefined
+        .all<{ kind: string }>()
+      return results.length === 1 ? results : undefined
     })
-    // Unread items stay however old (this one has no message, so marking all didn't reach it), and the new one too.
-    expect(left.map((r) => r.ts)).toContain("1.000002")
-    expect(left.map((r) => r.ts)).not.toContain("1.000001")
+    expect(left).toEqual([{ kind: "mention" }])
   })
 })
 
