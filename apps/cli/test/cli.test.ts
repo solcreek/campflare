@@ -896,3 +896,84 @@ describe("events", () => {
     expect(await done).toBe(0)
   })
 })
+
+describe("inbox and notify", () => {
+  /** The owner, and bob, who mentions the owner in #general. */
+  async function withBob() {
+    const owner = await loggedIn()
+    await owner.run("whoami")
+    const ownerId = /\((U[A-Z0-9]+)\)/.exec(owner.out)![1]!
+    owner.clear()
+    await owner.run("admin", "add-user", "bob", "--json")
+    const { token } = JSON.parse(owner.out) as { token: string }
+    owner.clear()
+    const bob = memoryIo({ env: { CAMPFLARE_URL: baseUrl, CAMPFLARE_TOKEN: token } })
+    const mention = (text: string) =>
+      bob.run("api", "chat.postMessage", "channel=#general", `text=<@${ownerId}> ${text}`)
+    return { owner, mention }
+  }
+
+  it("lists what needs you, marks it read, and says how many are left", async () => {
+    const { owner, mention } = await withBob()
+    await mention("¿lo revisas? 확인해 줘")
+    expect(await owner.run("inbox")).toBe(0)
+    expect(owner.out).toMatch(
+      /^\* \d+ {2}\d{4}-\d\d-\d\d \d\d:\d\d {2}mention {7}#general {2}bob: @owner ¿lo revisas\?/m,
+    )
+    expect(owner.err).toBe("1 unread: 1 mention\n")
+    owner.clear()
+    expect(await owner.run("inbox", "--json", "--type", "mention")).toBe(0)
+    const item = JSON.parse(owner.out) as { id: string; type: string; message: { text: string } }
+    expect(item).toMatchObject({ type: "mention", message: { text: expect.stringContaining("확인") } })
+    owner.clear()
+    expect(await owner.run("inbox", "read", item.id)).toBe(0)
+    expect(owner.out).toBe("Marked 1 read; 0 unread\n")
+    owner.clear()
+    expect(await owner.run("inbox", "--unread")).toBe(0)
+    expect(owner.out).toBe("")
+    expect(await owner.run("inbox", "-n", "5")).toBe(0)
+    expect(owner.out).toMatch(/^ {2}\d+ /)
+
+    await mention("encore")
+    await mention("还有")
+    owner.clear()
+    expect(await owner.run("inbox", "read", "--all", "--json")).toBe(0)
+    expect(JSON.parse(owner.out)).toMatchObject({ marked: 2, unread: { total: 0 } })
+    expect(await owner.run("inbox", "read", "--up-to", item.id)).toBe(0)
+
+    expect(await owner.run("inbox", "read")).toBe(2)
+    expect(await owner.run("inbox", "read", "1", "--all")).toBe(2)
+    expect(await owner.run("inbox", "nonsense")).toBe(2)
+    expect(owner.err).toContain("did you mean inbox read?")
+  })
+
+  it("follows new items until interrupted", async () => {
+    const { owner, mention } = await withBob()
+    const done = owner.run("inbox", "--follow", "--type", "mention")
+    await until(() => owner.err.includes("[connected]"))
+    await mention("en directo 实时")
+    await until(() => owner.out.includes("en directo"))
+    owner.interrupt()
+    expect(await done).toBe(0)
+    expect(owner.out).toMatch(/\* \d+ .*mention {7}#general {2}bob: @owner en directo 实时/)
+  })
+
+  it("sets and shows notification levels", async () => {
+    const owner = await loggedIn()
+    expect(await owner.run("notify")).toBe(0)
+    expect(owner.out).toBe("default  all\n")
+    owner.clear()
+    expect(await owner.run("notify", "#general", "mentions")).toBe(0)
+    expect(owner.out).toBe("default  all\n#general  mentions\n")
+    owner.clear()
+    expect(await owner.run("notify", "--default", "none", "--json")).toBe(0)
+    expect(JSON.parse(owner.out)).toMatchObject({ notifications: { default: "none" } })
+    owner.clear()
+    expect(await owner.run("notify", "#general", "default")).toBe(0)
+    expect(owner.out).toBe("default  none\n")
+
+    expect(await owner.run("notify", "#general", "loud")).toBe(2)
+    expect(await owner.run("notify", "--default", "loud")).toBe(2)
+    expect(await owner.run("notify", "#general", "--default", "all")).toBe(2)
+  })
+})
