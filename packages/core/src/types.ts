@@ -91,6 +91,10 @@ export interface Message {
   /** A streamed message (chat.startStream): "in_progress" while its app writes it, then "completed". */
   streaming_state?: string
   is_ephemeral?: boolean
+  /** The conversation it's pinned to (its own), when it is. */
+  pinned_to?: string[]
+  /** You saved it for later (stars). */
+  is_starred?: boolean
   /** Set by the sender, echoed by the server: ties a stored message to the pending one it replaces. */
   client_msg_id?: string
   /** Local only: sent, not yet confirmed by the server. Its ts is a placeholder. */
@@ -107,4 +111,25 @@ export interface Self {
   userId: string
   teamId: string
   teamName: string
+}
+
+/** A pinned message, as pins.list and pin_added carry it. */
+export interface Pin {
+  ts: string
+  /** When it was pinned, in seconds. */
+  created: number
+  createdBy: string
+  message: Message
+}
+
+/** A link in a conversation's bookmarks bar (bookmarks.list). */
+export interface Bookmark {
+  id: string
+  channel_id: string
+  title: string
+  link: string
+  emoji?: string
+  /** Bar order: bookmarks sort by it as text. */
+  rank: string
+  [key: string]: unknown
 }

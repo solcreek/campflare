@@ -337,6 +337,52 @@ describe("createWorkspace", () => {
     expect(timeline(ws.getState(), "C1")[0]?.subtype).toBe("tombstone")
   })
 
+  it("loads, pins and unpins; loads, adds and removes bookmarks; saves messages", async () => {
+    const pinned = { channel: "C1", created: 10, created_by: "U2", message: { ts: "0000000100.000000", text: "one" } }
+    const { api, ws } = await started({
+      "pins.list": () => ({ items: [pinned] }),
+      "pins.add": () => ({}),
+      "pins.remove": () => new Error("no_pin"),
+      "bookmarks.list": () => ({ bookmarks: [] }),
+      "bookmarks.add": (args) => ({
+        bookmark: { id: "Bk1", channel_id: args.channel_id, title: args.title, link: args.link, rank: "0000000001" },
+      }),
+      "bookmarks.remove": () => ({}),
+      "stars.add": () => new Error("already_starred"),
+      "stars.remove": () => ({}),
+    })
+    await ws.loadHistory("C1")
+    await ws.loadPins("C1")
+    expect(ws.getState().pins.C1?.map((p) => p.ts)).toEqual(["0000000100.000000"])
+    await ws.setPinned("C1", "0000000200.000000", true)
+    expect(ws.getState().pins.C1?.map((p) => p.ts)).toEqual(["0000000200.000000", "0000000100.000000"])
+    expect(ws.getState().messages[keyOf("C1", "0000000200.000000")]?.pinned_to).toEqual(["C1"])
+    // Already unpinned on the server: no error, and the store agrees.
+    await ws.setPinned("C1", "0000000200.000000", false)
+    expect(ws.getState().pins.C1?.map((p) => p.ts)).toEqual(["0000000100.000000"])
+    // A message the store doesn't hold: the pins are read again.
+    await ws.setPinned("C1", "0000000900.000000", true)
+    expect(api.calls.at(-1)?.method).toBe("pins.list")
+    api.handlers["pins.add"] = () => new Error("too_many_pins")
+    await expect(ws.setPinned("C1", "0000000200.000000", true)).rejects.toThrow("too_many_pins")
+
+    await ws.loadBookmarks("C1")
+    expect(ws.getState().bookmarks.C1).toEqual([])
+    await ws.addBookmark("C1", "https://example.com/guía", { emoji: ":books:" })
+    expect(api.calls.at(-1)?.args).toMatchObject({ type: "link", title: "https://example.com/guía", emoji: ":books:" })
+    expect(ws.getState().bookmarks.C1?.map((b) => b.id)).toEqual(["Bk1"])
+    await ws.addBookmark("C1", "https://example.com/wiki", { title: "Wiki" })
+    expect(api.calls.at(-1)?.args).not.toHaveProperty("emoji")
+    await ws.removeBookmark("C1", "Bk1")
+    expect(ws.getState().bookmarks.C1).toEqual([])
+    await ws.removeBookmark("C1", "Bk9")
+
+    await ws.setSaved("C1", "0000000200.000000", true)
+    expect(ws.getState().messages[keyOf("C1", "0000000200.000000")]?.is_starred).toBe(true)
+    await ws.setSaved("C1", "0000000200.000000", false)
+    expect(ws.getState().messages[keyOf("C1", "0000000200.000000")]?.is_starred).toBeUndefined()
+  })
+
   it("toggles reactions, and undoes one the server refused", async () => {
     const { api, ws } = await started({ "reactions.add": () => ({}), "reactions.remove": () => ({}) })
     await ws.loadHistory("C1")
