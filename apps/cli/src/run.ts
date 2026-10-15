@@ -33,6 +33,13 @@ Account
 
 Messages
   send <#channel|@person|id> [text] [--thread <ts>] [-f <file>]…   text from stdin if piped
+       [--at <time>]               schedule it instead: an ISO time, epoch seconds, or 30m, 2h, 1d from now
+  scheduled [#channel] [--json]    your scheduled messages, soonest first
+  unschedule <#channel> <id>       delete a scheduled message before it's posted
+  remind <text> <when>             a reminder, DMed to you by the Campflare bot: "in 15 minutes", 30m,
+                                   "at 5pm", "tomorrow at 9am", "friday", "2026-12-24 18:00", epoch
+                                   seconds (times of day in your profile's time zone)
+  reminders [--json]               your reminders; reminder done|delete <id>
   history <#channel|@person|id> [-n 20] [--thread <ts>] [--json]
   search <query> [-n 20] [--page N] [--newest] [--json]
   react <#channel|id> <ts> <emoji> [--remove]
@@ -538,15 +545,30 @@ const commands: Record<string, Command> = {
     const { values, positionals } = parse(argv, {
       thread: { type: "string" },
       file: { type: "string", short: "f", multiple: true },
+      at: { type: "string" },
     })
     const [target, ...words] = positionals
     if (!target) throw new UsageError("send needs a recipient: #channel, @person or an id")
     const text = words.length > 0 ? words.join(" ") : await readStdin(io)
     const files = (values.file as string[] | undefined) ?? []
     if (!text && files.length === 0) throw new UsageError("nothing to send: give text, pipe it in, or attach -f <file>")
+    const at = str(values.at)
+    if (at !== undefined && files.length > 0) throw new UsageError("--at schedules text only: files can't be scheduled")
+    const postAt = at === undefined ? undefined : epochAt(at)
     const s = await session(io, values)
     const channel = await s.conversation(target)
     const thread = str(values.thread)
+    if (postAt !== undefined) {
+      const res = await s.client.call<{ ok: boolean; scheduled_message_id: string; post_at: number; channel: string }>(
+        "chat.scheduleMessage",
+        { channel, text, thread_ts: thread, post_at: postAt },
+      )
+      if (values.json) {
+        return s.print({ channel: res.channel, scheduled_message_id: res.scheduled_message_id, post_at: res.post_at })
+      }
+      io.stdout(`Scheduled for ${target} at ${isoTime(res.post_at)} (id ${res.scheduled_message_id})\n`)
+      return
+    }
     if (files.length > 0) {
       const loaded = await Promise.all(
         files.map(async (path) => ({ name: basename(path), bytes: await io.readFile(path) })),
@@ -833,6 +855,70 @@ const commands: Record<string, Command> = {
     if (!target || !ts) throw new UsageError("delete needs a conversation and a ts")
     const s = await session(io, values)
     await s.client.call("chat.delete", { channel: await s.conversation(target), ts })
+  },
+
+  async scheduled(argv, io) {
+    const { values, positionals } = parse(argv)
+    const s = await session(io, values)
+    const [target] = positionals
+    const channel = target ? await s.conversation(target) : undefined
+    const messages = await s.client.paginate<{ id: string; channel_id: string; post_at: number; text: string }>(
+      "chat.scheduledMessages.list",
+      "scheduled_messages",
+      { channel },
+    )
+    if (values.json) return s.print(messages)
+    if (messages.length === 0) io.stdout("No scheduled messages\n")
+    for (const m of messages) io.stdout(`${m.id}  ${isoTime(m.post_at)}  ${m.channel_id}  ${m.text}\n`)
+  },
+
+  async unschedule(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target, id] = positionals
+    if (!target || !id) throw new UsageError("unschedule needs the conversation and the id from `campflare scheduled`")
+    const s = await session(io, values)
+    await s.client.call("chat.deleteScheduledMessage", {
+      channel: await s.conversation(target),
+      scheduled_message_id: id,
+    })
+    io.stdout(`Deleted scheduled message ${id}\n`)
+  },
+
+  async remind(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [text, ...when] = positionals
+    if (!text || when.length === 0)
+      throw new UsageError('remind needs the text and when: remind "call Zoë" in 15 minutes')
+    const s = await session(io, values)
+    const { reminder } = await s.client.call<{ ok: boolean; reminder: ReminderJson }>("reminders.add", {
+      text,
+      time: when.join(" "),
+    })
+    if (values.json) return s.print(reminder)
+    io.stdout(`Reminder set for ${isoTime(reminder.time)} (id ${reminder.id})\n`)
+  },
+
+  async reminders(argv, io) {
+    const { values } = parse(argv)
+    const s = await session(io, values)
+    const { reminders } = await s.client.call<{ ok: boolean; reminders: ReminderJson[] }>("reminders.list")
+    if (values.json) return s.print(reminders)
+    if (reminders.length === 0) io.stdout("No reminders\n")
+    for (const r of reminders) {
+      io.stdout(`${r.id}  ${isoTime(r.time)}  ${r.complete_ts ? "done" : "    "}  ${r.text}\n`)
+    }
+  },
+
+  async reminder(argv, io) {
+    const [sub, ...rest] = argv
+    const { values, positionals } = parse(rest)
+    const [id] = positionals
+    const method = sub === "done" ? "reminders.complete" : sub === "delete" ? "reminders.delete" : undefined
+    if (!method) throw new UsageError("reminder commands: done <id>, delete <id>")
+    if (!id) throw new UsageError(`reminder ${sub} needs an id from \`campflare reminders\``)
+    const s = await session(io, values)
+    await s.client.call(method, { reminder: id })
+    io.stdout(sub === "done" ? `Completed ${id}\n` : `Deleted ${id}\n`)
   },
 
   async channels(argv, io) {
@@ -1169,6 +1255,24 @@ export function seconds(text: string): number {
   if (!match) throw new UsageError(`--expires takes seconds or a number with s, m, h, d or w: got ${text}`)
   return Number(match[1]) * UNITS[match[2] || "s"]!
 }
+
+/**
+ * When `send --at` means, as epoch seconds: a time from now ("30m", "2h",
+ * "1d", "90" seconds), epoch seconds (any number of nine digits or more), or
+ * an ISO 8601 date-time (local time without an offset).
+ */
+export function epochAt(text: string, now = Date.now()): number {
+  const trimmed = text.trim()
+  if (/^\d{9,}$/.test(trimmed)) return Number(trimmed)
+  if (/^\d+[smhdw]?$/.test(trimmed)) return Math.floor(now / 1000) + seconds(trimmed)
+  const ms = /^\d{4}-\d{2}-\d{2}/.test(trimmed) ? Date.parse(trimmed) : Number.NaN
+  if (Number.isNaN(ms)) {
+    throw new UsageError(`--at takes an ISO time, epoch seconds, or 30m, 2h, 1d from now: got ${text}`)
+  }
+  return Math.floor(ms / 1000)
+}
+
+type ReminderJson = { id: string; text: string; time: number; complete_ts: number }
 
 const isoTime = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d+Z$/, "Z")
 

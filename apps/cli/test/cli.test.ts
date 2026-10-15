@@ -284,6 +284,74 @@ describe("messaging", () => {
   })
 })
 
+describe("scheduling", () => {
+  it("schedules with send --at, lists and unschedules", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("scheduled")).toBe(0)
+    expect(cli.out).toContain("No scheduled messages")
+    cli.clear()
+    expect(await cli.run("send", "#general", "Bis morgen", "--at", "2h")).toBe(0)
+    expect(cli.out).toMatch(/^Scheduled for #general at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \(id Q[A-Z0-9]+\)\n$/)
+    const at = new Date(Date.now() + 86_400_000).toISOString()
+    cli.clear()
+    expect(await cli.run("send", "#general", "明日", "--at", at, "--json")).toBe(0)
+    const scheduled = JSON.parse(cli.out) as { scheduled_message_id: string; post_at: number; channel: string }
+    expect(scheduled.post_at).toBe(Math.floor(Date.parse(at) / 1000))
+
+    cli.clear()
+    expect(await cli.run("scheduled", "#general")).toBe(0)
+    expect(
+      cli.out
+        .trim()
+        .split("\n")
+        .map((l) => l.split("  ").at(-1)),
+    ).toEqual(["Bis morgen", "明日"])
+    expect(await cli.run("unschedule", "#general", scheduled.scheduled_message_id)).toBe(0)
+    cli.clear()
+    expect(await cli.run("scheduled", "--json")).toBe(0)
+    expect((JSON.parse(cli.out) as { text: string }[]).map((m) => m.text)).toEqual(["Bis morgen"])
+
+    expect(await cli.run("unschedule", "#general", scheduled.scheduled_message_id)).toBe(1)
+    expect(cli.err).toContain("invalid_scheduled_message_id")
+    expect(await cli.run("unschedule", "#general")).toBe(2)
+    expect(await cli.run("send", "#general", "x", "--at", "someday")).toBe(2)
+    expect(await cli.run("send", "#general", "x", "--at", "1h", "-f", "package.json")).toBe(2)
+    expect(await cli.run("send", "#general", "x", "--at", "1700000000")).toBe(1)
+    expect(cli.err).toContain("time_in_past")
+  })
+
+  it("sets, lists, completes and deletes reminders", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("reminders")).toBe(0)
+    expect(cli.out).toContain("No reminders")
+    cli.clear()
+    expect(await cli.run("remind", "Llamar a Zoë", "in", "15", "minutes")).toBe(0)
+    expect(cli.out).toMatch(/^Reminder set for \S+Z \(id Rm[A-Z0-9]+\)\n$/)
+    const id = /id (Rm[A-Z0-9]+)/.exec(cli.out)![1]!
+    cli.clear()
+    expect(await cli.run("remind", "회의", "tomorrow at 9am", "--json")).toBe(0)
+    const second = JSON.parse(cli.out) as { id: string; text: string }
+    expect(second.text).toBe("회의")
+
+    cli.clear()
+    expect(await cli.run("reminder", "done", id)).toBe(0)
+    expect(cli.out).toBe(`Completed ${id}\n`)
+    cli.clear()
+    expect(await cli.run("reminders")).toBe(0)
+    expect(cli.out).toMatch(new RegExp(`^${id}  \\S+  done  Llamar a Zoë\\n${second.id}  \\S+        회의\\n$`))
+    expect(await cli.run("reminder", "delete", second.id)).toBe(0)
+    cli.clear()
+    expect(await cli.run("reminders", "--json")).toBe(0)
+    expect((JSON.parse(cli.out) as { id: string }[]).map((r) => r.id)).toEqual([id])
+
+    expect(await cli.run("remind", "x", "whenever")).toBe(1)
+    expect(cli.err).toContain("cannot_parse")
+    expect(await cli.run("remind", "x")).toBe(2)
+    expect(await cli.run("reminder", "snooze", id)).toBe(2)
+    expect(await cli.run("reminder", "done")).toBe(2)
+  })
+})
+
 describe("workspace", () => {
   it("lists channels and people; creates, joins, invites and leaves", async () => {
     const cli = await loggedIn()
