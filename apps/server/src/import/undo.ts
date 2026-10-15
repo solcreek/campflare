@@ -2,9 +2,9 @@ import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { THUMB_VARIANTS, thumbKey } from "../api/thumbs"
-import { all, first, stmt } from "../db/query"
+import { all, stmt } from "../db/query"
 import { recountThreads } from "./messages"
-import { jobJson, loadJob, UNDO_WINDOW_SECONDS, type ImportJobRow } from "./job"
+import { jobFrom, jobJson, jobStatement, loadJob, UNDO_WINDOW_SECONDS } from "./job"
 
 // campflare.import.undo: takes back everything a job wrote, a bounded piece
 // per call (docs/import.md, Undo).
@@ -74,11 +74,12 @@ export async function undoImport(ctx: Ctx<Actor>) {
         { sql: `(h.channel_id, h.ts) IN ${KEYS} AND h.import_job IS NOT ?`, params: [heads, job.id] },
         { emptied: true },
       ),
+      jobStatement(db, job.id),
     ])
     removed.reactions = results[0]!.meta.changes
     // meta.changes counts the search index's trigger writes too: every key found is one message.
     removed.messages = keys.length
-    return { done: false, removed, job: jobJson(await reread(db, job)) }
+    return { done: false, removed, job: jobJson(jobFrom(results)) }
   }
 
   const files = await all<{ id: string; team_id: string }>(
@@ -92,12 +93,13 @@ export async function undoImport(ctx: Ctx<Actor>) {
       files.flatMap((f) => [`${f.team_id}/${f.id}`, ...THUMB_VARIANTS.map((v) => thumbKey(f, v))]),
     )
     const ids = JSON.stringify(files.map((f) => f.id))
-    await db.batch([
+    const results = await db.batch([
       stmt(db, "DELETE FROM stars WHERE file_id IN (SELECT value FROM json_each(?))", ids),
       stmt(db, "DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))", ids),
+      jobStatement(db, job.id),
     ])
     removed.files = files.length
-    return { done: false, removed, job: jobJson(await reread(db, job)) }
+    return { done: false, removed, job: jobJson(jobFrom(results)) }
   }
 
   const now = nowSeconds()
@@ -124,14 +126,12 @@ export async function undoImport(ctx: Ctx<Actor>) {
     stmt(db, "DELETE FROM import_files WHERE job_id = ?", job.id),
     stmt(db, "DELETE FROM import_skipped WHERE job_id = ?", job.id),
     stmt(db, "UPDATE import_jobs SET state = 'undone', updated = ? WHERE id = ?", now, job.id),
+    jobStatement(db, job.id),
   ]
   const results = await db.batch(statements)
   const changes = (s: D1PreparedStatement) => results[statements.indexOf(s)]!.meta.changes
   removed.memberships = changes(memberships)
   removed.conversations = changes(conversations)
   removed.users = changes(users)
-  return { done: true, removed, job: jobJson(await reread(db, job)) }
+  return { done: true, removed, job: jobJson(jobFrom(results)) }
 }
-
-const reread = async (db: D1Database, job: ImportJobRow) =>
-  (await first<ImportJobRow>(db, "SELECT * FROM import_jobs WHERE id = ?", job.id))!

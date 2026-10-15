@@ -120,5 +120,11 @@ export function bump(db: D1Database, jobId: string, add: Record<string, number |
   return stmt(db, `UPDATE import_jobs SET counts = ${expr}, updated = ? WHERE id = ?`, ...params, nowSeconds(), jobId)
 }
 
+/** The job as it is, read in the batch of a change to it: its row is the batch's last result. */
+export const jobStatement = (db: D1Database, jobId: string) => stmt(db, "SELECT * FROM import_jobs WHERE id = ?", jobId)
+
+/** The job from a batch that ended with jobStatement(). */
+export const jobFrom = (results: D1Result[]) => results.at(-1)!.results[0] as ImportJobRow
+
 /** The rows the statement before this one wrote. */
 export const CHANGES = { sql: "changes()", params: [] }

@@ -2,7 +2,7 @@ import { method } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
 import { requireAdmin } from "../api/roles"
-import { all, first, run, stmt } from "../db/query"
+import { all, first, stmt } from "../db/query"
 import { importConversations } from "../import/conversations"
 import { importFiles } from "../import/files"
 import { finishImport } from "../import/finish"
@@ -47,10 +47,10 @@ method("campflare.import.start", "user", async (ctx) => {
   }
   const id = randomId("J")
   const now = nowSeconds()
-  await run(
+  const job = await first<ImportJobRow>(
     db,
     `INSERT INTO import_jobs (id, team_id, created_by, format, fingerprint, options, created, updated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     id,
     ctx.auth.team.id,
     ctx.auth.user.id,
@@ -60,8 +60,7 @@ method("campflare.import.start", "user", async (ctx) => {
     now,
     now,
   )
-  const job = (await first<ImportJobRow>(db, "SELECT * FROM import_jobs WHERE id = ?", id))!
-  return { job: jobJson(job), resumed: false }
+  return { job: jobJson(job!), resumed: false }
 })
 
 method("campflare.import.users", "user", importUsers)

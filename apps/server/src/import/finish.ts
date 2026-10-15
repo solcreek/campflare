@@ -1,7 +1,7 @@
 import type { Actor, Ctx } from "../api/context"
 import { nowSeconds } from "../api/ids"
-import { all, first, stmt } from "../db/query"
-import { jobJson, loadJob, type ImportJobRow } from "./job"
+import { all, stmt } from "../db/query"
+import { jobFrom, jobJson, jobStatement, loadJob, type ImportJobRow } from "./job"
 import { recountThreads } from "./messages"
 import { SYSTEM_USER_ID } from "./text"
 
@@ -44,10 +44,10 @@ export async function finishImport(ctx: Ctx<Actor>) {
       job.id,
     ),
     stmt(db, "SELECT count(*) AS n FROM import_conversations WHERE job_id = ? AND finished = 0", job.id),
+    jobStatement(db, job.id),
   ])
-  const remaining = (results.at(-1)!.results[0] as { n: number }).n
-  const after = (await first<ImportJobRow>(db, "SELECT * FROM import_jobs WHERE id = ?", job.id))!
-  return { done: remaining === 0, remaining, job: jobJson(after) }
+  const remaining = (results.at(-2)!.results[0] as { n: number }).n
+  return { done: remaining === 0, remaining, job: jobJson(jobFrom(results)) }
 }
 
 function finishConversation(db: D1Database, job: ImportJobRow, id: string): D1PreparedStatement[] {
