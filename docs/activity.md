@@ -179,11 +179,12 @@ notify --default <level>`, and `campflare notify` alone to show them.
 - MCP: `get_activity` (unread only by default), the tool an agent asked "what
   needs my attention" should reach for, and `mark_activity_read`.
 
-## Where user group mentions plug in
+## User group mentions
 
-`<!subteam^S…>` mentions (user groups, another branch) are one more source of
-mentioned users. `mentionsOf()` returns the user ids a text names; the INSERT
-takes them as one JSON list (`json_each`). A group's members join that set in
-SQL, `UNION SELECT user_id FROM <group members> WHERE group_id IN (…)`, in the
-same statement, so a group mention costs no round trip and still reaches only
-the conversation's members.
+`<!subteam^S…>` mentions are one more source of mentioned users.
+`mentionsOf()` returns the user ids a text names and `subteamMentions()` the
+groups; the INSERT takes both as JSON lists (`?6`, `?7`), and the groups'
+members join the named set in SQL (`UNION SELECT user_id FROM usergroup_members
+… WHERE g.id IN json_each(?7)`, enabled groups of this workspace only), in the
+same statement. So a group mention costs no round trip and still reaches only
+the conversation's members, as a `mention`.

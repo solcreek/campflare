@@ -579,8 +579,9 @@ so items of a conversation the person left are hidden (back on rejoining), and
 lists only conversation types the token holds `:history` for; the page, its
 messages, their reactions and the unread counts are one batch.
 `campflare.activity.mark` (`ids`, `up_to`, `all`) sends `activity_marked`;
-`campflare.prefs.set` sends `prefs_changed`. User group mentions would join the
-mentioned-ids list in the INSERT, in SQL. CLI: `campflare inbox`,
+`campflare.prefs.set` sends `prefs_changed`. A user group's mention is a
+`mention` for its members in the conversation: they join the named set in the
+INSERT, in SQL (`?7`, the groups named). CLI: `campflare inbox`,
 `campflare notify`; MCP: `get_activity`, `mark_activity_read`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
@@ -627,7 +628,7 @@ any group (Slack's default; no admin restriction yet); `usergroups:read` is in
 `<!subteam^S…|@handle>`: core's mrkdwn parses them as `usergroup` nodes;
 `groupMembers(env, teamId, ids)` and `subteamMentions(text)` in
 `src/db/usergroups.ts` resolve one to its people (enabled groups, active members)
-for whatever notifies them. CLI: `campflare profile`, `groups`, `group …`; MCP:
+for other callers (the activity inbox expands groups in its own SQL). CLI: `campflare profile`, `groups`, `group …`; MCP:
 `list_groups`.
 
 **Invitations and resets** (`docs/invites.md`, migration 0020). Links, not

@@ -1,3 +1,4 @@
+import { subteamMentions } from "./db/usergroups"
 import { stmt } from "./db/query"
 import type { ActivityKind, ActivityRow, ConversationRow, MessageRow } from "./db/rows"
 import type { PublishInput } from "./hub"
@@ -76,11 +77,14 @@ export function messageActivity(
 ): D1PreparedStatement | undefined {
   if (!SAYING.has(m.subtype)) return undefined
   const { users, everyone } = mentionsOf(m.text)
+  const groups = subteamMentions(m.text)
   const dm = c.kind === "im" || c.kind === "mpim"
   const thread = threadOf(m)
-  if (!dm && !thread && !everyone && users.length === 0) return undefined
-  // User groups (<!subteam^S…>) would add their members to ?6 here, in SQL: see docs/activity.md.
-  const named = "m.user_id IN (SELECT value FROM json_each(?6))"
+  if (!dm && !thread && !everyone && users.length === 0 && groups.length === 0) return undefined
+  // Those named: people (?6), and the members of the user groups named (?7), enabled ones of this workspace.
+  const named = `m.user_id IN (SELECT value FROM json_each(?6)
+    UNION SELECT gm.user_id FROM usergroup_members gm JOIN usergroups g ON g.id = gm.usergroup_id
+      WHERE g.team_id = ?1 AND g.date_delete = 0 AND g.id IN (SELECT value FROM json_each(?7)))`
   // A broadcast makes everyone's a mention, and a DM makes no thread_reply: either way no thread to read.
   const [kind, who] = everyone
     ? ["'mention'", ""]
@@ -88,12 +92,12 @@ export function messageActivity(
       ? [`CASE WHEN ${named} THEN 'mention' ELSE 'dm' END`, ""]
       : [
           `CASE WHEN ${named} THEN 'mention' ELSE 'thread_reply' END`,
-          `AND m.user_id IN (SELECT value FROM json_each(?6)${thread ? ` UNION ${PARTICIPANTS}` : ""})`,
+          `AND (${named}${thread ? ` OR m.user_id IN (${PARTICIPANTS})` : ""})`,
         ]
   return stmt(
     db,
     `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, thread_ts, actor_id, created, notify)
-     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, COALESCE(?5, ''), ?7, ${notify("?7")}
+     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, COALESCE(?5, ''), ?8, ${notify("?8")}
      FROM (
        SELECT m.user_id, ${kind} AS kind
        FROM members m WHERE m.conversation_id = ?2 AND m.user_id IS NOT ?5 ${who}
@@ -106,6 +110,8 @@ export function messageActivity(
     thread,
     m.user_id,
     JSON.stringify(users),
+    // ?7 before ?8, the time, which every branch reads: D1 wants the highest number bound to be used.
+    JSON.stringify(groups),
     nowSeconds(),
   )
 }

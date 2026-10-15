@@ -80,6 +80,27 @@ describe("activity items", () => {
     expect((await inbox(bob.token)).items).toEqual([])
   })
 
+  it("records a user group's mention for its members in the conversation, not the author, not a disabled group's", async () => {
+    const w = await workspace()
+    const [bob, carol, dee] = [await w.addUser("bob"), await w.addUser("carol"), await w.addUser("dee")]
+    const room = await channel(w.owner.token, "guardia", true)
+    await ok("conversations.invite", { channel: room, users: `${bob.id},${carol.id}` }, w.owner.token)
+    const group = await ok<{ usergroup: { id: string } }>(
+      "usergroups.create",
+      { name: "De guardia", handle: "oncall" },
+      w.owner.token,
+    )
+    const id = group.usergroup.id
+    await ok("usergroups.users.update", { usergroup: id, users: `${bob.id},${carol.id},${dee.id}` }, w.owner.token)
+    await post(carol.token, room, `<!subteam^${id}|@oncall> 서버가 느려요 · le serveur rame`)
+    expect((await inbox(bob.token)).items.map((i) => i.type)).toEqual(["mention"])
+    expect((await inbox(carol.token)).items).toEqual([]) // the author
+    expect((await inbox(dee.token)).items).toEqual([]) // not in the conversation
+    await ok("usergroups.disable", { usergroup: id }, w.owner.token)
+    await post(carol.token, room, `<!subteam^${id}> 还在吗？`)
+    expect((await inbox(bob.token)).items).toHaveLength(1)
+  })
+
   it("records @here, @channel and @everyone for every member but the author", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
