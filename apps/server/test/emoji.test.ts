@@ -6,7 +6,7 @@ import { imageSize } from "../src/api/media"
 import { setImagesOverride } from "../src/api/thumbs"
 import { createMetadataFetch } from "../src/auth/cimd-fetch"
 import { ORIGIN, call, connect, expectError, ok, workspace, type Body } from "./helpers"
-import { makeGif, makePng } from "./images"
+import { convert, makeGif, makePng } from "./images"
 
 // Custom emoji: emoji.list, admin.emoji.*, campflare.emoji.add, the images at
 // /emoji/<team>/<image>.<ext>, and emoji_changed.
@@ -19,10 +19,10 @@ afterEach(() => {
 type Added = Body & { emoji: { name: string; url: string; alias_for?: string } }
 type Listed = Body & { emoji: Record<string, string>; cache_ts: string }
 
-async function upload(token: string, name: string, bytes: Uint8Array<ArrayBuffer> | undefined) {
+async function upload(token: string, name: string, bytes: Uint8Array | undefined) {
   const form = new FormData()
   form.set("name", name)
-  if (bytes) form.set("image", new File([bytes], "emoji.png"))
+  if (bytes) form.set("image", new File([new Uint8Array(bytes)], "emoji.png"))
   const res = await SELF.fetch(`${ORIGIN}/api/campflare.emoji.add`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
@@ -134,6 +134,19 @@ describe("campflare.emoji.add", () => {
     const big = new Uint8Array(EMOJI_MAX_BYTES + 1)
     big.set(await makePng(8, 8))
     expect((await upload(w.owner.token, "big", big)).error).toBe("error_too_big")
+    const png = await makePng(24, 24)
+    const jpeg = await convert(env.IMAGES!, png, "image/jpeg")
+    expect((await added(w.owner.token, "photo-jpeg", jpeg)).url).toMatch(/\.jpg$/)
+    const webp = new Uint8Array(
+      await (
+        await env.IMAGES!.input(new Blob([png]).stream()).output({ format: "image/webp" })
+      )
+        .response()
+        .arrayBuffer(),
+    )
+    const still = await added(w.owner.token, "photo-webp", webp)
+    expect(still.url).toMatch(/\.webp$/)
+    expect((await SELF.fetch(still.url)).headers.get("content-type")).toBe("image/webp")
     const gif = makeGif(16, 16, 2)
     const moving = await added(w.owner.token, "spinner", gif)
     expect(moving.url).toMatch(/\.gif$/)
