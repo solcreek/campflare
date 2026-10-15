@@ -130,6 +130,7 @@ export const NEEDS: Record<string, Need> = {
   "campflare.users.setPassword": ["users.password:write"],
   "campflare.users.create": ["admin.users:write"],
   "campflare.users.deactivate": ["admin.users:write"],
+  "campflare.users.setRole": ["admin.users:write"],
 }
 
 /** The scopes a method accepts, any one of which will do, for x-accepted-oauth-scopes and missing_scope. */
