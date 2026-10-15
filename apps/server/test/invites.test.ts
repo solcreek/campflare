@@ -641,7 +641,7 @@ describe("the link pages refuse cross-site posts (login CSRF)", () => {
       password_again: "a long enough password",
     }
     const path = new URL(url).pathname
-    for (const headers of [
+    for (const headers of <Record<string, string>[]>[
       { origin: "https://evil.test" },
       { origin: "null" },
       { "sec-fetch-site": "cross-site" },
