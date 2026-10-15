@@ -33,8 +33,9 @@ the URL is shown once, as tokens are. An email already in the workspace is
 `already_in_team` up front.
 
 `campflare.invites.list` (`admin.invites:read`, admin) answers the workspace's
-invites, newest first, each with `state`: `pending`, `used_up`, `expired` or
-`revoked`, and who made it. `campflare.invites.revoke` (`admin.invites:write`,
+invites, newest first, each with `state`: `pending`, `used_up`, `expired`,
+`revoked`, or `inviter_inactive` (its inviter was deactivated, or is no longer
+an admin, or an owner for an admin invite), and who made it. `campflare.invites.revoke` (`admin.invites:write`,
 admin; `invite`: its id) stops one at once; any admin may revoke any invite,
 since revoking only ever takes power away.
 
@@ -50,11 +51,17 @@ Two ways in, sharing one function (`acceptInvite()` in `src/invites.ts`):
   plugin, `signInCampflareUser`, never reachable over HTTP), and sent to
   `APP_URL`; without one, the page says what to do next (the CLI's
   `campflare login --oauth`). The CSP's `form-action` adds `APP_URL`'s origin,
-  since browsers apply it to the redirect that answers the POST.
+  since browsers apply it to the redirect that answers the POST. A dead link
+  (any state but `pending`) gets a page saying why, with no form. The POST is
+  refused (403) from another site, since it starts a session (login CSRF would
+  put an attacker's account in the victim's browser): its `Origin` must be this
+  server's, else `Sec-Fetch-Site` must be `same-origin`; a request with neither
+  isn't a browser's. The `/reset` forms are guarded the same way.
 - **`campflare.invites.accept`** (no token: `code`, `name`, `password`,
   `real_name`, `email`), for agents and `campflare join <url>`. It answers the
   user and a `full` token, labelled `invite`: the same thing a person's own
-  sign-in gets, and what `campflare.users.create` answered before.
+  sign-in gets, and what `campflare.users.create` answered before. The token is
+  stored in the admission batch, so an account never exists without it.
 
 An email is required either way (bound, or given): a password signs in with an
 email, so a person without one could never use theirs.
@@ -77,12 +84,14 @@ a 429 with `Retry-After`.
    admin** (an owner, for an admin invite): demoting or deactivating someone
    retires their invites, as it would their power to make them.
 2. The use is counted only if that row went in; #general and the invite's
-   channels (still existing, not archived) are joined; the password is stored.
+   channels (still existing, not archived; a private one only while the
+   inviter is still in it) are joined; the password and, for the API, the
+   token are stored.
 
 A handle or email already taken fails the whole batch (`name_taken`,
 `already_in_team`) and spends no use. A batch that inserts nothing is then
 explained by reading the invite again: `invite_expired`, `invite_revoked`,
-`invite_used_up`, else `invalid_invite`. An email-bound invite with another
+`invite_used_up` or `inviter_inactive`. An email-bound invite with another
 address is `email_mismatch`, before anything is written.
 
 ### Events
@@ -110,10 +119,13 @@ earlier unused one for the same person. Stored hashed, single use
 
 `/reset/<code>` is a script-free page asking for the new password twice;
 `campflare.users.resetPassword` (no token; `code`, `password`) is the same for
-the CLI (`campflare password reset <url>`) and agents. Either one goes through
-`setPassword()` (`src/auth/password.ts`), so it ends the person's browser
-sessions and MCP grants exactly as setting a password does. A rejected
-password (too short) doesn't spend the link; a used, expired or unknown one is
+the CLI (`campflare password reset <url>`) and agents. Either one writes what
+`setPassword()` writes (`passwordStatements()` in `src/auth/password.ts`), so it
+ends the person's browser sessions and MCP grants exactly as setting a password
+does, in one batch with spending the link: the writes are guarded on the link
+still being good, and the link is deleted last, so a failed write spends
+nothing and two uses at once can't both succeed. A rejected password (too
+short) doesn't spend the link; a used, expired or unknown one is
 `invalid_reset`, and the person's every outstanding reset is deleted when one
 is used. A deactivated person's link does nothing. Attempts are throttled as
 invites are.
@@ -125,9 +137,13 @@ invites are.
 answers `email_not_configured`, and the page says to ask an admin for a link
 (`campflare admin reset-password @you`). With one, it mails a link (an hour) to
 each active person with that address (in that workspace, if given) and always
-answers `{}`, so it never says whether an address has an account. Throttled per
-address (`rate:`) and per email (`reset:<email>`: 3 free, then backoff), so it
-can't be used to flood a mailbox. The `/login` page links to `/reset`.
+answers `{}`, so it never says whether an address has an account; nor does its
+timing: finding the people, making their links (one batch) and sending all
+happen in `waitUntil`, after the answer. Throttled by client address, never by
+the email alone (that would let anyone stop the owner from getting their
+email): `rate:<ip>`, `reset:<email>:<ip>` (3 free, then backoff) and
+`reset-ip:<ip>` (10 free, any emails, then backoff), so it can't be used to
+flood a mailbox. The `/login` page links to `/reset`.
 
 ## The email seam
 
@@ -144,8 +160,9 @@ returns only what a test installed with `setEmailSender()`. A provider (an
 HTTP API such as Resend or Postmark, or Cloudflare's `send_email` binding) is
 one class implementing `send`, returned from `emailSender(env)` when its
 configuration is present in `env`. Nothing else changes: invitations bound to
-an email are mailed too when a sender exists (`emailed: true` in the answer;
-the URL is still answered, so the admin can hand it over if mail is slow), and
+an email are mailed too when a sender exists, after the answer (`emailed: true`
+says a send was started; a failure is logged, and the URL is answered either
+way, so the admin can hand it over if mail fails), and
 self-service resets start working.
 
 ## CLI

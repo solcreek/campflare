@@ -512,17 +512,27 @@ answers `<origin>/reset/<code>`. Codes are 32 random bytes; `invites.hash` and
 batch that finds the code and count an unknown one against `ip:`.
 `acceptInvite()` is one batch whose user INSERT … SELECT runs only while the
 invite is pending and its inviter is still an active admin (an owner, for an
-admin invite); the use, password and memberships follow only if that row went
-in, and a taken handle or email fails the whole batch, spending nothing. It
-publishes `team_join` and `member_joined_channel`; the API answers a `full`
-token, the page signs the person in through `signInCampflareUser`, a
-server-only Better Auth endpoint (`createAuthEndpoint.serverOnly`, not on the
-router), and redirects to `APP_URL` (added to the page's `form-action`). A
-reset spends the link only once the password passes `checkPassword()`, then
-calls `setPassword()`. Email is a seam (`src/email.ts`): `emailSender(env)` is
+admin invite; `INVITER_ACTIVE`, which also makes an invite's state
+`inviter_inactive` in the list and on `/join`); the use, password, memberships
+(a private channel only while the inviter is in it) and, for the API, the
+`full` token (`prepareToken()` with a guard) follow only if that row went in,
+and a taken handle or email fails the whole batch, spending nothing. It
+publishes `team_join` and `member_joined_channel`; the page signs the person in
+through `signInCampflareUser`, a server-only Better Auth endpoint
+(`createAuthEndpoint.serverOnly`, not on the router), and redirects to
+`APP_URL` (added to the page's `form-action`). The pages' POSTs refuse other
+sites (`crossSite()`: Origin, else Sec-Fetch-Site), as they sign in or set a
+password. A reset checks the password first, then writes it
+(`passwordStatements()`, setPassword's writes) guarded on the link in the batch
+that deletes the link. Email is a seam (`src/email.ts`): `emailSender(env)` is
 undefined by default, so `campflare.users.requestPasswordReset` answers
-`email_not_configured`; tests install one with `setEmailSender()`. Pages send
-`referrer-policy: no-referrer`, since their URLs hold codes.
+`email_not_configured`; with one, sends happen in `waitUntil`, and
+requestPasswordReset does its per-account work there too (so timing says
+nothing) and is throttled per email and address and per address
+(`reset:<email>:<ip>`, `reset-ip:<ip>`), never per email alone. Tests install a
+sender with `setEmailSender()`. Pages send `referrer-policy: no-referrer`, since
+their URLs hold codes. Role checks and `HANDLE` live in `src/api/roles.ts`,
+email normalizing in `src/api/email-address.ts`.
 
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
