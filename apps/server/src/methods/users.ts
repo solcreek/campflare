@@ -1,5 +1,5 @@
 import { encodeCursor, decodeCursor } from "../api/args"
-import { all, first, run } from "../db/query"
+import { all, first, run, stmt } from "../db/query"
 import type { ConversationRow, MemberRow, UserRow } from "../db/rows"
 import { conversationJson, presenceOf, userJson } from "../api/shapes"
 import { method, type Actor, type Ctx } from "../api/context"
@@ -8,7 +8,7 @@ import { requireConversationScope } from "../api/scopes"
 import { imPeer } from "../db/conversations"
 import { nowSeconds, randomSecret } from "../api/ids"
 import { displaySize, imageSize, isAnimated } from "../api/media"
-import { photoKeys, photoPrefix, photoType, type Crop } from "../api/photos"
+import { dropPhoto, photoPrefix, photoType, type Crop } from "../api/photos"
 import { userChanged } from "../events"
 
 export async function getUser(ctx: Ctx<Actor>, id: string) {
@@ -128,9 +128,29 @@ function cropOf(ctx: Ctx<Actor>, size: { width: number; height: number }): Crop 
   return crop
 }
 
-/** Forgets a photo's bytes, its sizes too, after the response. */
-function dropPhoto(ctx: Ctx<Actor>, photo: string | null) {
-  if (photo) ctx.waitUntil(ctx.env.FILES.delete(photoKeys(ctx.auth.user, photo)))
+/**
+ * Sets (or clears) the caller's photo, reading the one it replaces in the same transaction:
+ * the row as it is, not as the token's read found it, so concurrent changes each drop
+ * exactly the photo they replaced (after the response).
+ */
+async function replacePhoto(ctx: Ctx<Actor>, photo: string | null, type: string | null, crop: Crop | null) {
+  const db = ctx.env.DB
+  const me = ctx.auth.user
+  const [before, after] = await db.batch([
+    stmt(db, "SELECT photo FROM users WHERE id = ?", me.id),
+    stmt(
+      db,
+      "UPDATE users SET photo = ?, photo_type = ?, photo_crop = ?, updated = ? WHERE id = ? RETURNING *",
+      photo,
+      type,
+      crop ? JSON.stringify(crop) : null,
+      nowSeconds(),
+      me.id,
+    ),
+  ])
+  const old = (before!.results[0] as Pick<UserRow, "photo"> | undefined)?.photo ?? null
+  if (old) ctx.waitUntil(dropPhoto(ctx.env, me, old))
+  return { user: after!.results[0] as UserRow, old }
 }
 
 /**
@@ -153,32 +173,15 @@ method("users.setPhoto", "user", async (ctx) => {
   const photo = randomSecret(8)
   const me = ctx.auth.user
   await ctx.env.FILES.put(`${photoPrefix(me, photo)}original`, bytes, { httpMetadata: { contentType: type } })
-  const user = (await first<UserRow>(
-    ctx.env.DB,
-    "UPDATE users SET photo = ?, photo_type = ?, photo_crop = ?, updated = ? WHERE id = ? RETURNING *",
-    photo,
-    type,
-    crop ? JSON.stringify(crop) : null,
-    nowSeconds(),
-    me.id,
-  ))!
-  dropPhoto(ctx, me.photo)
+  const { user } = await replacePhoto(ctx, photo, type, crop)
   userChanged(ctx, user)
   return { profile: userJson(user, ctx.origin).profile }
 })
 
 /** Removes the caller's photo: the profile shows their initials again. */
 method("users.deletePhoto", "user", async (ctx) => {
-  const me = ctx.auth.user
-  if (!me.photo) return {}
-  const user = (await first<UserRow>(
-    ctx.env.DB,
-    "UPDATE users SET photo = NULL, photo_type = NULL, photo_crop = NULL, updated = ? WHERE id = ? RETURNING *",
-    nowSeconds(),
-    me.id,
-  ))!
-  dropPhoto(ctx, me.photo)
-  userChanged(ctx, user)
+  const { user, old } = await replacePhoto(ctx, null, null, null)
+  if (old) userChanged(ctx, user)
   return {}
 })
 

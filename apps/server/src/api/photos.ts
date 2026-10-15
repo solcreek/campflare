@@ -45,11 +45,20 @@ type WithPhoto = Pick<UserRow, "id" | "team_id" | "photo" | "photo_type" | "phot
 export const photoPrefix = (u: Pick<UserRow, "id" | "team_id">, photo: string) =>
   `${u.team_id}/avatars/${u.id}/${photo}/`
 
-/** Every R2 key a photo may have, made or not: for deleting it. */
-export const photoKeys = (u: Pick<UserRow, "id" | "team_id">, photo: string) => [
-  `${photoPrefix(u, photo)}original`,
-  ...PHOTO_SIZES.map((n) => `${photoPrefix(u, photo)}${n}`),
-]
+/**
+ * Deletes everything R2 holds under a photo's prefix: the original and whatever sizes were
+ * made. Callers change users.photo first; handlePhoto checks it after each write, so a size
+ * made while this runs is deleted by one or the other.
+ */
+export async function dropPhoto(env: Pick<Env, "FILES">, u: Pick<UserRow, "id" | "team_id">, photo: string) {
+  const prefix = photoPrefix(u, photo)
+  let cursor: string | undefined
+  do {
+    const page = await env.FILES.list({ prefix, cursor })
+    if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key))
+    cursor = page.truncated ? page.cursor : undefined
+  } while (cursor)
+}
 
 /** JPEG stays JPEG, the rest become PNG (transparency kept), as thumbnails do. */
 const sizedFormat = (type: string) =>
@@ -144,5 +153,9 @@ export async function handlePhoto(env: Env, userId: string, name: string): Promi
     return fallback()
   }
   await env.FILES.put(`${prefix}${variant}`, bytes, { httpMetadata: { contentType: type } })
+  // A new photo, or none, may have landed while this one was sized: then its dropPhoto may
+  // have listed the prefix before this write, so take the write back.
+  const now = await first<{ photo: string | null }>(env.DB, "SELECT photo FROM users WHERE id = ?", u.id)
+  if (now?.photo !== u.photo) await env.FILES.delete(`${prefix}${variant}`)
   return serve(bytes, type, IMMUTABLE)
 }

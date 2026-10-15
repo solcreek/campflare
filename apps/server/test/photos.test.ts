@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { displaySize, imageSize, jpegOrientation } from "../src/api/media"
 import { photoJson, photoTransforms, photoType, photoVariantOf } from "../src/api/photos"
 import { setImagesOverride } from "../src/api/thumbs"
-import { ORIGIN, connect, ok, workspace, type Body } from "./helpers"
+import { ORIGIN, connect, eventually, ok, workspace, type Body } from "./helpers"
 import { convert, makeGif, makePng } from "./images"
 
 // Profile photos: users.setPhoto / users.deletePhoto, and their sizes served
@@ -88,6 +88,23 @@ describe("users.setPhoto", () => {
     expect(second.image_72).not.toBe(first.image_72)
     expect((await SELF.fetch(first.image_72)).status).toBe(404)
     expect((await SELF.fetch(second.image_72)).status).toBe(200)
+    // Everything under the old photo's prefix is gone: the original and the size made from it.
+    const prefix = `${w.teamId}/avatars/${w.owner.id}/`
+    await eventually(async () =>
+      (await env.FILES.list({ prefix })).objects.every((o) => o.key.includes(photoOf(second))),
+    )
+    const left = (await env.FILES.list({ prefix })).objects.map((o) => o.key.slice(prefix.length))
+    expect(left.toSorted()).toEqual([`${photoOf(second)}/72`, `${photoOf(second)}/original`])
+  })
+
+  it("takes back a size made while the photo was being replaced", async () => {
+    const w = await workspace()
+    const p = (await setPhoto(w.owner.token, await makePng(120, 120))).profile
+    // The photo is deleted while Images is still making image_48.
+    setImagesOverride(racingImages(() => ok("users.deletePhoto", {}, w.owner.token)))
+    expect((await SELF.fetch(p.image_48 as string)).status).toBe(200)
+    const prefix = `${w.teamId}/avatars/${w.owner.id}/`
+    await eventually(async () => (await env.FILES.list({ prefix })).objects.length === 0)
   })
 
   it("keeps JPEG as JPEG", async () => {
@@ -302,6 +319,30 @@ function recordingImages(calls: ImageTransform[][]): ImagesBinding {
         output(output: ImageOutputOptions) {
           calls.push(transforms)
           return transforms.reduce((t, x) => t.transform(x), real.input(stream)).output(output)
+        },
+      }
+      return transformer
+    },
+  } as unknown as ImagesBinding
+}
+
+/** The real binding, running `meanwhile` before handing back each output. */
+function racingImages(meanwhile: () => Promise<unknown>): ImagesBinding {
+  const real = env.IMAGES!
+  return {
+    info: (stream: ReadableStream<Uint8Array>) => real.info(stream),
+    input(stream: ReadableStream<Uint8Array>) {
+      const transforms: ImageTransform[] = []
+      const transformer = {
+        transform(t: ImageTransform) {
+          transforms.push(t)
+          return transformer
+        },
+        draw: () => transformer,
+        async output(output: ImageOutputOptions) {
+          const out = await transforms.reduce((t, x) => t.transform(x), real.input(stream)).output(output)
+          await meanwhile()
+          return out
         },
       }
       return transformer
