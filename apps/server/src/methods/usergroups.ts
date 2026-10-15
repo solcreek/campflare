@@ -232,7 +232,14 @@ method("usergroups.users.update", "actor", async (ctx) => {
   // The members before, the change and the result in one transaction, so the
   // events describe exactly this change even when two run at once.
   const [old, , , , after] = await db.batch([
-    stmt(db, "SELECT user_id FROM usergroup_members WHERE usergroup_id = ?", id),
+    // Active members only, as the group's users and user_count count them: a deactivated
+    // member's row goes quietly with the DELETE, never reported as removed.
+    stmt(
+      db,
+      `SELECT m.user_id FROM usergroup_members m JOIN users u ON u.id = m.user_id AND u.deleted = 0
+       WHERE m.usergroup_id = ?`,
+      id,
+    ),
     stmt(
       db,
       "DELETE FROM usergroup_members WHERE usergroup_id = ? AND user_id NOT IN (SELECT value FROM json_each(?))",

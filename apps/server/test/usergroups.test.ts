@@ -193,6 +193,20 @@ describe("usergroups", () => {
     await expectError("usergroups.users.update", { usergroup: g.id, users: "" }, w.owner.token, "no_users_provided")
     await expectError("usergroups.users.update", { usergroup: g.id }, w.owner.token, "no_users_provided")
 
+    // A deactivated member is no member: replacing the list never reports them removed.
+    await ok("campflare.users.deactivate", { user: chloe.id }, w.owner.token)
+    const watch = await live(w.owner.token)
+    await ok("usergroups.users.update", { usergroup: g.id, users: `${bob.id},${ana.id}` }, w.owner.token)
+    expect(await watch.next((f) => f.type === "subteam_members_changed")).toMatchObject({
+      added_users: [ana.id],
+      removed_users: [],
+      removed_users_count: "0",
+    })
+    watch.close()
+    expect(await ok("usergroups.users.list", { usergroup: g.id }, ana.token)).toMatchObject({
+      users: [ana.id, bob.id].toSorted(),
+    })
+
     const app = await w.addApp("Groupbot")
     await expectError(
       "usergroups.users.update",
