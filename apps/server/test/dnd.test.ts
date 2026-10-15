@@ -5,7 +5,7 @@ import { issueToken } from "../src/api/auth"
 import { windowAt } from "../src/api/dnd-hours"
 import { nowSeconds } from "../src/api/ids"
 import { runDue } from "../src/scheduler"
-import { connect, expectError, ok, settle, workspace } from "./helpers"
+import { connect, eventually, expectError, ok, settle, workspace } from "./helpers"
 
 // DND hours (campflare.dnd.setSchedule), as dnd.* report them and activity's notify honors them (docs/dnd.md).
 
@@ -218,12 +218,60 @@ describe("the Scheduler", () => {
     expect(await dndInfo(bob.token)).toMatchObject({ next_dnd_end_ts: set.next_dnd_end_ts })
   })
 
-  it("reports the next window even when the Scheduler is late", async () => {
+  it("reports the next window even when the Scheduler is late, and arms it again", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
     await setHours(bob.token, { start: "23:00", end: "07:00" })
+    // The window went stale with no alarm set to move it on.
     await env.DB.prepare("UPDATE users SET dnd_window_start = 1, dnd_window_end = 2 WHERE id = ?").bind(bob.id).run()
+    await runInDurableObject(scheduler(w.teamId), (_s, state) => state.storage.deleteAlarm())
     const next = windowAt({ start: "23:00", end: "07:00", days: "sun,mon,tue,wed,thu,fri,sat" }, "UTC", nowSeconds())!
     expect(await dndInfo(bob.token)).toMatchObject({ next_dnd_start_ts: next.start, next_dnd_end_ts: next.end })
+    // Reading it armed the Scheduler (for now: it rings at once), whose run moves the window on and re-arms.
+    await eventually(async () => {
+      const row = await env.DB.prepare("SELECT dnd_window_end FROM users WHERE id = ?")
+        .bind(bob.id)
+        .first<{ dnd_window_end: number }>()
+      return row?.dnd_window_end === next.end ? true : undefined
+    })
+    await eventually(async () => ((await alarmOf(w.teamId)) === next.end * 1000 ? true : undefined))
+  })
+})
+
+describe("a skipped window", () => {
+  it("stays skipped when the zone changes, and a change to the same zone changes nothing", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    // Hours around now in UTC, and in UTC+1 (Etc/GMT-1) too.
+    await setHours(bob.token, { start: hourFromNow(-3), end: hourFromNow(3) })
+    expect(await notifies(w, bob)).toBe(false)
+    await ok("dnd.endDnd", {}, bob.token)
+    const skipped = await dndInfo(bob.token)
+    expect(skipped.next_dnd_start_ts).toBeGreaterThan(nowSeconds())
+
+    const link = await rtm(w.owner.token)
+    await ok("campflare.users.setTimezone", { tz: "UTC" }, bob.token)
+    await settle()
+    expect(link.frames.filter((f) => f.type === "user_change" || f.type === "dnd_updated_user")).toEqual([])
+    expect(await dndInfo(bob.token)).toMatchObject({ next_dnd_start_ts: skipped.next_dnd_start_ts })
+
+    await ok("campflare.users.setTimezone", { tz: "Etc/GMT-1" }, bob.token)
+    const moved = await dndInfo(bob.token)
+    // Tomorrow's window, an hour earlier in UTC: not the one in progress, which stays skipped.
+    expect(moved.next_dnd_start_ts).toBe(skipped.next_dnd_start_ts - 3600)
+    expect(await notifies(w, bob)).toBe(true)
+    // Armed by the end of the new window at the latest (the skipped one's end may ring first, and re-arm).
+    expect(await alarmOf(w.teamId)).toBeLessThanOrEqual(moved.next_dnd_end_ts * 1000)
+    link.close()
+  })
+
+  it("is forgotten when new hours are set", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    await setHours(bob.token, { start: hourFromNow(-1), end: hourFromNow(2) })
+    await ok("dnd.endDnd", {}, bob.token)
+    expect(await notifies(w, bob)).toBe(true)
+    await setHours(bob.token, { start: hourFromNow(-2), end: hourFromNow(2) })
+    expect(await notifies(w, bob)).toBe(false)
   })
 })

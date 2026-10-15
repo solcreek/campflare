@@ -34,6 +34,8 @@ export interface UserRow {
   /** The DND window in progress or next (epoch seconds), 0 without a schedule; the Scheduler moves it on. */
   dnd_window_start: number
   dnd_window_end: number
+  /** When dnd.endDnd was last called: the window in progress then is skipped. 0: never. */
+  dnd_skipped_at: number
   /** The profile photo's id (migration 0021), or null: the initials are drawn instead. */
   photo: string | null
   photo_type: string | null

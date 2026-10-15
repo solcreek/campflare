@@ -1,5 +1,5 @@
 import type { Ctx } from "./api/context"
-import { windowAt, type DndHours, type Window } from "./api/dnd-hours"
+import { inWindow, windowAt, type DndHours, type Window } from "./api/dnd-hours"
 import { nowSeconds } from "./api/ids"
 import { validZone } from "./api/when"
 import type { UserRow } from "./db/rows"
@@ -11,23 +11,47 @@ import type { PublishInput } from "./hub"
 
 type DndUser = Pick<
   UserRow,
-  "id" | "tz" | "snooze_until" | "dnd_start" | "dnd_end" | "dnd_days" | "dnd_window_start" | "dnd_window_end"
+  | "id"
+  | "tz"
+  | "snooze_until"
+  | "dnd_start"
+  | "dnd_end"
+  | "dnd_days"
+  | "dnd_window_start"
+  | "dnd_window_end"
+  | "dnd_skipped_at"
 >
+
+/** Tries at a guarded write to a person's DND row that keeps changing under it, before giving up. */
+export const ROW_TRIES = 3
 
 /** The person's DND hours, or undefined when they have none. */
 export function hoursOf(u: Pick<UserRow, "dnd_start" | "dnd_end" | "dnd_days">): DndHours | undefined {
   return u.dnd_start && u.dnd_end && u.dnd_days ? { start: u.dnd_start, end: u.dnd_end, days: u.dnd_days } : undefined
 }
 
-/** The first window not over by `at`, in the person's zone: what the row should store. */
-export function nextWindow(u: Pick<UserRow, "tz" | "dnd_start" | "dnd_end" | "dnd_days">, at: number) {
+/**
+ * The first window not over by `at`, in the person's zone: what the row should
+ * store. The window that was in progress when they last ended DND
+ * (`dnd_skipped_at`) is skipped, in whatever zone it is computed.
+ */
+export function nextWindow(
+  u: Pick<UserRow, "tz" | "dnd_start" | "dnd_end" | "dnd_days" | "dnd_skipped_at">,
+  at: number,
+): Window | undefined {
   const hours = hoursOf(u)
-  return hours ? windowAt(hours, validZone(u.tz), at) : undefined
+  if (!hours) return undefined
+  const tz = validZone(u.tz)
+  const w = windowAt(hours, tz, at)
+  return w && inWindow(w, u.dnd_skipped_at) ? windowAt(hours, tz, w.end) : w
 }
 
+/** Whether the stored window has ended without moving on: the Scheduler is late, or wasn't armed. */
+export const staleWindow = (u: DndUser, now = nowSeconds()) => Boolean(hoursOf(u)) && u.dnd_window_end <= now
+
 /**
- * The window in progress or next: the stored one while it lasts (dnd.endDnd may
- * have skipped one), else computed, should the Scheduler be late moving it on.
+ * The window in progress or next: the stored one while it lasts, else
+ * computed, should the Scheduler be late moving it on.
  */
 export function currentWindow(u: DndUser, now = nowSeconds()): Window | undefined {
   if (!hoursOf(u)) return undefined

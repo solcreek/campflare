@@ -18,7 +18,8 @@ it (its clients send it through settings), so:
   (`Asia/Kolkata`, which ICU calls `Asia/Calcutta`) keeps the name given.
   Answers the `user` and sends `user_change`; with DND hours set, the stored
   window moves to the same wall-clock hours in the new zone (`dnd_updated`,
-  `dnd_updated_user`).
+  `dnd_updated_user`), keeping a window skipped with `dnd.endDnd` skipped. The
+  zone it already has changes nothing and sends nothing.
 - Users carry Slack's `tz`, `tz_label` (`Central European Summer Time`) and
   `tz_offset` (seconds east of UTC, `7200`) for the instant they're read, so
   they change at DST transitions with no write. Both come from `Intl`
@@ -83,7 +84,13 @@ through `dnd.info`. Two places could set them here: `campflare.prefs.set`
 - **`dnd.teamInfo`**: the same per person, without `dnd_schedule`.
 - **`dnd.endDnd`**: ends do-not-disturb now: the window in progress is skipped
   (the next comes as usual) and a snooze ends. With nothing to end it changes
-  nothing.
+  nothing. The skip is kept as `users.dnd_skipped_at` (when it was called):
+  whichever window holds that instant is skipped, so it stays skipped when the
+  zone changes; new hours forget it. The write is guarded on the hours, the
+  zone and the skip it computed from; if any changed meanwhile it reads the row
+  again and redoes it (up to three times, then `internal_error`), so it never
+  answers `ok` without having ended DND. `campflare.dnd.setSchedule` and
+  `campflare.users.setTimezone` are guarded and retried the same way.
 - **`dnd.setSnooze`**, **`dnd.endSnooze`**: as before; `endSnooze` is one
   guarded UPDATE (`snooze_not_active` when there was none).
 
@@ -112,10 +119,17 @@ next, guarded on the row as read (the window, the hours, the zone), so a change
 made meanwhile keeps its own window and two runs move a window once. Each move
 sends `dnd_updated` and `dnd_updated_user`, since `next_dnd_*` changed.
 
-If the alarm is late, the stored window has ended and items notify until it
-moves (a late alarm only lets things through, never silences); `dnd.info`
-computes the next window itself when the stored one is over, so it never
-reports a stale one.
+Every write of a window (hours, zone, `dnd.endDnd`) arms the Scheduler at its
+end, and `nextDue()` always includes the soonest window end of the
+workspace's active people, so any arm (a reminder, a status) also finds a
+window left behind. Should a window still go stale (the arm call failed, or
+the alarm is late), the stored window has ended and items notify until it
+moves: a stale window only lets things through, never silences, which is why
+`notify()` doesn't guess at "ended but hours set". `dnd.info` and
+`dnd.teamInfo` compute the next window themselves when the stored one is over,
+so they never report a stale one, and arm the Scheduler (after the response)
+so it heals. There is no reactivation path for a deactivated person yet; one
+must arm the Scheduler when it writes their row.
 
 ### Events
 

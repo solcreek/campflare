@@ -11,7 +11,7 @@ import { displaySize, imageSize, isAnimated } from "../api/media"
 import { dropPhoto, photoPrefix, photoType, type Crop } from "../api/photos"
 import { userChanged } from "../events"
 import { ianaZone } from "../api/when"
-import { dndChanged, hoursOf, nextWindow } from "../dnd"
+import { dndChanged, hoursOf, nextWindow, ROW_TRIES } from "../dnd"
 import { armScheduler } from "../scheduler"
 
 export async function getUser(ctx: Ctx<Actor>, id: string) {
@@ -128,24 +128,32 @@ method("users.profile.set", "user", async (ctx) => {
 method("campflare.users.setTimezone", "user", async (ctx) => {
   const tz = ianaZone(ctx.args.req("tz"))
   if (!tz) throw new CampflareError("invalid_timezone")
-  const me = ctx.auth.user
-  // DND hours stay at the same wall-clock times: the window moves with the zone.
-  const w = nextWindow({ ...me, tz }, nowSeconds())
-  const user = (await first<UserRow>(
-    ctx.env.DB,
-    `UPDATE users SET tz = ?1, updated = ?2,
-       dnd_window_start = CASE WHEN dnd_start = ?6 AND dnd_end = ?7 AND dnd_days = ?8 THEN ?3 ELSE dnd_window_start END,
-       dnd_window_end = CASE WHEN dnd_start = ?6 AND dnd_end = ?7 AND dnd_days = ?8 THEN ?4 ELSE dnd_window_end END
-     WHERE id = ?5 RETURNING *`,
-    tz,
-    nowSeconds(),
-    w?.start ?? 0,
-    w?.end ?? 0,
-    me.id,
-    me.dnd_start,
-    me.dnd_end,
-    me.dnd_days,
-  ))!
+  let me: UserRow | undefined = ctx.auth.user
+  // The same zone changes nothing: the window, a skipped one included, stays as it is.
+  if (me.tz === tz) return { user: userJson(me, ctx.origin) }
+  let user: UserRow | undefined
+  let w: ReturnType<typeof nextWindow>
+  for (let tries = 0; me && !user && tries < ROW_TRIES; tries++) {
+    // DND hours stay at the same wall-clock times: the window moves with the zone, and a window
+    // skipped with dnd.endDnd stays skipped (dnd_skipped_at). Guarded on what it computed from.
+    w = nextWindow({ ...me, tz }, nowSeconds())
+    user = await first<UserRow>(
+      ctx.env.DB,
+      `UPDATE users SET tz = ?1, updated = ?2, dnd_window_start = ?3, dnd_window_end = ?4
+       WHERE id = ?5 AND dnd_start = ?6 AND dnd_end = ?7 AND dnd_days = ?8 AND dnd_skipped_at = ?9 RETURNING *`,
+      tz,
+      nowSeconds(),
+      w?.start ?? 0,
+      w?.end ?? 0,
+      me.id,
+      me.dnd_start,
+      me.dnd_end,
+      me.dnd_days,
+      me.dnd_skipped_at,
+    )
+    if (!user) me = await first<UserRow>(ctx.env.DB, "SELECT * FROM users WHERE id = ?", ctx.auth.user.id)
+  }
+  if (!user) throw new CampflareError("internal_error")
   if (w) await armScheduler(ctx.env, ctx.auth.team.id, w.end)
   userChanged(ctx, user)
   if (hoursOf(user)) dndChanged(ctx, ctx.auth.team.id, user)

@@ -431,7 +431,8 @@ async function moveDndWindows(run: Run) {
     return stmt(
       db,
       `UPDATE users SET dnd_window_start = ?, dnd_window_end = ?
-       WHERE id = ? AND dnd_window_end = ? AND dnd_start = ? AND dnd_end = ? AND dnd_days = ? AND tz = ? RETURNING *`,
+       WHERE id = ? AND dnd_window_end = ? AND dnd_start = ? AND dnd_end = ? AND dnd_days = ? AND tz = ?
+         AND dnd_skipped_at = ? RETURNING *`,
       w?.start ?? 0,
       w?.end ?? 0,
       u.id,
@@ -440,6 +441,7 @@ async function moveDndWindows(run: Run) {
       u.dnd_end,
       u.dnd_days,
       u.tz,
+      u.dnd_skipped_at,
     )
   })
   const moved = (await db.batch(moves)).flatMap((r) => r.results as UserRow[])

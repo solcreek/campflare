@@ -13,6 +13,10 @@ ALTER TABLE users ADD COLUMN dnd_days TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN dnd_window_start INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN dnd_window_end INTEGER NOT NULL DEFAULT 0;
 
+-- When dnd.endDnd was last called (0: never since the hours were set): the
+-- window in progress then is skipped, in whatever zone the window is computed.
+ALTER TABLE users ADD COLUMN dnd_skipped_at INTEGER NOT NULL DEFAULT 0;
+
 -- What the Scheduler looks for: statuses to clear when they expire, windows to move on.
 CREATE INDEX users_status_expiry ON users (team_id, status_expiration) WHERE status_expiration > 0;
 CREATE INDEX users_dnd_window ON users (team_id, dnd_window_end) WHERE dnd_window_end > 0;
