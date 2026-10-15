@@ -60,6 +60,7 @@ export interface TokenRow {
   user_id: string | null
   app_id: string | null
   scopes: string
+  expires: number | null
   label: string
   /** The OAuth client it was issued to by oauth.v2.access, if any. */
   client_id: string | null

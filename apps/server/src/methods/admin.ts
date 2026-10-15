@@ -1,6 +1,6 @@
 import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { AppRow, TokenRow, UserRow } from "../db/rows"
-import { APP_SCOPES, DEFAULT_BOT_SCOPES, FULL_USER_SCOPES, issueToken } from "../api/auth"
+import { APP_SCOPES, issueToken } from "../api/auth"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
@@ -116,7 +116,7 @@ method("campflare.bootstrap", "none", async (ctx) => {
     teamId,
     kind: "user",
     userId: owner.id,
-    scopes: FULL_USER_SCOPES,
+    scopes: ["full"],
     label: "bootstrap",
   })
   const team = { id: teamId, name: teamName, domain, created: now }
@@ -143,7 +143,7 @@ method("campflare.users.create", "user", async (ctx) => {
       teamId: ctx.auth.team.id,
       kind: "user",
       userId: user.id,
-      scopes: FULL_USER_SCOPES,
+      scopes: ["full"],
       label: "created by admin",
     }),
     password === undefined ? undefined : setPassword(ctx.env, user, password),
@@ -193,7 +193,7 @@ method("campflare.tokens.create", "user", async (ctx) => {
     teamId: ctx.auth.team.id,
     kind: "user",
     userId,
-    scopes: FULL_USER_SCOPES,
+    scopes: ["full"],
     label: ctx.args.str("label") ?? "",
   })
   return { token, user_id: userId }
@@ -258,7 +258,7 @@ method("campflare.apps.create", "user", async (ctx) => {
       kind: "bot",
       userId: botUser.id,
       appId,
-      scopes: DEFAULT_BOT_SCOPES,
+      scopes: ["bot"],
     }),
     issueToken(ctx.env, { teamId: ctx.auth.team.id, kind: "app", appId, scopes: APP_SCOPES }),
   ])

@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/server"
 import { createLocalJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { actorFor, authenticate } from "../api/auth"
+import { expandScopes, GRANTABLE_USER_SCOPES } from "../api/scopes"
 import { publicOrigin } from "../api/origin"
 import { CAMPFLARE_PROVIDER } from "../auth/sign-in"
 import { authFor } from "../auth/routes"
@@ -57,7 +58,13 @@ async function verifyJwt(env: Env, request: Request, token: string): Promise<Aut
   }
   let actor
   try {
-    actor = await actorFor(env, link.accountId)
+    // What the person consented to for this client, as an xoxp from oauth.v2.access would hold. An MCP
+    // client that asked for none of ours (most ask for openid alone) gets what the consent page
+    // describes: reading what the person can read, and posting as them (the write preset).
+    const granted = (typeof claims.scope === "string" ? claims.scope.split(" ") : []).filter((s) =>
+      GRANTABLE_USER_SCOPES.has(s),
+    )
+    actor = await actorFor(env, link.accountId, expandScopes((granted.length ? granted : ["write"]).join(",")))
   } catch (error) {
     if (error instanceof CampflareError) throw new OAuthError(OAuthErrorCode.InvalidToken, error.code)
     throw error

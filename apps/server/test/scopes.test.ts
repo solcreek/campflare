@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import "../src/index"
 import { issueToken } from "../src/api/auth"
 import { methods } from "../src/api/context"
-import { acceptedScopes, NEEDS } from "../src/api/scopes"
+import { acceptedScopes, DEFAULT_BOT_SCOPES, FULL_USER_SCOPES, NEEDS, PRESETS } from "../src/api/scopes"
 import { call, expectError, ok, ORIGIN, workspace } from "./helpers"
 
 /** A user token holding only these scopes, as a person would mint for an agent. */
@@ -165,5 +165,73 @@ describe("missing_scope", () => {
     )
     const text = await res.text()
     expect(text).toContain("missing_scope")
+  })
+})
+
+describe("stored scopes", () => {
+  it("expands a preset when the token is used", async () => {
+    const w = await workspace()
+    const reader = await narrow(w.teamId, w.owner.id, ["read"])
+    await ok("conversations.history", { channel: w.general }, reader)
+    await ok("search.messages", { query: "café" }, reader)
+    await expectError("chat.postMessage", { channel: w.general, text: "no" }, reader, "missing_scope")
+    const res = await SELF.fetch(new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${reader}` } }))
+    expect(res.headers.get("x-oauth-scopes")!.split(",")).toEqual(PRESETS.read)
+  })
+
+  it("gives a person's own tokens every user scope, and an app's bot the bot defaults", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Vigía")
+    const scopesOf = async (token: string) =>
+      (await SELF.fetch(new Request(`${ORIGIN}/api/auth.test`, { headers: { authorization: `Bearer ${token}` } })))
+        .headers.get("x-oauth-scopes")!
+        .split(",")
+    expect(await scopesOf(w.owner.token)).toEqual(FULL_USER_SCOPES)
+    expect(await scopesOf(app.botToken)).toEqual(DEFAULT_BOT_SCOPES)
+  })
+
+  it("refuses an expired token with token_expired", async () => {
+    const w = await workspace()
+    const now = Math.floor(Date.now() / 1000)
+    const live = await issueToken(env, { teamId: w.teamId, kind: "user", userId: w.owner.id, scopes: ["full"], expires: now + 60 })
+    const dead = await issueToken(env, { teamId: w.teamId, kind: "user", userId: w.owner.id, scopes: ["full"], expires: now })
+    await ok("auth.test", {}, live)
+    await expectError("auth.test", {}, dead, "token_expired")
+  })
+})
+
+describe("migration 0018", () => {
+  /** Runs the migration's scope rewrite again, over rows written the way older code wrote them. */
+  const rewrite = async (teamId: string) => {
+    const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0018"))!
+    // Only this test's team: the database is shared with the other tests.
+    for (const query of migration.queries.filter((q) => q.trim().startsWith("UPDATE"))) {
+      await env.DB.prepare(query.replace("WHERE ", "WHERE team_id = ? AND ")).bind(teamId).run()
+    }
+  }
+
+  it("makes hand-made and first-party person tokens full, bots the bot defaults, and keeps other OAuth grants", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Antiguo")
+    const old = "channels:history,channels:read,chat:write"
+    const mint = (kind: "user" | "bot", userId: string, clientId?: string) =>
+      issueToken(env, { teamId: w.teamId, kind, userId, scopes: [old], clientId, ...(kind === "bot" ? { appId: app.id } : {}) })
+    const [hand, cli, other, bot] = await Promise.all([
+      mint("user", w.owner.id),
+      mint("user", w.owner.id, "campflare-cli"),
+      mint("user", w.owner.id, "https://agent.example/client.json"),
+      mint("bot", app.botUserId),
+    ])
+    await rewrite(w.teamId)
+    const stored = async (token: string) => {
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))]
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+      return (await env.DB.prepare("SELECT scopes FROM tokens WHERE hash = ?").bind(hash).first<{ scopes: string }>())!.scopes
+    }
+    expect(await stored(hand)).toBe("full")
+    expect(await stored(cli)).toBe("full")
+    expect(await stored(other)).toBe(old)
+    expect(await stored(bot)).toBe("bot")
   })
 })

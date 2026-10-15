@@ -212,7 +212,6 @@ export const FULL_USER_SCOPES = [
   "admin.users:write",
 ]
 
-export const PRESETS: Record<string, string[]> = { read: READ, write: WRITE, full: FULL_USER_SCOPES }
 
 export const DEFAULT_BOT_SCOPES = [
   "channels:history",
@@ -243,3 +242,26 @@ export const DEFAULT_BOT_SCOPES = [
 ]
 
 export const APP_SCOPES = ["connections:write"]
+
+/**
+ * Named sets of user scopes. A token may store a name in place of a list
+ * (migration 0018): it is expanded when the token is used, so the token gains
+ * what later features add to the set.
+ */
+export const PRESETS: Record<string, string[]> = { read: READ, write: WRITE, full: FULL_USER_SCOPES }
+
+/** The stored names a token's scopes may use: the presets, and `bot` for an app's bot token. */
+const STORED: Record<string, string[]> = { ...PRESETS, bot: DEFAULT_BOT_SCOPES }
+
+/** A token's stored scopes (comma-separated scopes and preset names) as the scopes they grant. */
+export function expandScopes(stored: string): string[] {
+  const out = new Set<string>()
+  for (const s of stored.split(",")) {
+    if (!s) continue
+    for (const scope of STORED[s] ?? [s]) out.add(scope)
+  }
+  return [...out]
+}
+
+/** The scopes and presets a person may grant (OAuth consent, tokens.create). */
+export const GRANTABLE_USER_SCOPES = new Set([...FULL_USER_SCOPES, ...Object.keys(PRESETS)])
