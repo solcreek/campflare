@@ -60,17 +60,17 @@ All are `campflare.*`, xoxp only, for **admins** (`not_an_admin`), and want
 `admin.import:write` (`campflare.import.status` and `.list`: `admin.import:read`).
 Both scopes are in the `full` preset only.
 
-| method                           | arguments                                                                                                    | answers                                          |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| `campflare.import.start`         | `format` (`slack-export`), `fingerprint`, `merge_into_existing`, `files` (`skip`, `download`), `source_name` | `job`, `resumed`                                 |
-| `campflare.import.users`         | `job`, `users` (users.json entries, ≤ 500)                                                                   | `mapped`, `created`, `users` (source → id)       |
-| `campflare.import.conversations` | `job`, `conversations` (≤ 200; each with `type`: `channel`, `group`, `mpim`, `im`)                           | `conversations` (source → id, `action`)          |
-| `campflare.import.messages`      | `job`, `conversation` (source id), `messages` (≤ 1000, ≤ 4 MB), `cursor`                                     | `channel`, `imported`, `skipped`, `files_needed` |
-| `campflare.import.files`         | `job`, `conversation`, `ts`, `files` (≤ 10, `[{source_id, file_id, title}]`)                                 | `attached`, `skipped`, `files`                   |
-| `campflare.import.finish`        | `job`                                                                                                        | `done`, `remaining`, `job`                       |
-| `campflare.import.undo`          | `job`                                                                                                        | `done`, `removed`, `job`                         |
-| `campflare.import.status`        | `job`                                                                                                        | `job`, `conversations` (with `cursor`)           |
-| `campflare.import.list`          | none                                                                                                         | `jobs`, newest first                             |
+| method                           | arguments                                                                                                    | answers                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `campflare.import.start`         | `format` (`slack-export`), `fingerprint`, `merge_into_existing`, `files` (`skip`, `download`), `source_name` | `job`, `resumed`                                                      |
+| `campflare.import.users`         | `job`, `users` (users.json entries, ≤ 500)                                                                   | `mapped`, `created`, `users` (source → id)                            |
+| `campflare.import.conversations` | `job`, `conversations` (≤ 200; each with `type`: `channel`, `group`, `mpim`, `im`)                           | `conversations` (source → id, `action`)                               |
+| `campflare.import.messages`      | `job`, `conversation` (source id), `messages` (≤ 1000, ≤ 4 MB), `cursor`                                     | `channel`, `imported`, `skipped`, `files_needed`                      |
+| `campflare.import.files`         | `job`, `conversation`, `ts`, `files` (≤ 10, `[{source_id, file_id, title}]`)                                 | `attached`, `skipped`, `files`                                        |
+| `campflare.import.finish`        | `job`                                                                                                        | `done`, `remaining`, `job`                                            |
+| `campflare.import.undo`          | `job`                                                                                                        | `done`, `removed`, `job`                                              |
+| `campflare.import.status`        | `job`, `files_needed`, `files_after`                                                                         | `job`, `conversations` (with `cursor`); `files_needed`, `files_after` |
+| `campflare.import.list`          | none                                                                                                         | `jobs`, newest first                                                  |
 
 A job (`import_jobs`, migration 0026) is `{ id: "J…", state, format, options,
 counts, created_by, created, updated, finished }`. `state` is `running`,
@@ -80,17 +80,22 @@ rows only, so a re-sent chunk adds nothing): `users_mapped`,
 `conversations_renamed`, `conversations_skipped`, `messages`,
 `messages_skipped`, `reactions`, `pins`, `files` (files the messages carry),
 `files_attached`, `files_skipped` (the difference), and `unmapped_users` (ids
-referenced but not in `users.json`, at most 100). The counts after an insert
-are bumped in the same batch with SQLite's `changes()`, so they count what
-that statement wrote. A job that isn't running refuses writes
-(`import_not_running`).
+referenced but not in `users.json`, at most 100, appended in SQL so chunks sent
+at once all add theirs). The counts after an insert are bumped in the same
+batch with SQLite's `changes()`, so they count what that statement wrote; a
+skipped message is noted in `import_skipped` and a skipped conversation in
+`import_conversations` (with no id), so they too are counted once however often
+they're sent. A job that isn't running refuses writes (`import_not_running`).
 
 `campflare.import.messages` answers `imported` (how many of the chunk's
 messages are the job's now, re-sent ones included), `skipped` (those that
 clashed with a message that was already there) and `files_needed` (the chunk's
 files not yet attached). Its `cursor` (the day file, for the CLI) is stored on
 the conversation's mapping and answered by `campflare.import.status`, so a
-re-run starts after the last day that went in whole.
+re-run starts after the last day that went in whole. With `files_needed`,
+`campflare.import.status` also answers the export's files not attached yet
+(`{ id, conversation, ts, name }`, 500 a page, the next after `files_after`),
+whatever the cursors say: a re-run retries the transfers that failed.
 
 The mappings live in `import_users`, `import_conversations` and
 `import_files` (an export file per row, `file_id` NULL until attached), keyed
@@ -112,8 +117,10 @@ per call, whichever comes first.
 names, title and time zone, no email and no token, tagged with the job. Its
 handle is the export's (made a valid handle), or `<name>-imported`,
 `-imported-2`… when taken by a person or a user group. Bots in `users.json`
-become deactivated bot users the same way. `USLACKBOT` stays `USLACKBOT` (what
-Campflare's tombstones already use).
+become deactivated bot users the same way. Slackbot (`USLACKBOT`) stays
+`USLACKBOT` as a message's author (what Campflare's tombstones already use),
+but it has no row in `users`: it is never a member or a creator, and DMs with
+it (every export has them) are `skipped`.
 
 Why deactivated placeholders and not invitable users: an import must not hand
 out accounts, and a placeholder can't sign in or be messaged. To have someone's
@@ -125,8 +132,9 @@ email matches and their messages are theirs. Claiming a placeholder afterwards
 **Conversations.** A public channel stays public, `groups.json` becomes private
 channels, `mpims.json` group DMs and `dms.json` DMs. A channel whose name is
 taken in the workspace is **renamed** `<name>-imported` (then
-`-imported-2`…) unless `merge_into_existing` is given, in which case the
-messages go into the existing channel. A DM or group DM always goes into the
+`-imported-2`…) unless `merge_into_existing` is given and the existing channel
+is as private as the exported one, in which case the messages go into it: a
+private channel's history never lands in a public one, nor back. A DM or group DM always goes into the
 existing one with the same people, if there is one (there can't be two).
 Channel members come from the export's `members`; every mapped user is added
 (placeholders too: a deactivated person stays a member in Campflare, as on
@@ -145,7 +153,8 @@ mapped conversation.
 - **Threads**: `thread_ts` is kept. Heads and replies may arrive in any order
   and in any chunk: each chunk recounts the threads it touches (`reply_count`,
   `latest_reply`, `reply_users`, the head's `thread_ts`) from what is stored,
-  so the last chunk leaves them right. A thread whose head never comes (Slack
+  so the last chunk leaves them right. That includes a head that was there
+  before (merging), when an imported reply answers it. A thread whose head never comes (Slack
   drops deleted heads from exports) gets a tombstone head at finish, as
   `chat.delete` leaves one, so its replies stay reachable.
 - **Edits**: `edited.ts` and the mapped `edited.user`.
@@ -168,8 +177,12 @@ mapped conversation.
   `files.getUploadURLExternal` (the same path as any upload), and
   `campflare.import.files` attaches it: the file becomes the author's, shared in
   the conversation, tagged with the job, and the placeholder line goes.
-  `campflare.import.messages` answers `files_needed` (the chunk's files not yet
-  attached), so a re-run downloads only what is missing. Files Slack hid
+  After the messages, the CLI asks `campflare.import.status` for every file not
+  attached yet, so a re-run downloads only what is missing, and retries what
+  failed. The token goes only to Slack's own https hosts (`files.slack.com`,
+  `<workspace>.slack.com`) or the `--slack-api` origin: a file elsewhere (an
+  external one, `is_external`, or a crafted export's URL) is counted as
+  external, never fetched, and keeps its line. Files Slack hid
   (`hidden_by_limit`, tombstones) have no URL and stay placeholders.
 
 ### No events
@@ -186,8 +199,10 @@ conversations and messages on their next load or reconnect, which re-lists.
 and answers `done: false` with `remaining` until all are: it adds tombstone
 heads for orphan threads, sets each reply's `parent_user_id`, fills
 `thread_participants` (so a later reply notifies the thread's people),
-moves every member's `last_read` up to the newest imported message (history
-arrives read) and the conversation's `updated` to it. Then the job is
+moves `last_read` up to the newest imported message for the memberships the
+job added (history arrives read), never past a message that was there or came
+meanwhile, and leaves everyone else's alone, so nobody's unread messages are
+hidden; and the conversation's `updated` to the newest imported message. Then the job is
 `finished`. Search needs nothing: the FTS index follows `messages` by trigger.
 
 ## Undo
@@ -199,10 +214,12 @@ finishing (`undo_window_passed` after). It deletes up to 2000 messages per call,
 with their reactions, stars and activity, answering `done: false` until none are
 left; then the memberships, files (and their R2 objects), the conversations the
 job created (with their bookmarks, stars, notification levels and activity) and
-the placeholder users. The job ends `undone`. Undo refuses (before it starts) with
-`import_in_use` when a conversation the job created holds messages that didn't
-come from it: people have used it since, and removing it would take their
-messages too.
+the placeholder users. A head that was there before and had imported replies
+is counted again (a head no more if none are left). The job ends `undone`. Undo
+refuses (before it starts) with `import_in_use` when a conversation the job
+created holds messages that didn't come from it, or someone replied to an
+imported message: people have used it since, and removing it would take their
+messages too, or leave their replies without a thread.
 
 ## CLI
 

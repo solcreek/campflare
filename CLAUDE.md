@@ -675,8 +675,9 @@ with its own zip reader `zip.ts` on `node:zlib`). A job (`import_jobs`, migratio
 `import_files`) and tags every row it writes (`import_job` on messages,
 reactions, members, files, users, conversations), so `campflare.import.undo`
 removes it, a bounded piece per call. People map by email, else become
-deactivated placeholders without tokens; a taken channel name becomes
-`name-imported` unless `merge_into_existing`; DMs merge by `member_key`. Messages
+deactivated placeholders without tokens (Slackbot stays `USLACKBOT`, never a
+member: DMs with it are skipped); a taken channel name becomes `name-imported`
+unless `merge_into_existing` and the privacy matches; DMs merge by `member_key`. Messages
 keep Slack's `ts` and go in with `INSERT … SELECT FROM json_each` (`INSERT OR
 IGNORE`, so a re-sent chunk changes nothing and existing messages are never
 touched), split under D1's 2 MB argument; counts are bumped in the same batch
@@ -684,7 +685,8 @@ with `changes()`. **Never through `postMessage`**: an import publishes no
 events and records no activity. Each chunk recounts the threads it touches
 (`recountThreads()`), so heads and replies arrive in any order; `finish` adds
 tombstone heads for orphan replies, `parent_user_id`, `thread_participants`
-and read markers, 10 conversations per call. Files are a
+and read markers (only for memberships the job added), 10 conversations per
+call. The CLI sends the source token only to Slack's https hosts. Files are a
 `[file not imported: name]` line unless the client uploads them
 (`files.getUploadURLExternal`) and `campflare.import.files` attaches them.
 Custom emoji is a seam (`importCustomEmoji()` in the CLI).
