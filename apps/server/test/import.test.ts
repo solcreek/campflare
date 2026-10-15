@@ -471,8 +471,8 @@ describe("campflare.import", () => {
   it("merges into existing conversations only when asked, and never touches their messages", async () => {
     const { w, design, name } = await setUp()
     const existing = await ok<{ ts: string }>("chat.postMessage", { channel: design, text: "Ours" }, w.owner.token)
-    const create = (name: string, is_private: boolean) =>
-      ok<{ channel: { id: string } }>("conversations.create", { name, is_private }, w.owner.token)
+    const create = (channel: string, is_private: boolean) =>
+      ok<{ channel: { id: string } }>("conversations.create", { name: channel, is_private }, w.owner.token)
     const tokyo = (await create("東京", true)).channel.id
     const plans = (await create("secret-plans", true)).channel.id
     const job = await start(w.owner.token, { merge_into_existing: true })
