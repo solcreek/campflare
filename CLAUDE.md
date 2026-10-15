@@ -570,7 +570,7 @@ undefined by default, so `campflare.users.requestPasswordReset` answers
 requestPasswordReset does its per-account work there too (so timing says
 nothing) and is throttled per email and address and per address
 (`reset:<email>:<ip>`, `reset-ip:<ip>`), never per email alone. Tests install a
-sender with `setEmailSender()`. Pages send `referrer-policy: no-referrer`, since
+sender with `setEmailSender()`. Pages send `referrer-policy: same-origin` (not `no-referrer`, under which form POSTs carry `Origin: null`), since
 their URLs hold codes. Role checks and `HANDLE` live in `src/api/roles.ts`,
 email normalizing in `src/api/email-address.ts`.
 

@@ -73,8 +73,10 @@ export function page(
     `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction(url, init.formActions)}; frame-ancestors 'none'`,
   )
   headers.set("x-frame-options", "DENY")
-  // A page's URL can hold a secret (/join/<code>, /reset/<code>): never pass it on as a Referer.
-  headers.set("referrer-policy", "no-referrer")
+  // A page's URL can hold a secret (/join/<code>, /reset/<code>): never pass it to another site as a
+  // Referer. Not no-referrer: under it a browser's form POST carries `Origin: null`, which Better
+  // Auth (behind /login and /consent) and crossSite() rightly refuse.
+  headers.set("referrer-policy", "same-origin")
   return new Response(html, { status: init.status ?? 200, headers })
 }
 
