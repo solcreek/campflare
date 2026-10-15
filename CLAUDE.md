@@ -500,7 +500,8 @@ create apps (an app is a bot user + xoxb + xapp).
 
 **Profiles.** `users.setPhoto` (multipart `image`: PNG, JPEG, WebP or a still
 GIF, sniffed from its bytes; animated is `too_many_frames`; optional square
-crop `crop_x`/`crop_y`/`crop_w`) stores the original in R2 at
+crop `crop_x`/`crop_y`/`crop_w`, in the upright photo's coordinates: a JPEG's
+EXIF orientation is applied first, `jpegOrientation()` in `src/api/media.ts`) stores the original in R2 at
 `<team>/avatars/<user>/<photo>/original` and sets `users.photo` (a random id),
 `photo_type`, `photo_crop` (migration 0021). `src/api/photos.ts`: `userJson`'s
 `image_24` … `image_1024` and `image_original` (plus `is_custom_image`) are
@@ -510,8 +511,12 @@ the binding, or when it fails, the original is served, briefly cached. No token,
 as the initials (`/avatars/:id?s=n`, still the fallback) need none: `<img>` can't
 send one; the id is unguessable and new with each photo, so the URLs are served
 `immutable` and change when the photo does. `users.deletePhoto` and a new photo
-drop the old objects. A status past `status_expiration` reads as empty
-(`status()` in shapes). `users.profile.set`, `setPhoto` and `deletePhoto`
+read the photo they replace in the UPDATE's batch and delete its R2 prefix
+(`dropPhoto()`); `handlePhoto` re-reads `users.photo` after writing a size and
+takes the write back if the photo changed meanwhile, so races leave no orphans.
+A status past `status_expiration` reads as empty (`status()` in shapes), but
+nothing announces the moment it expires yet: no `user_change` is sent then
+(a scheduler should). `users.profile.set`, `setPhoto` and `deletePhoto`
 publish `user_change` (`userChanged()` in `src/events.ts`, shared with roles).
 
 **User groups.** `src/methods/usergroups.ts`, tables `usergroups` and

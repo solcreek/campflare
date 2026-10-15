@@ -467,6 +467,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
 - Rate limiting (HTTP 429 with `Retry-After`).
 - Pins, bookmarks, stars, reminders, scheduled messages, custom
   emoji, an admin setting restricting who may manage user groups, scheduled DND hours, time zones.
+- A `user_change` when a status expires (it reads as cleared at once, but
+  clients holding the profile learn only on their next read).
 - Sharding a very large workspace's hub across several Durable Objects.
 - Huddles: expiring the seat of a browser that died without leaving, and
   Slack's `calls.*` API (see [docs/huddles.md](docs/huddles.md)).
