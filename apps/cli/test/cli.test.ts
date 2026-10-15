@@ -1254,3 +1254,48 @@ describe("inbox and notify", () => {
     expect(await owner.run("notify", "#general", "--default", "all")).toBe(2)
   })
 })
+
+describe("custom emoji", () => {
+  it("adds, lists, aliases, renames and removes custom emoji", async () => {
+    const cli = await loggedIn()
+    const png = await sunsetPng(64, 64)
+    cli.io.readFile = async (path) => {
+      if (path !== "/tmp/fiesta.png") throw new Error(`ENOENT: ${path}`)
+      return png
+    }
+    expect(await cli.run("emoji")).toBe(0)
+    expect(cli.out).toBe("No custom emoji yet: campflare emoji add <name> <file>\n")
+    cli.clear()
+    expect(await cli.run("emoji", "add", ":fiesta:", "/tmp/fiesta.png")).toBe(0)
+    expect(cli.out).toBe("Added :fiesta:\n")
+    expect(await cli.run("emoji", "alias", "matsuri", "fiesta")).toBe(0)
+    expect(await cli.run("emoji", "alias", "yay", "+1", "--json")).toBe(0)
+    cli.clear()
+    expect(await cli.run("emoji")).toBe(0)
+    expect(cli.out).toMatch(
+      /^:fiesta: {2}http\S+\/emoji\/T\w+\/[0-9a-f]+\.png\n:matsuri: {2}alias of :fiesta:\n:yay: {2}alias of :\+1:\n$/,
+    )
+    cli.clear()
+    expect(await cli.run("emoji", "rename", "fiesta", "fete", "--json")).toBe(0)
+    const renamed = JSON.parse(cli.out) as { name: string; url: string }
+    expect(renamed.name).toBe("fete")
+    expect((await fetch(renamed.url)).status).toBe(200)
+    cli.clear()
+    expect(await cli.run("emoji", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toEqual({ fete: renamed.url, matsuri: "alias:fete", yay: "alias:+1" })
+    cli.clear()
+    expect(await cli.run("emoji", "remove", "fete")).toBe(0)
+    expect(cli.out).toBe("Removed :fete: (and any aliases of it)\n")
+    cli.clear()
+    expect(await cli.run("emoji", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toEqual({ yay: "alias:+1" })
+
+    expect(await cli.run("emoji", "add", "tada", "/tmp/fiesta.png")).toBe(1)
+    expect(cli.err).toContain("error_name_taken_i18n")
+    expect(await cli.run("emoji", "remove", "fete")).toBe(1)
+    expect(cli.err).toContain("emoji_not_found")
+    expect(await cli.run("emoji", "add", "x2")).toBe(2)
+    expect(await cli.run("emoji", "remove")).toBe(2)
+    expect(await cli.run("emoji", "frobnicate")).toBe(2)
+  })
+})

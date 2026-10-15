@@ -102,6 +102,10 @@ Workspace
   bookmarks <#channel> [--json]    the conversation's bookmarks bar
   bookmark add <#channel> <url> [--title <t>] [--emoji :x:]
   bookmark edit <#channel> <id> [--title <t>] [--url <url>] [--emoji :x:]   bookmark remove <#channel> <id>
+  emoji [--json]                   the workspace's custom emoji (name → image URL, or alias:<name>)
+  emoji add <name> <file|https url>   a PNG, GIF, JPEG or WebP up to 128 KB (scaled to 128 px)
+  emoji alias <name> <existing>    another name for an emoji, custom or standard
+  emoji remove <name>              emoji rename <old> <new>   (yours, or anyone's as an admin)
   listen [--json] [--socket]       stream live events (RTM, or Socket Mode with an app token)
   events [--cursor N] [--wait S] [--follow] [--json]
                                    the event log (Campflare): what came since a cursor, by polling
@@ -953,6 +957,54 @@ const commands: Record<string, Command> = {
           })
     if (values.json) return s.print(res.bookmark)
     io.stdout(`${sub === "add" ? "Added" : "Changed"}: ${bookmarkLine(res.bookmark)}`)
+  },
+
+  async emoji(argv, io) {
+    const [sub, ...rest] = argv
+    const { values, positionals } = parse(sub && !sub.startsWith("-") ? rest : argv)
+    const s = await session(io, values)
+    const shortcode = (n: string) => `:${n.replace(/^:|:$/g, "")}:`
+    if (!sub || sub.startsWith("-")) {
+      const { emoji } = await s.client.call<{ ok: boolean; emoji: Record<string, string> }>("emoji.list")
+      if (values.json) return s.print(emoji)
+      const names = Object.keys(emoji).toSorted()
+      if (names.length === 0) io.stdout("No custom emoji yet: campflare emoji add <name> <file>\n")
+      for (const name of names) {
+        const value = emoji[name]!
+        io.stdout(`:${name}:  ${value.startsWith("alias:") ? `alias of :${value.slice(6)}:` : value}\n`)
+      }
+      return
+    }
+    const [name, arg] = positionals
+    type Changed = { ok: boolean; emoji?: { name: string; url: string } }
+    let res: Changed
+    let said: string
+    if (sub === "add") {
+      if (!name || !arg) throw new UsageError("emoji add needs a name and an image file (or an https URL)")
+      res = /^https:\/\//i.test(arg)
+        ? await s.client.call<Changed>("admin.emoji.add", { name, url: arg })
+        : await s.client.call<Changed>("campflare.emoji.add", {
+            name,
+            image: new File([await io.readFile(arg)], basename(arg)),
+          })
+      said = `Added ${shortcode(res.emoji!.name)}`
+    } else if (sub === "alias") {
+      if (!name || !arg) throw new UsageError("emoji alias needs a new name and the emoji it stands for")
+      res = await s.client.call<Changed>("admin.emoji.addAlias", { name, alias_for: arg })
+      said = `Added ${shortcode(res.emoji!.name)} as another name for ${shortcode(arg)}`
+    } else if (sub === "remove") {
+      if (!name || arg) throw new UsageError("emoji remove needs one name")
+      res = await s.client.call<Changed>("admin.emoji.remove", { name })
+      said = `Removed ${shortcode(name)} (and any aliases of it)`
+    } else if (sub === "rename") {
+      if (!name || !arg) throw new UsageError("emoji rename needs the old name and the new one")
+      res = await s.client.call<Changed>("admin.emoji.rename", { name, new_name: arg })
+      said = `Renamed ${shortcode(name)} to ${shortcode(res.emoji!.name)}`
+    } else {
+      throw new UsageError("emoji takes add, alias, remove or rename (or nothing, to list them)")
+    }
+    if (values.json) return s.print(res.emoji ?? { ok: true })
+    io.stdout(`${said}\n`)
   },
 
   async save(argv, io) {
