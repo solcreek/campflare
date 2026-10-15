@@ -66,7 +66,8 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
   const reply = (body: Record<string, unknown>) =>
     c.json(body, 200, { "x-campflare-req-id": crypto.randomUUID(), ...scopeHeaders })
   if (!def) return reply({ ok: false, error: "unknown_method", req_method: name })
-  if (def.access !== "none") scopeHeaders["x-accepted-oauth-scopes"] = acceptedScopes(NEEDS[name] ?? []).join(",")
+  const accepted = acceptedScopes(NEEDS[name] ?? [])
+  if (accepted.length) scopeHeaders["x-accepted-oauth-scopes"] = accepted.join(",")
 
   try {
     const args = await Args.from(c.req.raw)
