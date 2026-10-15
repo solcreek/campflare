@@ -9,7 +9,7 @@ import {
 } from "../db/messages"
 import { announcePin, pinCountFrom, pinCountStatement } from "../db/pins"
 import { stmt } from "../db/query"
-import { unsaveStatement } from "../db/stars"
+import { announceUnsaved, unsaveStatement } from "../db/stars"
 import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
 import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
@@ -271,7 +271,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
-    const [, , tombstone, audience, reactions, pins] = await db.batch([
+    const [, unsaved, tombstone, audience, reactions, pins] = await db.batch([
       stmt(
         db,
         `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
@@ -295,10 +295,11 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       extras,
     })
     unpinned(ctx, c, message, { extras, audience: audienceFrom(audience!), count: pinCountFrom(pins!) })
+    announceUnsaved(ctx, c.team_id, unsaved!)
   } else {
     // Its reactions are read for the event before they go; a reply's thread is recounted in the same batch.
     const isReply = Boolean(message.thread_ts && message.thread_ts !== message.ts)
-    const [reactions, audience, , , , pins] = await db.batch([
+    const [reactions, audience, , , unsaved, pins] = await db.batch([
       reactionsStatement(db, c.id, message.ts),
       audienceStatement(db, c.id),
       stmt(
@@ -330,6 +331,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       },
     })
     unpinned(ctx, c, message, { extras, audience: audienceFrom(audience!), count: pinCountFrom(pins!) })
+    announceUnsaved(ctx, c.team_id, unsaved!)
   }
 }
 

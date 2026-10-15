@@ -2,6 +2,7 @@ import { requireWritable, resolveConversation } from "../db/conversations"
 import { postMessage } from "../db/messages"
 import { all, first, run, stmt } from "../db/query"
 import type { ConversationRow, FileRow } from "../db/rows"
+import { announceUnsaved, unsaveFileStatement } from "../db/stars"
 import type { Env } from "../env"
 import { publish } from "../events"
 import { authenticate, tokenOf } from "../api/auth"
@@ -211,11 +212,12 @@ method("files.delete", "actor", async (ctx) => {
   if (f.user_id !== ctx.auth.user.id && !admin) throw new CampflareError("cant_delete_file")
   // The thumbnails too, made or not: deleting a missing key is no error.
   await ctx.env.FILES.delete([r2Key(f), ...THUMB_VARIANTS.map((v) => thumbKey(f, v))])
-  // Anyone's saved star on it goes with it.
-  await ctx.env.DB.batch([
+  // Anyone's saved star on it goes with it, and they're told.
+  const [, unsaved] = await ctx.env.DB.batch([
     stmt(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id),
-    stmt(ctx.env.DB, "DELETE FROM stars WHERE type = 'file' AND file_id = ?", f.id),
+    unsaveFileStatement(ctx.env.DB, f.id),
   ])
+  announceUnsaved(ctx, f.team_id, unsaved!)
   const channels = JSON.parse(f.channels) as string[]
   const members = await all<{ user_id: string }>(
     ctx.env.DB,

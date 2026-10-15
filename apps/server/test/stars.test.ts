@@ -126,8 +126,25 @@ describe("stars (saved items)", () => {
     await ok("stars.add", { channel: w.general, timestamp: ts }, bob.token)
     const file = await upload(w.owner.token, w.general, "temp.txt")
     await ok("stars.add", { file }, bob.token)
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
     await ok("chat.delete", { channel: w.general, ts }, w.owner.token)
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({
+      user: bob.id,
+      item: { type: "message", channel: w.general, message: { ts, is_starred: false } },
+    })
     await ok("files.delete", { file }, w.owner.token)
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({
+      item: { type: "file", file: { id: file, is_starred: false } },
+    })
+    // A thread head stays as a tombstone, and its savers are told too.
+    const head = await post(w.owner.token, w.general, "head")
+    await post(w.owner.token, w.general, "reply", { thread_ts: head })
+    await ok("stars.add", { channel: w.general, timestamp: head }, bob.token)
+    await rtm.next((f) => f.type === "star_added")
+    await ok("chat.delete", { channel: w.general, ts: head }, w.owner.token)
+    expect(await rtm.next((f) => f.type === "star_removed")).toMatchObject({ item: { message: { ts: head } } })
+    rtm.close()
     const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM stars WHERE user_id = ?")
       .bind(bob.id)
       .first<{ n: number }>()
