@@ -108,7 +108,7 @@ describe("emojiLook", () => {
     yay: "alias:+1",
     lost: "alias:nowhere",
     odd: "javascript:alert(1)",
-    loop: "alias:loop",
+    "round-trip": "alias:round-trip",
   }
 
   it("draws standard emoji as characters and custom ones as images, through aliases", () => {
@@ -117,10 +117,23 @@ describe("emojiLook", () => {
     expect(emojiLook(custom, "matsuri")).toEqual({ url: custom.fiesta })
     expect(emojiLook(custom, "again")).toEqual({ url: custom.fiesta })
     expect(emojiLook(custom, "yay")).toEqual({ char: "👍" })
+    // Every standard name, not only the common ones: an alias of any of them draws too.
+    expect(emojiLook({ tako: "alias:octopus" }, "tako")).toEqual({ char: "🐙" })
+    expect(emojiLook({ yes: "alias:heavy_check_mark" }, "yes")).toEqual({ char: "✔️" })
+  })
+
+  it("knows every standard short name and its other names", () => {
+    expect(emojiChar("flag-jp")).toBe("🇯🇵")
+    expect(emojiChar("flag-kr")).toBe("🇰🇷")
+    expect(emojiChar("flag-es")).toBe("🇪🇸")
+    expect(emojiChar("thumbsup")).toBe(emojiChar("+1"))
+    expect(emojiChar("female-technologist")).toBe("👩‍💻")
+    expect(emojiChar("skin-tone-2")).toBe("🏻")
+    expect(emojiChar("campfire")).toBeUndefined()
   })
 
   it("knows nothing of unknown names, broken aliases, loops or URLs that aren't http(s)", () => {
-    for (const name of ["nope", "lost", "odd", "loop"]) expect(emojiLook(custom, name)).toBeUndefined()
+    for (const name of ["nope", "lost", "odd", "round-trip"]) expect(emojiLook(custom, name)).toBeUndefined()
   })
 
   it("never finds Object.prototype's members, in either table", () => {
