@@ -58,8 +58,10 @@ describe("MCP over Streamable HTTP", () => {
       "list_people",
       "read_messages",
       "read_thread",
+      "schedule_message",
       "search_messages",
       "send_message",
+      "set_reminder",
       "wait_for_reply",
       "whoami",
     ])
@@ -140,6 +142,33 @@ describe("MCP over Streamable HTTP", () => {
     expect(dms.conversations).toHaveLength(1)
     const people = await callTool<{ people: Record<string, unknown>[] }>(client, "list_people", { query: "builder" })
     expect(people.people).toEqual([{ id: expect.any(String), handle: "@bob", name: "Bob Builder" }])
+    await client.close()
+  })
+
+  it("schedules a message and sets a reminder, at times as people say them", async () => {
+    const w = await workspace()
+    const client = await connect(w.owner.token)
+    const before = Date.now()
+    const scheduled = await callTool<{ conversation: string; scheduled_message_id: string; post_at: string }>(
+      client,
+      "schedule_message",
+      { conversation: "#general", text: "Rappel : réunion, 회의, 会议", at: "in 2 hours" },
+    )
+    expect(scheduled.conversation).toBe(w.general)
+    expect(Date.parse(scheduled.post_at) - before).toBeGreaterThanOrEqual(7_199_000)
+    const listed = await ok<{ scheduled_messages: { id: string }[] }>("chat.scheduledMessages.list", {}, w.owner.token)
+    expect(listed.scheduled_messages.map((m) => m.id)).toEqual([scheduled.scheduled_message_id])
+
+    const reminder = await callTool<{ reminder_id: string; at: string }>(client, "set_reminder", {
+      text: "Stand-up",
+      at: "2h",
+    })
+    expect(reminder.reminder_id).toMatch(/^Rm/)
+    const bad = (await client.callTool({
+      name: "set_reminder",
+      arguments: { text: "x", at: "whenever" },
+    })) as ToolResult
+    expect(bad).toMatchObject({ isError: true, content: [{ text: "error: cannot_parse" }] })
     await client.close()
   })
 

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server"
 import * as z from "zod"
 import { CampflareError } from "../api/errors"
+import { parseWhen, validZone } from "../api/when"
 import { first } from "../db/query"
 import type { MemberRow } from "../db/rows"
 import { author, compactMessage, directory, result, type Directory, type RawMessage } from "./format"
@@ -13,6 +14,9 @@ Messages are identified by their conversation and "ts"; a thread is its first me
 Use get_events or wait_for_reply to see what happens next instead of re-reading history in a loop.`
 
 const conversation = z.string().min(1).describe('"#channel", "@handle" for a direct message, or a conversation id')
+
+const WHEN =
+  'When: "in 30 minutes", "2h", "at 5pm", "tomorrow at 9am", "friday", "2026-12-24 18:00" (in your time zone), ISO 8601 with an offset, or Unix seconds'
 
 const READ = { readOnlyHint: true, openWorldHint: false } as const
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const
@@ -39,6 +43,13 @@ const KINDS = { channel: "public_channel", private: "private_channel", dm: "im",
 
 export function buildServer(caller: Caller): McpServer {
   const server = new McpServer({ name: "campflare", version: "0.1.0" }, { instructions: INSTRUCTIONS })
+
+  /** A time as the tools take it (parseWhen, in the caller's zone), as Unix seconds. */
+  const when = (at: string) => {
+    const time = parseWhen(at, validZone(caller.auth.user.tz))
+    if (time === undefined) throw new CampflareError("cannot_parse")
+    return time
+  }
 
   server.registerTool(
     "whoami",
@@ -230,6 +241,52 @@ export function buildServer(caller: Caller): McpServer {
       })
       const link = await invoke<{ permalink: string }>(caller, "chat.getPermalink", { channel, message_ts: res.ts })
       return { conversation: res.channel, ts: res.ts, permalink: link.permalink }
+    }),
+  )
+
+  server.registerTool(
+    "schedule_message",
+    {
+      title: "Schedule a message",
+      description:
+        "Post a message later, as you, at a given time. It can be listed and deleted with chat.scheduledMessages.list and chat.deleteScheduledMessage until then.",
+      inputSchema: z.object({
+        conversation,
+        text: z.string().min(1).max(40_000),
+        at: z.string().describe(WHEN),
+        thread_ts: z.string().optional().describe("Reply in this thread"),
+      }),
+      annotations: WRITE,
+    },
+    tool(async ({ conversation: ref, text, at, thread_ts }) => {
+      const channel = await conversationId(caller, ref)
+      const res = await invoke<{ channel: string; scheduled_message_id: string; post_at: number }>(
+        caller,
+        "chat.scheduleMessage",
+        { channel, text, thread_ts, post_at: when(at) },
+      )
+      return {
+        conversation: res.channel,
+        scheduled_message_id: res.scheduled_message_id,
+        post_at: new Date(res.post_at * 1000).toISOString(),
+      }
+    }),
+  )
+
+  server.registerTool(
+    "set_reminder",
+    {
+      title: "Set a reminder",
+      description: 'Remind yourself of something: at the time, the Campflare bot DMs you "Reminder: <text>".',
+      inputSchema: z.object({ text: z.string().min(1), at: z.string().describe(WHEN) }),
+      annotations: WRITE,
+    },
+    tool(async ({ text, at }) => {
+      const { reminder } = await invoke<{ reminder: { id: string; time: number } }>(caller, "reminders.add", {
+        text,
+        time: when(at),
+      })
+      return { reminder_id: reminder.id, at: new Date(reminder.time * 1000).toISOString() }
     }),
   )
 
