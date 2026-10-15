@@ -1,3 +1,4 @@
+import { announceActivity, messageActivity } from "../activity"
 import { audienceFrom, audienceStatement, channelType, publish } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
@@ -84,8 +85,21 @@ export async function postMessage(
   }
 
   const db = ctx.env.DB
-  const write = (ts: string) =>
-    db.batch([
+  const author = input.user_id ?? null
+  // The items it makes (mentions, DMs, thread replies), in the same batch.
+  const activity = (ts: string) =>
+    messageActivity(db, c, {
+      ts,
+      thread_ts: parent?.ts ?? null,
+      user_id: author,
+      subtype: input.subtype ?? null,
+      text: input.text,
+    })
+  let hasItems = false
+  const write = (ts: string) => {
+    const items = activity(ts)
+    hasItems = items !== undefined
+    return db.batch([
       stmt(
         db,
         `INSERT INTO messages (channel_id, ts, team_id, user_id, bot_id, app_id, username, subtype, text, blocks,
@@ -126,9 +140,11 @@ export async function postMessage(
           ]
         : []),
       stmt(db, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id),
+      ...(items ? [items] : []),
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, ts),
       audienceStatement(db, c.id),
     ])
+  }
 
   let ts = nextTs()
   let results: D1Result[]
@@ -150,6 +166,7 @@ export async function postMessage(
     audience,
     event: { ...message, channel: c.id, channel_type: channelType(c), event_ts: ts },
   })
+  if (hasItems) announceActivity(ctx, c.team_id, results.at(-3), message)
   return { row, message }
 }
 /** A message's reactions, as a statement to batch with a change to it. */

@@ -101,6 +101,11 @@ export const NEEDS: Record<string, Need> = {
   "dnd.endSnooze": ["dnd:write"],
   "dnd.endDnd": ["dnd:write"],
 
+  "campflare.activity.list": ["activity:read"],
+  "campflare.activity.mark": ["activity:write"],
+  "campflare.prefs.get": ["prefs:read"],
+  "campflare.prefs.set": ["prefs:write"],
+
   "apps.connections.open": ["connections:write"],
   // The live feeds carry every message the person sees, so they want every type's :history too.
   "rtm.connect": { all: ["rtm:stream", ...HISTORY] },
@@ -195,6 +200,8 @@ const READ = [
   "events:read",
   "views:read",
   "calls:read",
+  "activity:read",
+  "prefs:read",
 ]
 
 const WRITE = [
@@ -204,6 +211,8 @@ const WRITE = [
   "reactions:write",
   "files:write",
   "views:write",
+  "activity:write",
+  "prefs:write",
 ]
 
 /** Every scope a user token can hold: what a person's own sign-in gets. */
@@ -249,6 +258,8 @@ export const DEFAULT_BOT_SCOPES = [
   "users.profile:read",
   "rtm:stream",
   "events:read",
+  "activity:read",
+  "activity:write",
 ]
 
 export const APP_SCOPES = ["connections:write"]

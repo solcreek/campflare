@@ -154,3 +154,32 @@ export interface FileRow {
   channels: string
   created: number
 }
+
+export type ActivityKind = "mention" | "dm" | "thread_reply" | "reaction"
+
+/** An activity item (migration 0019, docs/activity.md). */
+export interface ActivityRow {
+  id: number
+  team_id: string
+  user_id: string
+  kind: ActivityKind
+  channel_id: string
+  ts: string
+  thread_ts: string | null
+  actor_id: string | null
+  /** The emoji, for a reaction; '' otherwise. */
+  reaction: string
+  created: number
+  notify: number
+  read: number
+}
+
+export type NotificationLevel = "all" | "mentions" | "none"
+
+export interface NotificationPrefRow {
+  user_id: string
+  /** '' for the person's default. */
+  conversation_id: string
+  level: NotificationLevel
+  updated: number
+}

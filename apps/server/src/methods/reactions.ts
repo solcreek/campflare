@@ -1,3 +1,4 @@
+import { announceActivity, announceActivityGone, reactionActivity, reactionActivityGone } from "../activity"
 import { requireReadable, resolveConversation } from "../db/conversations"
 import { messageOut, requireMessage } from "../db/messages"
 import { isUniqueViolation, stmt } from "../db/query"
@@ -52,9 +53,13 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
         name,
         user,
       )
+  // The author's item goes with it: added only if the reaction was.
+  const item = added
+    ? reactionActivity(db, c, message, name, user)
+    : reactionActivityGone(db, c.id, message.ts, name, user)
   let results: D1Result[]
   try {
-    results = await db.batch([change, audienceStatement(db, c.id)])
+    results = await db.batch([change, audienceStatement(db, c.id), ...(item ? [item] : [])])
   } catch (error) {
     if (added && isUniqueViolation(error)) throw new CampflareError("already_reacted")
     throw error
@@ -72,6 +77,15 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
       event_ts: `${(Date.now() / 1000).toFixed(6)}`,
     },
   })
+  if (added) {
+    // The item carries the message, so a client can show it without a fetch: read after the response.
+    const items = results[2]
+    if (items?.results.length) {
+      ctx.waitUntil(messageOut(ctx, message).then((json) => announceActivity(ctx, c.team_id, items, json)))
+    }
+  } else {
+    announceActivityGone(ctx, c.team_id, results[2])
+  }
   return {}
 }
 

@@ -735,6 +735,13 @@ export class TeamHub extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client })
   }
 
+  /** Several events, in order, in one RPC: each person's own activity item, say. */
+  async publishEach(inputs: PublishInput[]): Promise<number> {
+    let delivered = 0
+    for (const input of inputs) delivered += await this.publish(input)
+    return delivered
+  }
+
   async publish(input: PublishInput): Promise<number> {
     const { event, audience } = input
     if (input.ephemeral) this.keepEphemeral(input.ephemeral)

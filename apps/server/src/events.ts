@@ -13,6 +13,17 @@ export function publish(ctx: Pick<Ctx, "env" | "waitUntil">, input: PublishInput
   )
 }
 
+/** Several events of one workspace in one RPC to its hub, after the response; none sends nothing. */
+export function publishEach(ctx: Pick<Ctx, "env" | "waitUntil">, teamId: string, inputs: PublishInput[]): void {
+  if (inputs.length === 0) return
+  const stub = ctx.env.HUB.get(ctx.env.HUB.idFromName(teamId))
+  ctx.waitUntil(
+    stub.publishEach(inputs).catch((error: unknown) => {
+      console.error("publish failed", inputs[0]!.event.type, error)
+    }),
+  )
+}
+
 /** audienceOf() as a statement, to read the audience in the same batch as a change. */
 export const audienceStatement = (db: D1Database, conversationId: string) =>
   db.prepare("SELECT user_id FROM members WHERE conversation_id = ?").bind(conversationId)

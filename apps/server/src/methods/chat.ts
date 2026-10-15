@@ -1,3 +1,4 @@
+import { announceActivityGone, messageActivityGone } from "../activity"
 import { requireNotArchived, requireReadable, requireWritable, resolveConversation } from "../db/conversations"
 import {
   announceChanged,
@@ -269,7 +270,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
-    const [, tombstone, audience, reactions] = await db.batch([
+    const [, tombstone, audience, reactions, gone] = await db.batch([
       stmt(
         db,
         `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
@@ -281,7 +282,9 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       audienceStatement(db, c.id),
       reactionsStatement(db, c.id, message.ts),
+      messageActivityGone(db, c.id, message.ts),
     ])
+    announceActivityGone(ctx, c.team_id, gone)
     announceChanged(ctx, c, {
       before: message,
       after: tombstone!.results[0] as MessageRow,
@@ -291,13 +294,15 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   } else {
     // Its reactions are read for the event before they go; a reply's thread is recounted in the same batch.
     const isReply = Boolean(message.thread_ts && message.thread_ts !== message.ts)
-    const [reactions, audience] = await db.batch([
+    const [reactions, audience, gone] = await db.batch([
       reactionsStatement(db, c.id, message.ts),
       audienceStatement(db, c.id),
+      messageActivityGone(db, c.id, message.ts),
       stmt(db, "UPDATE messages SET deleted = 1 WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       stmt(db, "DELETE FROM reactions WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       ...(isReply ? [recountThread(db, c.id, message.thread_ts!)] : []),
     ])
+    announceActivityGone(ctx, c.team_id, gone)
     const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
     const now = `${(Date.now() / 1000).toFixed(6)}`
     publish(ctx, {
