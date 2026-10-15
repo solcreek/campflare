@@ -11,8 +11,15 @@ describe("time zones", () => {
     expect(ianaZone("asia/tokyo")).toBe("Asia/Tokyo")
     expect(ianaZone(" America/Sao_Paulo ")).toBe("America/Sao_Paulo")
     expect(ianaZone("UTC")).toBe("UTC")
-    // A link the runtime resolves to its old name keeps the one given.
+    expect(ianaZone("etc/utc")).toBe("Etc/UTC")
+    // A link the runtime knows by another name stays the one meant, in IANA's case whatever the case typed.
     expect(ianaZone("Asia/Kolkata")).toBe("Asia/Kolkata")
+    expect(ianaZone("asia/kolkata")).toBe("Asia/Kolkata")
+    expect(ianaZone("EUROPE/KYIV")).toBe("Europe/Kyiv")
+    expect(ianaZone("us/eastern")).toBe("US/Eastern")
+    expect(ianaZone("est5edt")).toBe("EST5EDT")
+    expect(ianaZone("etc/gmt+5")).toBe("Etc/GMT+5")
+    expect(ianaZone("america/buenos_aires")).toBe("America/Buenos_Aires")
     for (const bad of ["Mars/Olympus", "+02:00", "-0500", "", undefined, "Europe/", "9"]) {
       expect(ianaZone(bad)).toBeUndefined()
     }

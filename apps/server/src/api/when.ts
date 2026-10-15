@@ -46,23 +46,57 @@ export interface Wall {
 /** The zone if the runtime knows it (an IANA name, as ianaZone() takes them), else UTC. */
 export const validZone = (tz: string | undefined): string => ianaZone(tz) ?? "UTC"
 
+/** The runtime's zone names by their lowercase: how a name typed in any case is spelled. */
+let zoneNames: Map<string, string> | undefined
+const namesByLowercase = () =>
+  (zoneNames ??= new Map(Intl.supportedValuesOf("timeZone").map((z) => [z.toLowerCase(), z])))
+
+/** Words of zone names that are written in capitals (US/Eastern, Etc/GMT+5, EST5EDT, GB-Eire's GB). */
+const CAPITAL_WORDS =
+  /^(?:us|gb|nz|prc|roc|rok|utc|uct|gmt(?:[+-]\d+)?|est|mst|hst|cet|met|wet|eet|[a-z]st\d[a-z]dt|w|su|chat)$/
+
 /**
- * `tz` if it is an IANA time zone the runtime knows, in the runtime's case
- * ("europe/paris" is Europe/Paris); undefined for anything else, a fixed
- * offset like "+02:00" included: a person's zone follows its DST rules. A
- * link keeps the name given (Asia/Kolkata, which the runtime calls
- * Asia/Calcutta), as Slack sends the current names.
+ * A link's name (one the runtime knows only as another: Asia/Kolkata is its
+ * Asia/Calcutta) in IANA's case: each word capitalised (Asia/Kolkata,
+ * Europe/Kyiv), codes in capitals (US/Pacific, Etc/GMT+5, EST5EDT). The few
+ * links with capitals inside a word (America/Argentina/ComodRivadavia,
+ * America/Knox_IN) are the IANA spellings this can't know.
+ */
+const linkCase = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^_\-/]+/g, (word) =>
+      CAPITAL_WORDS.test(word) ? word.toUpperCase() : word[0]!.toUpperCase() + word.slice(1),
+    )
+
+const zoneCache = new Map<string, string | null>()
+
+/**
+ * `tz` as an IANA time zone the runtime knows, spelled in IANA's case whatever
+ * the case typed ("europe/paris" is Europe/Paris); undefined for anything
+ * else, a fixed offset like "+02:00" included: a person's zone follows its DST
+ * rules. A link stays the link the person meant (Asia/Kolkata, which the
+ * runtime calls Asia/Calcutta), as Slack sends the current names.
  */
 export function ianaZone(tz: string | undefined): string | undefined {
   const name = tz?.trim()
   if (!name || /^[+-]|^\d/.test(name)) return undefined
+  const cached = zoneCache.get(name)
+  if (cached !== undefined) return cached ?? undefined
+  let zone: string | undefined
   try {
-    const zone = new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone
-    if (/^[+-]/.test(zone)) return undefined
-    return zone.toLowerCase() === name.toLowerCase() ? zone : name
+    const resolved = new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone
+    if (!/^[+-]/.test(resolved)) {
+      const lower = name.toLowerCase()
+      zone = namesByLowercase().get(lower) ?? (resolved.toLowerCase() === lower ? resolved : linkCase(name))
+    }
   } catch {
-    return undefined
+    zone = undefined
   }
+  // Names come from stored rows, so they are few; the bound only keeps junk input from growing it.
+  if (zoneCache.size > 1000) zoneCache.clear()
+  zoneCache.set(name, zone ?? null)
+  return zone
 }
 
 /** How far the zone's wall clock is ahead of UTC at an instant (epoch seconds), in seconds: Slack's tz_offset. */
