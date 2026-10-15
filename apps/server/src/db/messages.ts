@@ -59,12 +59,15 @@ async function newMessageExtras(ctx: Ctx<Actor>, row: MessageRow): Promise<Messa
  * Stores a message and announces it. A reply (thread_ts) updates its parent's
  * thread summary; the parent becomes a thread head (thread_ts = its own ts).
  * The writes, the stored row and the audience are one batch: one round trip,
- * and the message and its thread summary land together or not at all.
+ * and the message and its thread summary land together or not at all. `also`
+ * joins that batch, so a write that must happen with the post (a scheduled
+ * message finishing) commits with it or not at all.
  */
 export async function postMessage(
   ctx: Ctx<Actor>,
   c: ConversationRow,
   input: NewMessage,
+  also: D1PreparedStatement[] = [],
 ): Promise<{ row: MessageRow; message: ReturnType<typeof messageJson> }> {
   if (input.text.length > MAX_TEXT) throw new CampflareError("msg_too_long")
   let parent: MessageRow | undefined
@@ -126,6 +129,7 @@ export async function postMessage(
           ]
         : []),
       stmt(db, "UPDATE conversations SET updated = ? WHERE id = ?", Math.floor(Date.now() / 1000), c.id),
+      ...also,
       stmt(db, "SELECT * FROM messages WHERE channel_id = ? AND ts = ?", c.id, ts),
       audienceStatement(db, c.id),
     ])

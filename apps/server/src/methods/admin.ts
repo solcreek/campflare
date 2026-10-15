@@ -411,7 +411,8 @@ async function appOut(ctx: Ctx<Actor>, app: AppRow) {
 async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
   const app = await first<AppRow>(
     ctx.env.DB,
-    "SELECT * FROM apps WHERE id = ? AND team_id = ?",
+    // The built-in bot (system-bot.ts) is the server's: nobody manages it.
+    "SELECT * FROM apps WHERE id = ? AND team_id = ? AND built_in IS NULL",
     ctx.args.req("app", "app_not_found"),
     ctx.auth.team.id,
   )
