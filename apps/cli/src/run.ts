@@ -58,6 +58,16 @@ Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
                                  when a person stops it, says so and reads no more
   status <#channel|id> <thread ts> [text]   the app's status in a thread; no text clears it
 
+People and groups
+  profile [@person] [--json]       a profile: names, title, status, photo
+  profile [--title <t>] [--status <text> [--emoji :e:] [--until 30m|2h|1d]] [--photo <file>]
+          [--remove-photo]         set yours; --status '' clears the status
+  groups [--all] [--json]          user groups (@handle mentions) and their members; --all: disabled too
+  group create <handle> [--name <n>] [--description <d>] [--members @a,@b] [--channels #a,#b]
+  group show|disable|enable <handle>
+  group update <handle> [--name <n>] [--handle <h>] [--description <d>] [--channels #a,#b]
+  group add|remove <handle> <@person>…
+
 Workspace
   channels [--all] [--json]        users [--json]
   create-channel <name> [--private]   join <#channel>   leave <#channel>
@@ -870,6 +880,141 @@ const commands: Record<string, Command> = {
     }
   },
 
+  async profile(argv, io) {
+    const { values, positionals } = parse(argv, {
+      title: { type: "string" },
+      status: { type: "string" },
+      emoji: { type: "string" },
+      until: { type: "string" },
+      photo: { type: "string" },
+      "remove-photo": { type: "boolean" },
+    })
+    const s = await session(io, values)
+    const changes: Record<string, string | number> = {}
+    if (values.title !== undefined) changes.title = str(values.title) ?? ""
+    if (values.status !== undefined) {
+      const text = str(values.status) ?? ""
+      changes.status_text = text
+      // A status without an emoji, or a cleared one, clears the emoji too.
+      changes.status_emoji = text ? (str(values.emoji) ?? "") : ""
+      changes.status_expiration =
+        text && values.until ? Math.floor(Date.now() / 1000) + seconds(String(values.until)) : 0
+    } else if (values.emoji !== undefined || values.until !== undefined) {
+      throw new UsageError("--emoji and --until go with --status")
+    }
+    const setting = Object.keys(changes).length > 0 || values.photo !== undefined || values["remove-photo"]
+    if (setting && positionals.length > 0) throw new UsageError("profile sets only your own profile")
+    if (values.photo !== undefined && values["remove-photo"])
+      throw new UsageError("--photo or --remove-photo, not both")
+    if (Object.keys(changes).length > 0) await s.client.call("users.profile.set", { profile: changes })
+    const photo = str(values.photo)
+    if (photo) {
+      const bytes = await io.readFile(photo)
+      await s.client.call("users.setPhoto", { image: new File([bytes], basename(photo)) })
+    }
+    if (values["remove-photo"]) await s.client.call("users.deletePhoto")
+    const user = positionals[0] ? await resolveUser(s.client, positionals[0], s.self) : undefined
+    const { profile } = await s.client.call<{ ok: boolean; profile: ProfileJson }>(
+      "users.profile.get",
+      user ? { user } : {},
+    )
+    if (values.json) return s.print(profile)
+    io.stdout(describeProfile(profile))
+  },
+
+  async groups(argv, io) {
+    const { values } = parse(argv, { all: { type: "boolean" } })
+    const s = await session(io, values)
+    const { usergroups } = await s.client.call<{ ok: boolean; usergroups: GroupJson[] }>("usergroups.list", {
+      include_users: true,
+      include_count: true,
+      include_disabled: Boolean(values.all),
+    })
+    if (values.json) return s.print(usergroups)
+    if (usergroups.length === 0) io.stdout("No groups yet: campflare group create <handle>\n")
+    const names = await s.names()
+    for (const g of usergroups) io.stdout(groupLine(g, names))
+  },
+
+  async group(argv, io) {
+    const [sub, ...rest] = argv
+    const { values, positionals } = parse(rest, {
+      name: { type: "string" },
+      handle: { type: "string" },
+      description: { type: "string" },
+      members: { type: "string" },
+      channels: { type: "string" },
+    })
+    const [ref, ...people] = positionals
+    if (!sub || !ref) throw new UsageError("group commands: create, show, update, add, remove, disable, enable")
+    const s = await session(io, values)
+    const done = async (res: { usergroup: GroupJson }, said: string) => {
+      if (values.json) return s.print(res.usergroup)
+      io.stdout(`${said}\n${groupLine(res.usergroup, await s.names())}`)
+    }
+    const users = async (refs: string[]) => Promise.all(refs.map((p) => resolveUser(s.client, p, s.self)))
+    const channels = async () =>
+      values.channels === undefined
+        ? undefined
+        : (await Promise.all(list(str(values.channels)).map((c) => s.conversation(c)))).join(",")
+    type Answer = { ok: boolean; usergroup: GroupJson }
+    switch (sub) {
+      case "create": {
+        const handle = ref.replace(/^@/, "")
+        let res = await s.client.call<Answer>("usergroups.create", {
+          handle,
+          name: str(values.name) ?? handle,
+          description: str(values.description),
+          channels: await channels(),
+        })
+        const members = list(str(values.members))
+        if (members.length > 0) {
+          res = await s.client.call<Answer>("usergroups.users.update", {
+            usergroup: res.usergroup.id,
+            users: (await users(members)).join(","),
+          })
+        }
+        return done(res, `Created @${res.usergroup.handle} (${res.usergroup.id})`)
+      }
+      case "show": {
+        const group = await findGroup(s, ref)
+        return done({ usergroup: group }, group.description || group.name)
+      }
+      case "update": {
+        const group = await findGroup(s, ref)
+        const res = await s.client.call<Answer>("usergroups.update", {
+          usergroup: group.id,
+          name: str(values.name),
+          handle: str(values.handle)?.replace(/^@/, ""),
+          description: values.description === undefined ? undefined : (str(values.description) ?? ""),
+          channels: await channels(),
+        })
+        return done(res, `Updated @${res.usergroup.handle}`)
+      }
+      case "add":
+      case "remove": {
+        if (people.length === 0) throw new UsageError(`group ${sub} needs a group and at least one @person`)
+        const group = await findGroup(s, ref)
+        const ids = new Set(await users(people))
+        const before = group.users ?? []
+        const after = sub === "add" ? [...new Set([...before, ...ids])] : before.filter((u) => !ids.has(u))
+        const res = await s.client.call<Answer>("usergroups.users.update", {
+          usergroup: group.id,
+          users: after.join(","),
+        })
+        return done(res, `${sub === "add" ? "Added to" : "Removed from"} @${group.handle}`)
+      }
+      case "disable":
+      case "enable": {
+        const group = await findGroup(s, ref)
+        const res = await s.client.call<Answer>(`usergroups.${sub}`, { usergroup: group.id })
+        return done(res, `${sub === "disable" ? "Disabled" : "Enabled"} @${group.handle}`)
+      }
+      default:
+        throw new UsageError("group commands: create, show, update, add, remove, disable, enable")
+    }
+  },
+
   async "create-channel"(argv, io) {
     const { values, positionals } = parse(argv, { private: { type: "boolean" } })
     const [name] = positionals
@@ -1166,8 +1311,67 @@ const UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86_400, w: 604_
 /** "90", "30m", "12h", "7d", "2w" as seconds. */
 export function seconds(text: string): number {
   const match = /^(\d+)([smhdw]?)$/.exec(text.trim())
-  if (!match) throw new UsageError(`--expires takes seconds or a number with s, m, h, d or w: got ${text}`)
+  if (!match) throw new UsageError(`a duration is seconds or a number with s, m, h, d or w: got ${text}`)
   return Number(match[1]) * UNITS[match[2] || "s"]!
+}
+
+/** "a, b ,c" as ["a", "b", "c"]. */
+const list = (text: string | undefined) =>
+  (text ?? "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+
+interface ProfileJson {
+  real_name?: string
+  display_name?: string
+  title?: string
+  status_text?: string
+  status_emoji?: string
+  status_expiration?: number
+  is_custom_image?: boolean
+  image_192?: string
+}
+
+/** A profile for people: names, title, status (with when it ends), and the photo. */
+export function describeProfile(p: ProfileJson): string {
+  const lines = [[p.display_name, p.real_name].filter(Boolean).join(" · ") || "(no name)"]
+  if (p.title) lines.push(`Title: ${p.title}`)
+  if (p.status_text || p.status_emoji) {
+    const until = p.status_expiration ? ` (until ${isoTime(p.status_expiration)})` : ""
+    lines.push(`Status: ${[p.status_emoji, p.status_text].filter(Boolean).join(" ")}${until}`)
+  }
+  lines.push(`Photo: ${p.is_custom_image ? p.image_192 : "none (initials)"}`)
+  return `${lines.join("\n")}\n`
+}
+
+interface GroupJson {
+  id: string
+  handle: string
+  name: string
+  description: string
+  users?: string[]
+  user_count: number
+  date_delete: number
+}
+
+/** One group a line: id, @handle, name, how many, and its members by name. */
+function groupLine(g: GroupJson, names: Map<string, string>): string {
+  const who = (g.users ?? []).map((u) => `@${names.get(u) ?? u}`).join(" ")
+  const count = `${g.user_count} member${g.user_count === 1 ? "" : "s"}`
+  return `${g.id}  @${g.handle}  ${g.name}  (${count}${g.date_delete ? ", disabled" : ""})${who ? `  ${who}` : ""}\n`
+}
+
+/** A group by @handle or id, disabled ones too, with its members. */
+async function findGroup(s: Session, ref: string): Promise<GroupJson> {
+  const { usergroups } = await s.client.call<{ ok: boolean; usergroups: GroupJson[] }>("usergroups.list", {
+    include_users: true,
+    include_disabled: true,
+  })
+  const handle = ref.replace(/^@/, "").toLowerCase()
+  const found = usergroups.find((g) => g.id === ref || g.handle === handle)
+  if (!found) throw new UsageError(`no group @${handle}: campflare groups lists them`)
+  return found
 }
 
 const isoTime = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d+Z$/, "Z")
