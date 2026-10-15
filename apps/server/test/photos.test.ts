@@ -301,7 +301,7 @@ describe("EXIF orientation", () => {
   })
 })
 
-const photoOf = (p: Profile) => /\/([0-9a-f]+)_72\./.exec(p.image_72)![1]
+const photoOf = (p: Profile) => /\/([0-9a-f]+)_72\./.exec(p.image_72)![1]!
 
 /** The real binding, recording each output's transforms. */
 function recordingImages(calls: ImageTransform[][]): ImagesBinding {
