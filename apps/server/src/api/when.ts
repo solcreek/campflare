@@ -95,6 +95,12 @@ export function zonedTime(tz: string, year: number, month: number, day: number, 
   return (wall - offsetMs(tz, guess)) / 1000
 }
 
+/** Whether the date exists: February 31 doesn't, February 29 only in leap years. */
+function realDate(year: number, month: number, day: number): boolean {
+  const d = new Date(Date.UTC(year, month - 1, day))
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day
+}
+
 /** "9am", "5:30pm", "17:30", "noon", "midnight" as hours and minutes; undefined if it isn't one. */
 function timeOfDay(text: string): { hour: number; minute: number } | undefined {
   if (text === "noon") return { hour: 12, minute: 0 }
@@ -147,7 +153,7 @@ export function parseWhen(input: string, tz: string, now = Math.floor(Date.now()
   if (date) {
     const [year, month, day] = [Number(date[1]), Number(date[2]), Number(date[3])]
     const at = date[4] ? timeOfDay(date[4]) : DEFAULT_TIME
-    if (!at || month < 1 || month > 12 || day < 1 || day > 31) return undefined
+    if (!at || !realDate(year, month, day)) return undefined
     return zonedTime(zone, year, month, day, at.hour, at.minute)
   }
 

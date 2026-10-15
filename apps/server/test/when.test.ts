@@ -64,6 +64,11 @@ describe("parseWhen", () => {
     expect(when("2026-12-24T18:00:00Z")).toBe(at("2026-12-24T18:00:00Z"))
     expect(when("2026-12-24T18:00+02:00")).toBe(at("2026-12-24T16:00:00Z"))
     expect(when("2026-13-01")).toBeUndefined()
+    expect(when("2026-00-10")).toBeUndefined()
+    expect(when("2026-02-31")).toBeUndefined()
+    expect(when("2026-04-31 09:00")).toBeUndefined()
+    expect(when("2026-02-29")).toBeUndefined()
+    expect(when("2028-02-29")).toBe(at("2028-02-29T09:00:00Z"))
     expect(when("2026-12-24 at dusk")).toBeUndefined()
   })
 
