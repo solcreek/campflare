@@ -140,8 +140,8 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     "tokens",
     ["hash", "team_id", "kind", "user_id", "app_id", "scopes", "created"],
     [
-      ...users.map((u) => [sha256(u.token), teamId, "user", u.id, null, "chat:write", now]),
-      [sha256(botToken), teamId, "bot", botUserId, "ABENCH0001", "chat:write", now],
+      ...users.map((u) => [sha256(u.token), teamId, "user", u.id, null, "full", now]),
+      [sha256(botToken), teamId, "bot", botUserId, "ABENCH0001", "bot", now],
     ],
   )
 
