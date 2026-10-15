@@ -4,7 +4,9 @@ import { APP_SCOPES, issueToken } from "../api/auth"
 import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES, missingScope } from "../api/scopes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
+import { normalizeEmail } from "../api/email-address"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
+import { activePerson, HANDLE, rank, requireAdmin, requireOutranks, requireOwner } from "../api/roles"
 import { teamJson, userJson } from "../api/shapes"
 import { userChanged } from "../events"
 import { checkPassword, setPassword } from "../auth/password"
@@ -16,41 +18,7 @@ import { requestUrlProblem, verifyRequestUrl } from "../request-url"
 // methods: creating a workspace, people, tokens and apps. Not part of the
 // Slack-compatible surface, and named so they can't collide with it.
 
-// Roles (docs/scopes-and-roles.md): owner > admin > member. A token's scopes cap
-// what it may do; the person's role, read with the token on every call, caps
-// what they may do. Both must allow it.
-
-function requireAdmin(ctx: Ctx<Actor>) {
-  if (!ctx.auth.user.is_admin) throw new CampflareError("not_an_admin")
-}
-
-function requireOwner(ctx: Ctx<Actor>) {
-  if (!ctx.auth.user.is_owner) throw new CampflareError("not_an_owner")
-}
-
-const rank = (u: Pick<UserRow, "is_admin" | "is_owner">) => (u.is_owner ? 2 : u.is_admin ? 1 : 0)
-
-/** Acting for someone else (deactivating them, minting their token) takes a role above theirs. */
-function requireOutranks(ctx: Ctx<Actor>, target: UserRow) {
-  requireAdmin(ctx)
-  if (rank(ctx.auth.user) <= rank(target))
-    throw new CampflareError(target.is_owner ? "cant_act_on_owner" : "not_an_owner")
-}
-
-/** A person of the caller's workspace, active; a bot user only with `bots`. */
-async function activePerson(ctx: Ctx<Actor>, id: string, { bots = false } = {}): Promise<UserRow> {
-  const user = await first<UserRow>(
-    ctx.env.DB,
-    "SELECT * FROM users WHERE id = ? AND team_id = ? AND deleted = 0",
-    id,
-    ctx.auth.team.id,
-  )
-  if (!user) throw new CampflareError("user_not_found")
-  if (user.is_bot && !bots) throw new CampflareError("user_is_bot")
-  return user
-}
-
-const HANDLE = /^[a-z0-9][a-z0-9._-]{0,79}$/
+// Roles: src/api/roles.ts.
 
 async function createUser(
   env: Env,
@@ -70,7 +38,7 @@ async function createUser(
       teamId,
       name,
       opts.realName ?? "",
-      opts.email?.toLowerCase() ?? null,
+      opts.email === undefined ? null : normalizeEmail(opts.email),
       opts.admin || opts.owner ? 1 : 0,
       opts.owner ? 1 : 0,
       opts.bot ? 1 : 0,

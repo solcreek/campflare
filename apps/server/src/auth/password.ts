@@ -1,6 +1,7 @@
+import { normalizeEmail } from "../api/email-address"
 import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
-import { run, stmt } from "../db/query"
+import { ALWAYS, run, stmt, type Guard } from "../db/query"
 import type { Env } from "../env"
 import { CAMPFLARE_PROVIDER } from "./sign-in"
 import {
@@ -84,26 +85,47 @@ export async function setPassword(
   user: { id: string; email?: string | null },
   password: string,
 ): Promise<void> {
-  const hash = await hashPassword(checkPassword(password))
+  await env.DB.batch(passwordStatements(env, user, await hashPassword(checkPassword(password))))
+}
+
+/**
+ * setPassword's writes, for a caller that batches them with its own (a reset
+ * link's claim). With `when`, each write happens only where that condition
+ * holds, evaluated as the batch runs.
+ */
+export function passwordStatements(
+  env: Env,
+  user: { id: string; email?: string | null },
+  hash: string,
+  when: Guard = ALWAYS,
+): D1PreparedStatement[] {
   // The Better Auth user linked to this Campflare user (one per person, src/auth/sign-in.ts).
   const linked = `SELECT "userId" FROM "account" WHERE "providerId" = ? AND "accountId" = ?`
-  await env.DB.batch([
+  const drop = (table: string) =>
     stmt(
       env.DB,
-      `INSERT INTO passwords (user_id, hash, updated) VALUES (?, ?, ?)
+      `DELETE FROM "${table}" WHERE "userId" IN (${linked}) AND (${when.sql})`,
+      CAMPFLARE_PROVIDER,
+      user.id,
+      ...when.params,
+    )
+  return [
+    stmt(
+      env.DB,
+      // WHERE before ON CONFLICT: SQLite's upsert from a SELECT needs it to parse.
+      `INSERT INTO passwords (user_id, hash, updated) SELECT ?, ?, ? WHERE (${when.sql})
        ON CONFLICT (user_id) DO UPDATE SET hash = excluded.hash, updated = excluded.updated`,
       user.id,
       hash,
       nowSeconds(),
+      ...when.params,
     ),
-    stmt(env.DB, `DELETE FROM "oauthAccessToken" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
-    stmt(env.DB, `DELETE FROM "oauthRefreshToken" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
-    stmt(env.DB, `DELETE FROM "session" WHERE "userId" IN (${linked})`, CAMPFLARE_PROVIDER, user.id),
+    drop("oauthAccessToken"),
+    drop("oauthRefreshToken"),
+    drop("session"),
     ...(user.email ? [forgetEmail(env.DB, normalizeEmail(user.email))] : []),
-  ])
+  ]
 }
-
-const normalizeEmail = (email: string) => email.trim().toLowerCase()
 
 interface Candidate {
   user_id: string

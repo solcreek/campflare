@@ -90,6 +90,24 @@ export function campflareSignIn(env: Env) {
           return ctx.json({ user, campflare_user: actor.user.id, team: actor.team.id })
         },
       ),
+      /**
+       * Signs in a person who has just proven themselves another way (an
+       * invitation accepted at /join, src/invites.ts). Server-only: never on
+       * the HTTP router, so it is reached through auth.api alone.
+       */
+      signInCampflareUser: createAuthEndpoint.serverOnly(
+        { method: "POST", body: z.object({ user_id: z.string().min(1) }) },
+        async (ctx) => {
+          const person = await first<UserRow>(
+            env.DB,
+            "SELECT * FROM users WHERE id = ? AND deleted = 0 AND is_bot = 0",
+            ctx.body.user_id,
+          )
+          if (!person) throw new APIError("UNAUTHORIZED", { message: "account_inactive" })
+          const user = await signInAs(ctx, person, "campflare-invite")
+          return ctx.json({ user, campflare_user: person.id, team: person.team_id })
+        },
+      ),
       signInCampflarePassword: createAuthEndpoint(
         "/sign-in/campflare-password",
         {

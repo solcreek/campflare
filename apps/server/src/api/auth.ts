@@ -1,4 +1,4 @@
-import { run, stmt } from "../db/query"
+import { ALWAYS, run, stmt, type Guard } from "../db/query"
 import type { AppRow, TeamRow, TokenRow, UserRow } from "../db/rows"
 import type { Env } from "../env"
 import { sha256Hex } from "./crypto"
@@ -78,12 +78,15 @@ type TokenOptions = {
 export async function prepareToken(
   env: Env,
   opts: TokenOptions,
+  /** Store it only where this holds as the batch runs (the user it is for was just created, say). */
+  when: Guard = ALWAYS,
 ): Promise<{ token: string; insert: D1PreparedStatement }> {
   const random = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("")
   const token = `${PREFIX[opts.kind]}${opts.teamId}-${random}`
   const insert = stmt(
     env.DB,
-    "INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, client_id, created, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    `INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, client_id, created, expires)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (${when.sql})`,
     await sha256Hex(token),
     opts.teamId,
     opts.kind,
@@ -94,6 +97,7 @@ export async function prepareToken(
     opts.clientId ?? null,
     Math.floor(Date.now() / 1000),
     opts.expires ?? null,
+    ...when.params,
   )
   return { token, insert }
 }
