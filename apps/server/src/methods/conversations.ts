@@ -19,6 +19,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { requireConversationScope } from "../api/scopes"
 import { ids, nowSeconds } from "../api/ids"
+import { pinCountFrom, pinCountStatement } from "../db/pins"
 import { conversationJson, loadExtras, messageJson, reactionsOfQuery, starredFrom, starredOfQuery } from "../api/shapes"
 import { typesFilter } from "./users"
 
@@ -124,7 +125,7 @@ method("conversations.history", "actor", async (ctx) => {
     stmt(db, pageSql, ...params, limit + 1),
     reactionsOfQuery(db, pageSql, ...params, limit + 1),
     starredOfQuery(db, ctx.auth.user.id, pageSql, ...params, limit + 1),
-    stmt(db, "SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL", c.id),
+    pinCountStatement(db, c.id),
   ])
   const rows = found!.results as MessageRow[]
   const hasMore = rows.length > limit
@@ -133,7 +134,7 @@ method("conversations.history", "actor", async (ctx) => {
   return {
     messages: await messagesOut(ctx, page, reactions!, starred!),
     has_more: hasMore,
-    pin_count: (pins!.results[0] as { n: number }).n,
+    pin_count: pinCountFrom(pins!),
     channel_actions_ts: null,
     channel_actions_count: 0,
     response_metadata: { next_cursor: hasMore && !forward ? encodeCursor(page.at(-1)!.ts) : "" },
