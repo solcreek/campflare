@@ -371,3 +371,24 @@ describe("scopes checked before anything changes", () => {
     await ok("conversations.create", { name: "fantasma", is_private: true }, w.owner.token)
   })
 })
+
+describe("file downloads", () => {
+  it("want files:read, as files.info does", async () => {
+    const w = await workspace()
+    const up = await ok<{ upload_url: string; file_id: string }>(
+      "files.getUploadURLExternal",
+      { filename: "notas.txt", length: 5 },
+      w.owner.token,
+    )
+    const auth = { authorization: `Bearer ${w.owner.token}` }
+    await SELF.fetch(new Request(up.upload_url, { method: "POST", headers: auth, body: "hello" }))
+    await ok("files.completeUploadExternal", { files: [{ id: up.file_id }], channel_id: w.general }, w.owner.token)
+    const url = (await ok<{ file: { url_private: string } }>("files.info", { file: up.file_id }, w.owner.token)).file
+      .url_private
+    const get = (token: string) => SELF.fetch(new Request(url, { headers: { authorization: `Bearer ${token}` } }))
+    expect((await get(await narrow(w.teamId, w.owner.id, ["chat:write"]))).status).toBe(403)
+    const res = await get(await narrow(w.teamId, w.owner.id, ["files:read"]))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe("hello")
+  })
+})

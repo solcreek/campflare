@@ -239,6 +239,8 @@ async function visibleFile(env: Env, request: Request, teamFile: string): Promis
   } catch {
     return new Response("invalid auth", { status: 401 })
   }
+  // The bytes are what files.info describes: the same scope.
+  if (!auth.scopes.includes("files:read")) return new Response("missing_scope: files:read", { status: 403 })
   const [teamId, fileId] = teamFile.split("-")
   const f = fileId
     ? await first<FileRow>(env.DB, "SELECT * FROM files WHERE id = ? AND team_id = ?", fileId, teamId)
