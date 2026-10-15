@@ -560,6 +560,9 @@ function itemLine(item: ActivityItem, names: Map<string, string>, where: Map<str
   return `${item.is_read ? " " : "*"} ${item.id}  ${time(item.ts)}  ${item.type.padEnd(12)}  ${place}  ${what}`
 }
 
+/** ":name:", however the name was typed. */
+const shortcode = (n: string) => `:${n.replace(/^:|:$/g, "")}:`
+
 const LEVELS = ["all", "mentions", "none"]
 
 type Prefs = { notifications: { default: string; conversations: Record<string, string> } }
@@ -963,7 +966,6 @@ const commands: Record<string, Command> = {
     const [sub, ...rest] = argv
     const { values, positionals } = parse(sub && !sub.startsWith("-") ? rest : argv)
     const s = await session(io, values)
-    const shortcode = (n: string) => `:${n.replace(/^:|:$/g, "")}:`
     if (!sub || sub.startsWith("-")) {
       const { emoji } = await s.client.call<{ ok: boolean; emoji: Record<string, string> }>("emoji.list")
       if (values.json) return s.print(emoji)
