@@ -90,6 +90,15 @@ describe("slash commands", () => {
       expect(cli.err).toBe("error: command_not_found\n")
       expect(await cli.run("command", "#general")).toBe(2)
       expect(await cli.run("admin", "app", app.app.id, "--command-url", url)).toBe(2)
+      // A usage error changes nothing: the secret isn't rotated unseen.
+      cli.clear()
+      await cli.run("admin", "app", app.app.id, "--json")
+      const secret = (JSON.parse(cli.out) as { app: { signing_secret: string } }).app.signing_secret
+      expect(await cli.run("admin", "app", app.app.id, "--rotate-secret", "--command", "deploy:no slash")).toBe(2)
+      expect(await cli.run("admin", "app", app.app.id, "--command", "/a", "--clear-commands")).toBe(2)
+      cli.clear()
+      await cli.run("admin", "app", app.app.id, "--json")
+      expect((JSON.parse(cli.out) as { app: { signing_secret: string } }).app.signing_secret).toBe(secret)
 
       cli.clear()
       expect(await cli.run("admin", "app", app.app.id, "--clear-commands")).toBe(0)

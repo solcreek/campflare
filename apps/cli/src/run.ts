@@ -1781,6 +1781,16 @@ const commands: Record<string, Command> = {
       const url = str(values["request-url"])
       const events = str(values.events)
       const interactivity = str(values["interactivity-url"])
+      // Every flag is checked before any call: a usage error must not leave a change (a rotated secret) half done.
+      const specs = (values.command as string[] | undefined) ?? []
+      if (specs.length && values["clear-commands"]) throw new UsageError("--command and --clear-commands contradict")
+      if (!specs.length && values["command-url"] !== undefined) {
+        throw new UsageError("--command-url goes with the --command it applies to")
+      }
+      const given =
+        specs.length || values["clear-commands"]
+          ? specs.map((spec) => commandSpec(spec, str(values["command-url"])))
+          : undefined
       let res: AppSettings | undefined
       // First, so a Request URL set in the same command is verified with the new secret.
       if (values["rotate-secret"]) res = await s.client.call<AppSettings>("campflare.apps.rotateSigningSecret", { app })
@@ -1794,17 +1804,13 @@ const commands: Record<string, Command> = {
       if (interactivity !== undefined) {
         res = await s.client.call<AppSettings>("campflare.apps.setInteractivity", { app, request_url: interactivity })
       }
-      const specs = (values.command as string[] | undefined) ?? []
       let appCommands: CommandJson[] | undefined
-      if (specs.length || values["clear-commands"]) {
-        const given = specs.map((spec) => commandSpec(spec, str(values["command-url"])))
+      if (given) {
         const set = await s.client.call<{ ok: boolean; commands: CommandJson[] }>("campflare.apps.setCommands", {
           app,
           commands: JSON.stringify(given),
         })
         appCommands = set.commands
-      } else if (values["command-url"] !== undefined) {
-        throw new UsageError("--command-url goes with the --command it applies to")
       }
       res ??= await s.client.call<AppSettings>("campflare.apps.info", { app })
       if (values.json) return s.print(appCommands ? { ...res, commands: appCommands } : res)
