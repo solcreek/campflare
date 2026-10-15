@@ -219,7 +219,7 @@ describe("migration 0018", () => {
     }
   }
 
-  it("makes hand-made and first-party person tokens full, bots the bot defaults, and keeps other OAuth grants", async () => {
+  it("keeps every person token whole (full) and gives bots the bot defaults", async () => {
     const w = await workspace()
     const app = await w.addApp("Antiguo")
     const old = "channels:history,channels:read,chat:write"
@@ -248,7 +248,7 @@ describe("migration 0018", () => {
     }
     expect(await stored(hand)).toBe("full")
     expect(await stored(cli)).toBe("full")
-    expect(await stored(other)).toBe(old)
+    expect(await stored(other)).toBe("full")
     expect(await stored(bot)).toBe("bot")
   })
 })

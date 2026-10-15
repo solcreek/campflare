@@ -171,10 +171,11 @@ lives in one function both call.
 ### Migrating existing tokens (0018)
 
 Nothing checked scopes before, so stored lists are whatever the code wrote. The
-migration rewrites them to what they would get now: user tokens without a
-`client_id`, and those of our own clients (`campflare-cli`, `-web`,
-`-desktop`), become `full`; bot tokens become `bot`; other OAuth tokens keep
-what they were granted. Then it adds `tokens.expires`.
+migration keeps what each token could actually do: every user token becomes
+`full` (narrowing old OAuth grants would break clients signed in now, such as
+the web app at its own origin, whose old list lacks `rtm:stream`), and bot
+tokens become `bot`. Only tokens made from now on are narrow. Then it adds
+`tokens.expires`.
 
 ## Roles
 

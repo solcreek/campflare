@@ -4,13 +4,14 @@
 -- add to it without another migration. Slack's scopes always contain a colon,
 -- so a bare word is unambiguous.
 --
--- Nothing checked scopes before, so stored lists are whatever the code wrote
--- then. Person tokens made by hand or bootstrap, and those of our own clients,
--- were meant to be the whole person: `full`. Bot tokens get the bot defaults.
--- Other OAuth tokens keep what was consented to.
+-- Nothing checked scopes before, so every existing token could do everything
+-- its person could, whatever its stored list said: the lists are only what the
+-- code wrote then. Keeping that is no new power, while narrowing them would break
+-- clients signed in now (the web app at its own origin, apps given the old
+-- default list, which lacks rtm:stream): every person token becomes `full`.
+-- Only tokens made from now on are narrowed. Bot tokens get the bot defaults.
 
-UPDATE tokens SET scopes = 'full'
-WHERE kind = 'user' AND (client_id IS NULL OR client_id IN ('campflare-cli', 'campflare-web', 'campflare-desktop'));
+UPDATE tokens SET scopes = 'full' WHERE kind = 'user';
 
 UPDATE tokens SET scopes = 'bot' WHERE kind = 'bot';
 
