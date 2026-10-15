@@ -67,7 +67,7 @@ export interface AuthorizeOptions {
   state: string
   /** Pkce.challenge. */
   challenge: string
-  /** Slack user scopes ("chat:write"…); sent comma-separated as user_scope. */
+  /** Slack user scopes ("chat:write"…) or Campflare presets ("full"); sent comma-separated as user_scope. */
   userScopes: readonly string[]
 }
 

@@ -53,7 +53,8 @@ async function authorize(userToken: string, opts: Parameters<typeof start>[0] = 
   if (new URL(afterSignIn, ORIGIN).pathname === "/consent") {
     const page = await (await b.go(afterSignIn)).text()
     const name = CLIENT_NAMES[opts.clientId ?? CLIENT_ID]
-    if (!page.includes(`Allow ${name}?`) || !page.includes("chat:write")) {
+    const scope = (opts.userScope ?? "chat:write").split(",")[0]!
+    if (!page.includes(`Allow ${name}?`) || !page.includes(`<code>${scope}</code>`)) {
       throw new Error(`unexpected consent page: ${page.slice(0, 300)}`)
     }
     const decided = await b.go("/consent", {
@@ -148,6 +149,14 @@ describe("OAuth v2 sign-in for a user token", () => {
       redirect_uri: redirectUri(61_234),
     })
     expect(res.authed_user.scope).toBe("chat:write")
+  })
+
+  it("grants a preset by name: our own clients ask for the whole person", async () => {
+    const w = await workspace()
+    const a = await authorize(w.owner.token, { userScope: "full" })
+    const res = await access({ code: a.code, code_verifier: a.verifier, redirect_uri: a.redirect })
+    expect(res.authed_user.scope).toBe("full")
+    await ok("campflare.tokens.list", {}, res.authed_user.access_token)
   })
 
   it("refuses a wrong PKCE verifier, a reused code and an expired one", async () => {

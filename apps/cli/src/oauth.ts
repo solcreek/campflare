@@ -21,29 +21,8 @@ import type { Io } from "./io"
 
 export const CLIENT_ID = "campflare-cli"
 
-/** What the CLI's commands use: reading and writing conversations, reactions, files, search, people. */
-export const USER_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "channels:write",
-  "chat:write",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "groups:write",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "mpim:write",
-  "reactions:read",
-  "reactions:write",
-  "search:read",
-  "team:read",
-  "users:read",
-]
+/** The CLI does everything a person can, so it asks for the whole person: the `full` preset (docs/scopes-and-roles.md). */
+export const USER_SCOPES = ["full"]
 
 const PAGE = (message: string) =>
   `<!doctype html><meta charset="utf-8"><title>Campflare</title><p style="font:16px system-ui;margin:3rem">${message}</p>`

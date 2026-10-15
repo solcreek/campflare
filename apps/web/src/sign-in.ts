@@ -25,28 +25,8 @@ import type { Invoke, Session } from "./session"
 //   free loopback port (`oauth_listen`, `oauth_wait` in src-tauri/src/oauth.rs)
 //   and the system browser comes back there, as the CLI's does.
 
-/** What the app does: read and write conversations, messages, reactions and files; see people and the team. */
-export const USER_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "channels:write",
-  "chat:write",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "groups:write",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "mpim:write",
-  "reactions:read",
-  "reactions:write",
-  "team:read",
-  "users:read",
-]
+/** The app does everything a person can, so it asks for the whole person: the `full` preset (docs/scopes-and-roles.md). */
+export const USER_SCOPES = ["full"]
 
 export interface BrowserSignIn {
   /**
