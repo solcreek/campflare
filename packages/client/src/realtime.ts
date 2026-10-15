@@ -28,6 +28,11 @@ export interface ListenOptions {
 
 export interface Listener {
   close(): void
+  /**
+   * Sends a frame on the live link (a Campflare client's `campflare.active`, say);
+   * false when there's none right now. Nothing is queued: resend on the next "connected".
+   */
+  send(frame: Record<string, unknown>): boolean
 }
 
 interface Frame {
@@ -43,6 +48,8 @@ export function listen(options: ListenOptions): Listener {
   let delay = minDelay
   let closed = false
   let socket: WebSocket | undefined
+  /** The link said hello and hasn't closed since. */
+  let connected = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
   const status = (s: "connecting" | "connected" | "disconnected", detail?: string) => options.onStatus?.(s, detail)
@@ -76,6 +83,7 @@ export function listen(options: ListenOptions): Listener {
         return
       }
       socket = ws
+      connected = true
       status("connected")
     } else if (frame.type === "disconnect" && options.mode === "socket") {
       void openUrl()
@@ -105,6 +113,7 @@ export function listen(options: ListenOptions): Listener {
       if (retired.delete(ws)) return
       if (socket && ws !== socket) return // a replacement that never said hello
       socket = undefined
+      connected = false
       retry()
     })
     if (!socket) socket = ws
@@ -127,6 +136,15 @@ export function listen(options: ListenOptions): Listener {
       closed = true
       clearTimeout(timer)
       socket?.close()
+    },
+    send(frame) {
+      if (!connected || !socket) return false
+      try {
+        socket.send(JSON.stringify(frame))
+        return true
+      } catch {
+        return false
+      }
     },
   }
 }

@@ -61,6 +61,14 @@ export async function startServer({
       "BOOTSTRAP_SECRET:conformance",
       "--var",
       "SIGNING_KEY:conformance",
+      // Push on, with a key pair made for the tests (the same as the server's unit tests').
+      "--var",
+      "VAPID_PUBLIC_KEY:BJQiCS-kDdMSnJJm-oewJ2ESIFX-sq5HFIE2TXDesZbHULYpnrUjid9rwNDjDehUKIZ8G_x_JsIRQA8jDTw20aA",
+      "--var",
+      "VAPID_PRIVATE_KEY:7dyzr08oHg1CxK68ptek_5k4dxYlkMOk5w3GDpCH8n8",
+      // The CLI's tests subscribe a device at an address nothing answers.
+      "--var",
+      "PUSH_SERVICE_HOSTS:127.0.0.1",
     ],
     { cwd: server, stdio: ["ignore", "pipe", "pipe"], env: childEnv },
   )

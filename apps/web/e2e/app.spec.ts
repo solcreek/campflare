@@ -567,3 +567,19 @@ test("a button opens the app's modal; it's filled in, refused once, then submitt
     app.close()
   }
 })
+
+test("the app is installable, and its service worker for notifications runs at its root", async ({ browser }) => {
+  const alex = await open(browser)
+  const scope = await alex.evaluate(async () => (await navigator.serviceWorker.ready).scope)
+  expect(scope).toBe(`${stack.appUrl}/`)
+  const manifest = await (await alex.request.get(`${stack.appUrl}/manifest.webmanifest`)).json()
+  expect(manifest).toMatchObject({ name: "Campflare", display: "standalone" })
+  expect((await alex.request.get(`${stack.appUrl}/icons/icon-192.png`)).ok()).toBe(true)
+  // The menu has notifications: on offer, or why not (headless Chromium blocks them; CI's stack has no keys).
+  await alex.getByRole("button", { name: /menu$/ }).click()
+  await expect(
+    alex
+      .getByRole("menuitem", { name: "Turn on notifications" })
+      .or(alex.getByText(/^Notifications (are blocked in your browser's settings|aren't set up on this server)$/)),
+  ).toBeVisible()
+})

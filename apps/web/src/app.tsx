@@ -8,6 +8,7 @@ import { LoginScreen } from "./components/login-screen"
 import { OtherServerLink } from "./components/other-server-link"
 import { Shell } from "./components/shell"
 import { type DeepLink, deepLinkHash, type DeepLinks, parseDeepLink, platformDeepLinks, serverOf } from "./deep-link"
+import { browserPlatform, signOutPush } from "./push"
 import { lastServer, rememberServer } from "./server-address"
 import { revokeSession, type Session, type SessionStore } from "./session"
 import { type BrowserSignIn, platformSignIn } from "./sign-in"
@@ -29,6 +30,16 @@ export interface AppProps {
   origin?: string
   /** campflare:// links handed over by the desktop shell; the shell's own by default, none in a browser. */
   deepLinks?: DeepLinks | null
+}
+
+/** Signing out waits this long at most for push to be turned off (a service worker that never got ready). */
+export const PUSH_SIGN_OUT_MS = 5000
+
+/** Waits for a promise, but no longer than `ms`, and never fails. */
+async function within(promise: Promise<unknown>, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([promise.catch(() => undefined), new Promise((resolve) => (timer = setTimeout(resolve, ms)))])
+  clearTimeout(timer)
 }
 
 const connectTo = (session: Session) => createWorkspace({ client: createClient(session) })
@@ -123,16 +134,18 @@ export function App({
   // Signing out ends the session on the server first (an OAuth token is revoked; see revokeSession),
   // then forgets it here, whether or not the server answered.
   const [signingOut, setSigningOut] = useState(false)
+  const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
   const onSignOut = useCallback(async () => {
     if (!session) return
     setSigningOut(true)
+    // While the token still works: this browser stops getting the person's notifications.
+    if (workspace) await within(signOutPush(workspace, browserPlatform()), PUSH_SIGN_OUT_MS)
     await revokeSession(session, { fetch })
     await store.clear().catch(reportStoreError("forget"))
     setSigningOut(false)
     setSession(null)
     sessionChanged(null)
-  }, [session, store, fetch, sessionChanged])
-  const workspace = useMemo(() => (session ? connect(session) : null), [session, connect])
+  }, [session, workspace, store, fetch, sessionChanged])
 
   return (
     <TooltipProvider>

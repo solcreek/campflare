@@ -138,6 +138,29 @@ describe("listen (rtm)", () => {
     l.close()
   })
 
+  it("sends frames on the live link only, once it said hello", async () => {
+    const l = listen({
+      client: server(["wss://r", "wss://s"]),
+      mode: "rtm",
+      onEvent: () => undefined,
+      WebSocket: FakeSocket as unknown as typeof WebSocket,
+      minDelayMs: 1,
+    })
+    await tick()
+    const r = FakeSocket.all[0]!
+    expect(l.send({ type: "campflare.active", active: true })).toBe(false)
+    r.receive({ type: "hello" })
+    expect(l.send({ type: "campflare.active", active: true })).toBe(true)
+    expect(r.sent).toEqual(['{"type":"campflare.active","active":true}'])
+    r.send = () => {
+      throw new Error("closing")
+    }
+    expect(l.send({ type: "campflare.active", active: false })).toBe(false)
+    r.close()
+    expect(l.send({ type: "campflare.active", active: false })).toBe(false)
+    l.close()
+  })
+
   it("closing before the link opens leaves nothing behind", async () => {
     const l = listen({
       client: server(["wss://r"]),

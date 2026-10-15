@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -14,8 +14,10 @@ import {
   opentuiSlack,
   playwrightCache,
   pnpmVersion,
+  pushKeys,
   toolchainSource,
 } from "../../scripts/ready-checks.ts"
+import { generateVapidKeys, withVapidKeys } from "../../scripts/vapid-keys.ts"
 
 // `pnpm ready`'s checks, against a scratch checkout: never the real one.
 
@@ -64,6 +66,30 @@ describe("pnpm ready checks", () => {
     })
     write("apps/server/.dev.vars", "SIGNING_KEY=x\nBOOTSTRAP_SECRET=y\n")
     expect(devVars(root).ok).toBe(true)
+  })
+
+  it("wants VAPID keys for push, and writes a fresh pair into .dev.vars", async () => {
+    scratch()
+    // No file: the secrets check's fix (copying the example) comes first.
+    expect(pushKeys(root)).toMatchObject({ ok: false, fix: undefined })
+    write(
+      "apps/server/.dev.vars",
+      "SIGNING_KEY=x\nVAPID_PUBLIC_KEY=\n# a comment\nVAPID_SUBJECT=mailto:ops@campflare.test",
+    )
+    expect(pushKeys(root)).toMatchObject({
+      ok: false,
+      fix: "node scripts/vapid-keys.ts --write apps/server/.dev.vars",
+    })
+    const keys = await generateVapidKeys()
+    expect(Buffer.from(keys.VAPID_PUBLIC_KEY, "base64url")).toHaveLength(65)
+    expect(Buffer.from(keys.VAPID_PRIVATE_KEY, "base64url")).toHaveLength(32)
+    const text = withVapidKeys(readFileSync(join(root, "apps/server/.dev.vars"), "utf8"), keys)
+    expect(text).toBe(
+      `SIGNING_KEY=x\nVAPID_PUBLIC_KEY=${keys.VAPID_PUBLIC_KEY}\n# a comment\nVAPID_SUBJECT=mailto:ops@campflare.test\n` +
+        `VAPID_PRIVATE_KEY=${keys.VAPID_PRIVATE_KEY}\n`,
+    )
+    write("apps/server/.dev.vars", text)
+    expect(pushKeys(root).ok).toBe(true)
   })
 
   it("spots bundles older than their sources, the CLI's including the client's", () => {

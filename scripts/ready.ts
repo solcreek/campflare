@@ -18,6 +18,7 @@ import {
   nodeVersion,
   opentuiSlack,
   pnpmVersion,
+  pushKeys,
   toolchainSource,
   type Check,
 } from "./ready-checks.ts"
@@ -47,6 +48,7 @@ async function run(): Promise<Check[]> {
     pnpmVersion(root, pnpmOnPath()),
     dependencies(root),
     devVars(root),
+    pushKeys(root),
     bundles(root),
     ...(values.quick ? [] : [migrations(root)]),
     await devPort(),

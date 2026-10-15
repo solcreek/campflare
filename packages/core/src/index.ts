@@ -24,5 +24,5 @@ export type {
 export { formField, initialValue, initialValues } from "./views"
 export type { FormField, FormValues, View } from "./views"
 export { createWorkspace } from "./workspace"
-export type { NewFile, Workspace, WorkspaceOptions } from "./workspace"
+export type { NewFile, PushSubscriptionInfo, Workspace, WorkspaceOptions } from "./workspace"
 export type { Bookmark, Conversation, Message, MessageBlock, MessageFile, Pin, Reaction, Self, User } from "./types"

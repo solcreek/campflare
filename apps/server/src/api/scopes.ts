@@ -142,6 +142,12 @@ export const NEEDS: Record<string, Need> = {
   "campflare.activity.mark": ["activity:write"],
   "campflare.prefs.get": ["prefs:read"],
   "campflare.prefs.set": ["prefs:write"],
+  // Web Push (docs/push.md): the key is public; registering a device is the person's own client's job.
+  "campflare.push.vapidKey": [],
+  "campflare.push.list": ["push:read"],
+  "campflare.push.subscribe": ["push:write"],
+  "campflare.push.unsubscribe": ["push:write"],
+  "campflare.push.test": ["push:write"],
 
   "apps.connections.open": ["connections:write"],
   // The live feeds carry every message the person sees, so they want every type's :history too.
@@ -262,6 +268,7 @@ const READ = [
   "calls:read",
   "activity:read",
   "prefs:read",
+  "push:read",
 ]
 
 const WRITE = [
@@ -300,6 +307,7 @@ export const FULL_USER_SCOPES = [
   "admin.invites:write",
   "admin.import:read",
   "admin.import:write",
+  "push:write",
 ]
 
 export const DEFAULT_BOT_SCOPES = [

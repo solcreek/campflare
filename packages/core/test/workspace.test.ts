@@ -678,3 +678,49 @@ describe("createWorkspace", () => {
     expect(ws.getState()).toMatchObject({ status: "ready", emoji: {} })
   })
 })
+
+describe("push and presence", () => {
+  it("tells the server whether the person is looking, again after every reconnect", async () => {
+    const { ws } = await started({}, "rtm")
+    await settle()
+    // Before the link is up: kept, and said once it is.
+    ws.setActive(true)
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    expect(FakeSocket.all[0]!.sent).toEqual([{ type: "campflare.active", active: true }])
+    ws.setActive(false)
+    expect(FakeSocket.all[0]!.sent.at(-1)).toEqual({ type: "campflare.active", active: false })
+    FakeSocket.all[0]!.close()
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    expect(FakeSocket.all[1]!.sent).toEqual([{ type: "campflare.active", active: false }])
+    ws.stop()
+  })
+
+  it("subscribes and unsubscribes browsers, sends a test, and reads the key", async () => {
+    const sub = { endpoint: "https://push.example/1", keys: { p256dh: "BPk", auth: "AAA" } }
+    const { api, ws } = await started({
+      "campflare.push.vapidKey": () => ({ key: "BKEY" }),
+      "campflare.push.subscribe": () => ({ subscription: { id: "P1" } }),
+      "campflare.push.unsubscribe": () => new Error("subscription_not_found"),
+      "campflare.push.test": () => ({ sent: 2, failed: 0, removed: 1 }),
+    })
+    expect(await ws.pushKey()).toBe("BKEY")
+    await ws.subscribePush(sub, "Firefox · Linux")
+    expect(api.calls.at(-1)).toEqual({
+      method: "campflare.push.subscribe",
+      args: { subscription: JSON.stringify(sub), label: "Firefox · Linux" },
+    })
+    // Already gone is as good as removed.
+    await ws.unsubscribePush(sub.endpoint)
+    expect(api.calls.at(-1)).toEqual({ method: "campflare.push.unsubscribe", args: { endpoint: sub.endpoint } })
+    expect(await ws.testPush()).toEqual({ sent: 2, failed: 0, removed: 1 })
+
+    api.handlers["campflare.push.vapidKey"] = () => new Error("push_not_configured")
+    expect(await ws.pushKey()).toBeNull()
+    api.handlers["campflare.push.vapidKey"] = () => new Error("ratelimited")
+    await expect(ws.pushKey()).rejects.toThrow("ratelimited")
+    api.handlers["campflare.push.unsubscribe"] = () => new Error("invalid_auth")
+    await expect(ws.unsubscribePush(sub.endpoint)).rejects.toThrow("invalid_auth")
+  })
+})

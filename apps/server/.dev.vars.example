@@ -22,3 +22,8 @@ OFFER_DESKTOP_APP=
 # Only for tests/live/images.live.test.ts (pnpm test:live), which runs the Worker with the real
 # Images binding: an account API token with Workers Scripts: Edit and Images: Edit (with CF_ACCOUNT_ID).
 IMAGES_API_TOKEN=
+# Web Push (off while the keys are empty): pnpm ready --fix writes a pair here; pnpm vapid-keys prints one.
+# VAPID_SUBJECT is a mailto: or https: contact for push services (the server's origin by default).
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=

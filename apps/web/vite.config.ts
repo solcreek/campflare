@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
-import type { Plugin } from "vite"
+import { type Plugin, transformWithOxc } from "vite"
 import { defineConfig } from "vitest/config"
 
 const root = resolve(import.meta.dirname, "../..")
@@ -72,8 +72,37 @@ export function oauthClientPlugin(origin = process.env.CAMPFLARE_WEB_ORIGIN): Pl
   }
 }
 
+/**
+ * src/sw.ts as a classic script: types stripped, `export` keywords dropped (it
+ * imports nothing, so nothing else needs bundling). Classic, not a module
+ * worker, because not every browser that has push runs module service workers.
+ */
+export async function serviceWorkerSource(file = source("apps/web/src/sw.ts")): Promise<string> {
+  const { code } = await transformWithOxc(readFileSync(file, "utf8"), file, { lang: "ts" })
+  return code.replace(/^export\s*\{[^}]*\};?\s*$/gm, "").replace(/^export\s+/gm, "")
+}
+
+/** Serves the service worker at /sw.js in development and writes sw.js beside index.html in a build. */
+export function serviceWorkerPlugin(): Plugin {
+  return {
+    name: "campflare-service-worker",
+    configureServer(server) {
+      server.middlewares.use("/sw.js", (_req, res, next) => {
+        serviceWorkerSource().then((code) => {
+          res.setHeader("content-type", "text/javascript")
+          res.setHeader("cache-control", "no-cache")
+          res.end(code)
+        }, next)
+      })
+    },
+    async generateBundle() {
+      this.emitFile({ type: "asset", fileName: "sw.js", source: await serviceWorkerSource() })
+    },
+  }
+}
+
 export default defineConfig(({ command }) => ({
-  plugins: [react(), tailwindcss(), oauthClientPlugin()],
+  plugins: [react(), tailwindcss(), oauthClientPlugin(), serviceWorkerPlugin()],
   // Tauri serves the build from its own origin; relative paths work there and on any web host.
   base: "./",
   resolve: {
