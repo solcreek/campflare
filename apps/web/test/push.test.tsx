@@ -13,7 +13,9 @@ import {
   keyBytes,
   needsInstall,
   type PushPlatform,
+  OWNER_KEY,
   registerServiceWorker,
+  signOutPush,
   turnOffPush,
   turnOnPush,
 } from "@/push"
@@ -81,19 +83,36 @@ function fakeBrowser(permission: NotificationPermission = "default", answer: Not
     userAgent: FIREFOX_LINUX,
     standalone: false,
   }
+  // A Map as Storage: get, set, remove.
+  const stored = new Map<string, string>()
+  platform.storage = {
+    getItem: (k) => stored.get(k) ?? null,
+    setItem: (k, v) => void stored.set(k, v),
+    removeItem: (k) => void stored.delete(k),
+  }
   return {
+    stored,
     platform,
     registration,
     notification,
     current: () => current,
-    /** Subscribes as an earlier visit would have, with this key. */
-    existing: (key: string) => (current = made(keyBytes(key), ++count)),
+    /** Subscribes as an earlier visit would have, with this key, for this person (none: nobody known). */
+    existing: (key: string, owner?: string) => {
+      if (owner) stored.set(OWNER_KEY, owner)
+      return (current = made(keyBytes(key), ++count))
+    },
     message: (data: unknown) => listeners.forEach((l) => l(new MessageEvent("message", { data }))),
   }
 }
 
+/** Whom the fake server signs in: alex (U1) on https://x.test. */
+const ALEX = "https://x.test U1"
+
 function pushServer(key: string | null = KEY) {
   return fakeApi({
+    "auth.test": () => ({ user_id: "U1", team_id: "T1", team: "Team" }),
+    "users.list": () => ({ members: [{ id: "U1", name: "alex" }] }),
+    "conversations.list": () => ({ channels: [] }),
     "campflare.push.vapidKey": () => (key ? { key } : new Error("push_not_configured")),
     "campflare.push.subscribe": () => ({ subscription: { id: "P1" } }),
     "campflare.push.unsubscribe": () => ({ removed: ["P1"] }),
@@ -101,7 +120,11 @@ function pushServer(key: string | null = KEY) {
   })
 }
 
-const workspaceOn = (api: ReturnType<typeof pushServer>) => createWorkspace({ client: api.client, realtime: "none" })
+async function workspaceOn(api: ReturnType<typeof pushServer>) {
+  const ws = createWorkspace({ client: api.client, realtime: "none" })
+  await ws.start()
+  return ws
+}
 const callsTo = (api: ReturnType<typeof pushServer>, method: string) => api.calls.filter((c) => c.method === method)
 
 describe("the service worker", () => {
@@ -281,7 +304,7 @@ describe("push in the browser", () => {
 
   it("turns on: asks first, subscribes with the server's key, and tells the server", async () => {
     const api = pushServer()
-    const ws = workspaceOn(api)
+    const ws = await workspaceOn(api)
     const browser = fakeBrowser()
     expect(await currentPush(ws, browser.platform)).toBe("off")
     expect(await turnOnPush(ws, browser.platform)).toBe("on")
@@ -301,7 +324,9 @@ describe("push in the browser", () => {
     expect(await currentPush(ws, browser.platform)).toBe("on")
     expect(callsTo(api, "campflare.push.subscribe")).toHaveLength(2)
 
+    expect(browser.stored.get(OWNER_KEY)).toBe(ALEX)
     expect(await turnOffPush(ws, browser.platform)).toBe("off")
+    expect(browser.stored.has(OWNER_KEY)).toBe(false)
     expect(browser.current()).toBeNull()
     expect(callsTo(api, "campflare.push.unsubscribe").at(-1)!.args).toEqual({ endpoint: "https://push.example/1" })
     expect(await turnOffPush(ws, browser.platform)).toBe("off")
@@ -309,34 +334,80 @@ describe("push in the browser", () => {
 
   it("replaces a subscription made with another key", async () => {
     const api = pushServer()
-    const ws = workspaceOn(api)
+    const ws = await workspaceOn(api)
     const browser = fakeBrowser("granted")
-    const stale = browser.existing(OTHER_KEY)
+    const stale = browser.existing(OTHER_KEY, ALEX)
     expect(await currentPush(ws, browser.platform)).toBe("on")
     expect((stale as { unsubscribed?: boolean }).unsubscribed).toBe(true)
     expect(callsTo(api, "campflare.push.unsubscribe")[0]!.args).toEqual({ endpoint: stale.endpoint })
     expect(new Uint8Array(browser.current()!.options.applicationServerKey!)).toEqual(keyBytes(KEY))
 
     // Turning on over a stale one replaces it too.
-    browser.existing(OTHER_KEY)
+    browser.existing(OTHER_KEY, ALEX)
     expect(await turnOnPush(ws, browser.platform)).toBe("on")
     expect(new Uint8Array(browser.current()!.options.applicationServerKey!)).toEqual(keyBytes(KEY))
   })
 
+  it("never adopts a subscription made for someone else: it's dropped, and turning on makes a new one", async () => {
+    const api = pushServer()
+    const ws = await workspaceOn(api)
+    for (const owner of ["https://x.test U9", "https://other.test U1", undefined]) {
+      const browser = fakeBrowser("granted")
+      const theirs = browser.existing(KEY, owner)
+      expect(await currentPush(ws, browser.platform)).toBe("off")
+      expect(theirs.unsubscribed).toBe(true)
+      expect(browser.stored.has(OWNER_KEY)).toBe(false)
+    }
+    expect(callsTo(api, "campflare.push.subscribe")).toEqual([])
+    expect(callsTo(api, "campflare.push.unsubscribe")).toEqual([])
+
+    const browser = fakeBrowser("granted")
+    const theirs = browser.existing(KEY, "https://x.test U9")
+    expect(await turnOnPush(ws, browser.platform)).toBe("on")
+    expect(theirs.unsubscribed).toBe(true)
+    expect(browser.current()!.endpoint).not.toBe(theirs.endpoint)
+    expect(browser.stored.get(OWNER_KEY)).toBe(ALEX)
+  })
+
+  it("signs out: the server forgets this browser, and the browser drops the subscription", async () => {
+    const api = pushServer()
+    const ws = await workspaceOn(api)
+    const browser = fakeBrowser()
+    await turnOnPush(ws, browser.platform)
+    const endpoint = browser.current()!.endpoint
+    await signOutPush(ws, browser.platform)
+    expect(callsTo(api, "campflare.push.unsubscribe").at(-1)!.args).toEqual({ endpoint })
+    expect(browser.current()).toBeNull()
+    expect(browser.stored.has(OWNER_KEY)).toBe(false)
+
+    // The server failing doesn't keep the browser subscribed; someone else's is dropped without asking the server.
+    api.handlers["campflare.push.unsubscribe"] = () => new Error("invalid_auth")
+    await turnOnPush(ws, browser.platform)
+    await signOutPush(ws, browser.platform)
+    expect(browser.current()).toBeNull()
+    const calls = callsTo(api, "campflare.push.unsubscribe").length
+    browser.existing(KEY, "https://x.test U9")
+    await signOutPush(ws, browser.platform)
+    expect(browser.current()).toBeNull()
+    expect(callsTo(api, "campflare.push.unsubscribe")).toHaveLength(calls)
+    await signOutPush(ws, browser.platform)
+    await signOutPush(ws, { ...browser.platform, push: false })
+  })
+
   it("says why it can't: unsupported, not configured, blocked, or not granted", async () => {
-    const ws = workspaceOn(pushServer())
+    const ws = await workspaceOn(pushServer())
     const browser = fakeBrowser()
     expect(await currentPush(ws, { ...browser.platform, push: false })).toBe("unsupported")
     expect(await turnOnPush(ws, { ...browser.platform, notification: undefined })).toBe("unsupported")
     expect(await turnOffPush(ws, { ...browser.platform, serviceWorker: undefined })).toBe("unsupported")
-    expect(await currentPush(workspaceOn(pushServer(null)), browser.platform)).toBe("unconfigured")
-    expect(await turnOnPush(workspaceOn(pushServer(null)), fakeBrowser().platform)).toBe("unconfigured")
+    expect(await currentPush(await workspaceOn(pushServer(null)), browser.platform)).toBe("unconfigured")
+    expect(await turnOnPush(await workspaceOn(pushServer(null)), fakeBrowser().platform)).toBe("unconfigured")
     expect(await currentPush(ws, fakeBrowser("denied").platform)).toBe("denied")
     expect(await turnOnPush(ws, fakeBrowser("default", "denied").platform)).toBe("denied")
     expect(await turnOnPush(ws, fakeBrowser("default", "default").platform)).toBe("off")
     // Subscribed once, but the permission was reset since.
     const reset = fakeBrowser("default")
-    reset.existing(KEY)
+    reset.existing(KEY, ALEX)
     expect(await currentPush(ws, reset.platform)).toBe("off")
   })
 })
@@ -419,6 +490,21 @@ describe("the notifications menu", () => {
     await waitFor(() => expect(server.api.calls.some((c) => c.method === "campflare.push.unsubscribe")).toBe(true))
     await openMenu()
     expect(await screen.findByRole("menuitem", { name: "Turn on notifications" })).toBeTruthy()
+  })
+
+  it("signing out turns push off in this browser first, while the token works", async () => {
+    const browser = fakeBrowser()
+    const { server, user, openMenu } = await signedIn(browser)
+    await openMenu()
+    await user.click(await screen.findByRole("menuitem", { name: "Turn on notifications" }))
+    await waitFor(() => expect(browser.current()).not.toBeNull())
+    const endpoint = browser.current()!.endpoint
+    await openMenu()
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }))
+    expect(await screen.findByRole("heading", { name: "Sign in to Campflare" })).toBeTruthy()
+    expect(server.api.calls.filter((c) => c.method === "campflare.push.unsubscribe").at(-1)!.args).toEqual({ endpoint })
+    expect(browser.current()).toBeNull()
+    expect(localStorage.getItem(OWNER_KEY)).toBeNull()
   })
 
   it("says when the browser blocks them, and reports a failure to turn them on", async () => {

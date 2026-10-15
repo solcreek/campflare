@@ -46,6 +46,8 @@ export interface PushPlatform {
   userAgent: string
   /** iOS: running from the home screen, the only place Safari allows push. */
   standalone: boolean
+  /** Where whose subscription this browser holds is remembered (localStorage). */
+  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">
 }
 
 /** The browser's own, read when called (tests stub the globals first). */
@@ -60,7 +62,53 @@ export function browserPlatform(g: typeof globalThis = globalThis): PushPlatform
     push: "PushManager" in g,
     userAgent: nav?.userAgent ?? "",
     standalone: Boolean(nav?.standalone) || Boolean(g.matchMedia?.("(display-mode: standalone)").matches),
+    storage: storageOf(g),
   }
+}
+
+/** localStorage, if the browser lets the page have it (a private window may not). */
+function storageOf(g: typeof globalThis): PushPlatform["storage"] {
+  try {
+    return g.localStorage ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whose subscription this browser holds: the server and person it was made
+ * for, so a later sign-in by someone else never adopts it (their devices list
+ * would gain a browser, and the browser their notifications).
+ */
+export const OWNER_KEY = "campflare.push.owner"
+
+/** The signed-in person, as OWNER_KEY records them. */
+function ownerOf(workspace: Workspace): string | undefined {
+  const self = workspace.getState().self
+  return self ? `${self.url} ${self.userId}` : undefined
+}
+
+function storedOwner(p: PushPlatform): string | null {
+  try {
+    return p.storage?.getItem(OWNER_KEY) ?? null
+  } catch {
+    return null
+  }
+}
+
+function keepOwner(p: PushPlatform, owner: string | undefined) {
+  try {
+    if (owner) p.storage?.setItem(OWNER_KEY, owner)
+    else p.storage?.removeItem(OWNER_KEY)
+  } catch {
+    // Without storage, the next load finds no owner and asks again: safe.
+  }
+}
+
+/** Whether this browser's subscription was made for the person signed in now. */
+const isOwn = (workspace: Workspace, p: PushPlatform) => {
+  const owner = ownerOf(workspace)
+  return owner !== undefined && storedOwner(p) === owner
 }
 
 const supported = (p: PushPlatform) => Boolean(p.notification && p.serviceWorker && p.push)
@@ -134,12 +182,15 @@ async function subscribe(
 ) {
   const sub = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
   await workspace.subscribePush(subscriptionInfo(sub), deviceLabel(p.userAgent))
+  keepOwner(p, ownerOf(workspace))
 }
 
 /**
  * Where push stands in this browser, putting things right on the way: a
- * subscription made with another server key (the keys changed, or another
- * server) is replaced, and one the server may have dropped is told again.
+ * subscription made for someone else (another person signed in here before,
+ * and didn't sign out) is dropped, never adopted; one made with another server
+ * key (the keys changed) is replaced; and one the server may have dropped is
+ * told again.
  */
 export async function currentPush(workspace: Workspace, p: PushPlatform): Promise<PushState> {
   if (!supported(p)) return "unsupported"
@@ -149,6 +200,11 @@ export async function currentPush(workspace: Workspace, p: PushPlatform): Promis
   const registration = await p.serviceWorker!.ready
   const sub = await registration.pushManager.getSubscription()
   if (!sub || p.notification!.permission !== "granted") return "off"
+  if (!isOwn(workspace, p)) {
+    await sub.unsubscribe()
+    keepOwner(p, undefined)
+    return "off"
+  }
   const bytes = keyBytes(key)
   if (sameKey(sub.options.applicationServerKey, bytes)) {
     await workspace.subscribePush(subscriptionInfo(sub), deviceLabel(p.userAgent))
@@ -171,7 +227,8 @@ export async function turnOnPush(workspace: Workspace, p: PushPlatform): Promise
   const registration = await p.serviceWorker!.ready
   const old = await registration.pushManager.getSubscription()
   const bytes = keyBytes(key)
-  if (old && !sameKey(old.options.applicationServerKey, bytes)) await old.unsubscribe()
+  // Someone else's, or made with another key: a fresh one replaces it.
+  if (old && (!sameKey(old.options.applicationServerKey, bytes) || !isOwn(workspace, p))) await old.unsubscribe()
   await subscribe(workspace, p, registration, bytes)
   return "on"
 }
@@ -185,5 +242,22 @@ export async function turnOffPush(workspace: Workspace, p: PushPlatform): Promis
     await sub.unsubscribe()
     await workspace.unsubscribePush(sub.endpoint)
   }
+  keepOwner(p, undefined)
   return "off"
+}
+
+/**
+ * Signing out: this browser stops getting the person's notifications. The
+ * server forgets the subscription (best effort: the token still works now) and
+ * the browser drops it, whoever it was made for.
+ */
+export async function signOutPush(workspace: Workspace, p: PushPlatform): Promise<void> {
+  if (!supported(p)) return
+  const registration = await p.serviceWorker!.ready
+  const sub = await registration.pushManager.getSubscription()
+  if (sub) {
+    if (isOwn(workspace, p)) await workspace.unsubscribePush(sub.endpoint).catch(() => undefined)
+    await sub.unsubscribe().catch(() => false)
+  }
+  keepOwner(p, undefined)
 }
