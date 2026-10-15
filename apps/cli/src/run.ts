@@ -526,14 +526,10 @@ const commands: Record<string, Command> = {
   async whoami(argv, io) {
     const { values } = parse(argv)
     const s = await session(io, values)
-    const [who, scopes] = await Promise.all([
-      s.client.call<{ ok: boolean; user: string; user_id: string; team: string; url: string; bot_id?: string }>(
-        "auth.test",
-      ),
-      s.client.scopes(),
-    ])
+    const who = await s.client.authTest<{ ok: boolean; user: string; user_id: string; team: string; url: string }>()
+    const { scopes } = who
     const role = await roleOf(s.client, who.user_id, scopes)
-    if (values.json) return s.print({ ...who, role, scopes })
+    if (values.json) return s.print({ ...who, role })
     io.stdout(`@${who.user} (${who.user_id}) in ${who.team} — ${who.url}\n`)
     io.stdout(`${role ? `Role: ${role}. ` : ""}Scopes: ${scopes.join(", ") || "none"}\n`)
   },
