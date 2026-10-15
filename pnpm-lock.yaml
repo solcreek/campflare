@@ -206,6 +206,9 @@ importers:
       '@slack/web-api':
         specifier: 8.1.1
         version: 8.1.1
+      '@slack/webhook':
+        specifier: 8.0.2
+        version: 8.0.2
 
   tests/live:
     devDependencies:
@@ -1577,6 +1580,10 @@ packages:
 
   '@slack/web-api@8.1.1':
     resolution: {integrity: sha512-am/z/LLbEC7gNQp6FpaGT0l4XnWqcXetpwdgZHzS7Nbb96q9R9QwWA3lo0ZXGuAHDkct0MvFnouzuc2Y4XNmow==}
+    engines: {node: '>= 20', npm: '>=9.6.4'}
+
+  '@slack/webhook@8.0.2':
+    resolution: {integrity: sha512-gBPlV9W6zfP4qcijX47Ni5GznbZ8Q7oZYnCQMGkOGnEHPny+gR1xpjaUdafSwGNEVKjHtW39+A2Upzg1GPHyVg==}
     engines: {node: '>= 20', npm: '>=9.6.4'}
 
   '@speed-highlight/core@1.2.24':
@@ -5270,6 +5277,14 @@ snapshots:
       '@types/retry': 0.12.5
       eventemitter3: 5.0.4
       p-queue: 6.6.2
+      p-retry: 4.6.2
+      retry: 0.13.1
+
+  '@slack/webhook@8.0.2':
+    dependencies:
+      '@slack/types': 3.2.0
+      '@types/node': 24.19.0
+      '@types/retry': 0.12.5
       p-retry: 4.6.2
       retry: 0.13.1
 
