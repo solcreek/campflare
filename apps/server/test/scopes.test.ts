@@ -358,3 +358,16 @@ describe("signing in with a token", () => {
     expect((await signIn(whole, "203.0.113.73")).status).toBe(200)
   })
 })
+
+describe("scopes checked before anything changes", () => {
+  it("creates no channel for a token that may not", async () => {
+    const w = await workspace()
+    const token = await narrow(w.teamId, w.owner.id, ["im:write", "channels:read"])
+    expect(await call("conversations.create", { name: "fantasma", is_private: true }, token)).toMatchObject({
+      error: "missing_scope",
+      needed: "groups:write",
+    })
+    // The name is still free: nothing was written.
+    await ok("conversations.create", { name: "fantasma", is_private: true }, w.owner.token)
+  })
+})

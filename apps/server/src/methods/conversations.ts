@@ -17,6 +17,7 @@ import { audienceOf, publish } from "../events"
 import { decodeCursor, encodeCursor } from "../api/args"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
+import { requireConversationScope } from "../api/scopes"
 import { ids, nowSeconds } from "../api/ids"
 import { conversationJson, loadExtras, messageJson, reactionsOfQuery } from "../api/shapes"
 import { typesFilter } from "./users"
@@ -250,6 +251,8 @@ method("conversations.close", "actor", async (ctx) => {
 method("conversations.create", "actor", async (ctx) => {
   const name = validChannelName(ctx.args.req("name", "invalid_name_required"))
   const isPrivate = ctx.args.bool("is_private")
+  // Before the insert: the fetch after it checks too, but too late to leave nothing behind.
+  requireConversationScope(ctx.auth, { kind: "channel", is_private: isPrivate ? 1 : 0 }, "write")
   const now = nowSeconds()
   const id = ids.channel()
   const self = ctx.auth.user
