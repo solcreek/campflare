@@ -59,7 +59,8 @@ export interface EmojiImage {
 /**
  * An uploaded image, checked (PNG, GIF, JPEG or WebP by its bytes, 128 KB at most) and scaled
  * down to fit 128 px when it's bigger and the Images binding is there. If Images fails, or
- * the result isn't smaller, the original is kept: it's within the byte limit either way.
+ * its result isn't a smaller file of the right size and type, the original is kept: it's
+ * within the byte limit either way.
  */
 export async function emojiImage(env: Pick<Env, "IMAGES">, raw: Uint8Array<ArrayBuffer>): Promise<EmojiImage> {
   if (raw.byteLength === 0) throw new CampflareError("error_no_image")
@@ -80,7 +81,9 @@ export async function emojiImage(env: Pick<Env, "IMAGES">, raw: Uint8Array<Array
       .output({ format: out, anim: animated })
     const bytes = new Uint8Array(await result.response().arrayBuffer())
     const scaled = imageSize(bytes)
-    if (scaled && Math.max(scaled.width, scaled.height) <= EMOJI_SIDE && photoType(bytes) === out) {
+    // Kept only when it is what was asked for and saves bytes: a scaled GIF can come out bigger.
+    const smaller = bytes.byteLength < raw.byteLength && bytes.byteLength <= EMOJI_MAX_BYTES
+    if (smaller && scaled && Math.max(scaled.width, scaled.height) <= EMOJI_SIDE && photoType(bytes) === out) {
       return { bytes, type: out }
     }
   } catch (error) {

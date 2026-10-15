@@ -180,6 +180,41 @@ describe("campflare.emoji.add", () => {
     expect(await bytesOf(await SELF.fetch(kept.url))).toEqual(png)
   })
 
+  it("keeps the original when Images answers a bigger file, the wrong size or type, or fails", async () => {
+    const w = await workspace()
+    const png = await makePng(600, 400)
+    const answering = (out: Uint8Array | Error) =>
+      ({
+        input: () => ({
+          transform() {
+            return this
+          },
+          output: async () => {
+            if (out instanceof Error) throw out
+            return { response: () => new Response(new Uint8Array(out)) }
+          },
+        }),
+      }) as unknown as ImagesBinding
+    const small = await makePng(128, 85)
+    const bloated = new Uint8Array(png.byteLength + 1)
+    bloated.set(small)
+    const cases: [string, Uint8Array | Error][] = [
+      ["bigger", bloated],
+      ["too-wide", await makePng(200, 100)],
+      ["wrong-type", await convert(env.IMAGES!, small, "image/jpeg")],
+      ["failing", new Error("images down")],
+    ]
+    for (const [name, out] of cases) {
+      setImagesOverride(answering(out))
+      const e = await added(w.owner.token, name, png)
+      expect([name, await bytesOf(await SELF.fetch(e.url))]).toEqual([name, png])
+    }
+    // A smaller file of the right size and type is kept.
+    setImagesOverride(answering(small))
+    const e = await added(w.owner.token, "scaled", png)
+    expect(await bytesOf(await SELF.fetch(e.url))).toEqual(small)
+  })
+
   it("needs emoji:write and a user token", async () => {
     const w = await workspace()
     const png = await makePng(16, 16)
