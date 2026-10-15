@@ -109,6 +109,16 @@ it. It is found by `apps.built_in = 'campflare'` (migration 0023), never by
 name, so an app someone creates and names "Campflare" can't stand in for it
 and read people's reminders.
 
+`builtInBot(env, team, { key, name, handle })` in `src/system-bot.ts` makes
+and finds every such bot; the Huddle Scribe is one too (`huddle-scribe`). It
+used to be found by its name, so an app named "Huddle Scribe" made before it
+stood in for it and was seated in calls' threads. Migration 0023 marks the
+Scribes made before: in each workspace, the earliest app named "Huddle
+Scribe" whose installer is its own bot user (an app a person makes is
+installed by that person) and whose bot user has the handle `huddle-scribe`.
+An impostor that took the name first never matches, and the real Scribe is
+made afresh on its next use.
+
 ## Scheduled messages
 
 - `chat.scheduleMessage` (`chat:write`, user or bot): `channel`, `post_at`

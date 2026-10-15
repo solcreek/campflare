@@ -59,7 +59,24 @@ CREATE INDEX reminders_user ON reminders (user_id, time);
 -- and the NOT NULL fails the batch, so nothing of it commits.
 CREATE TABLE claim_guards (lost INTEGER NOT NULL);
 
--- Apps the server itself acts as (the bot reminders come from), found by this
--- mark and never by name, so an app someone names the same can't stand in.
+-- Apps the server itself acts as (the bot reminders come from, the Huddle
+-- Scribe), found by this mark and never by name, so an app someone names the
+-- same can't stand in and receive what it is sent or sees.
 ALTER TABLE apps ADD COLUMN built_in TEXT;
+
+-- Huddle Scribes made before the mark: found by name until now, so a person
+-- could have made an app named "Huddle Scribe" that stood in for it. The real
+-- one is the server's own: its installer is its own bot user (an app a person
+-- makes is installed by that person) and that user is the bot handle
+-- huddle-scribe, which the server takes first. The earliest such app per
+-- workspace, in case of any duplicate.
+UPDATE apps SET built_in = 'huddle-scribe'
+WHERE id IN (
+  SELECT (
+    SELECT a.id FROM apps a JOIN users u ON u.id = a.bot_user_id
+    WHERE a.team_id = t.id AND a.name = 'Huddle Scribe' AND a.installer_user_id = a.bot_user_id
+      AND u.is_bot = 1 AND u.name = 'huddle-scribe'
+    ORDER BY a.created, a.id LIMIT 1)
+  FROM teams t);
+
 CREATE UNIQUE INDEX apps_built_in ON apps (team_id, built_in) WHERE built_in IS NOT NULL;

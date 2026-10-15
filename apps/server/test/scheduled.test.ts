@@ -6,6 +6,8 @@ import { nowSeconds } from "../src/api/ids"
 import { isUniqueViolation } from "../src/db/query"
 import type { ScheduledMessageRow, TeamRow } from "../src/db/rows"
 import type { Env } from "../src/env"
+import { scribeActor } from "../src/huddle/scribe-bot"
+import { systemActor } from "../src/system-bot"
 import {
   CLAIM_SECONDS,
   claimRow,
@@ -531,7 +533,7 @@ describe("the alarm", () => {
       expect(await state.storage.getAlarm()).not.toBeNull()
       instance.env = healthy
     })
-    expect((await history(w.general, w.owner.token)).map((m) => m.text)).not.toContain("after the outage")
+    // The alarm rings again (it is due now, so it may already have), and this time it posts.
     await runDurableObjectAlarm(scheduler(w.teamId))
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).toContain("after the outage")
   })
@@ -701,5 +703,39 @@ describe("the built-in bot", () => {
     const [dm] = await systemDms(w, bob)
     const info = await ok<{ user: { name: string } }>("users.info", { user: dm!.user as string }, bob.token)
     expect(info.user.name).toMatch(/^campflare-[a-z0-9]{4}$/)
+  })
+
+  it("is the Huddle Scribe too, which an app named like it can't stand in for", async () => {
+    const w = await workspace()
+    const team = (await env.DB.prepare("SELECT * FROM teams WHERE id = ?").bind(w.teamId).first<TeamRow>())!
+    const fake = await w.addApp("Huddle Scribe")
+    const scribe = await scribeActor(env, team)
+    expect(scribe.app!.id).not.toBe(fake.id)
+    expect(scribe.app).toMatchObject({ name: "Huddle Scribe", built_in: "huddle-scribe" })
+    // The app took the handle first, so the Scribe has another.
+    expect(scribe.user).toMatchObject({ name: expect.stringMatching(/^huddle-scribe-[a-z0-9]{4}$/), is_bot: 1 })
+    expect((await scribeActor(env, team)).app!.id).toBe(scribe.app!.id)
+    // The two built-in bots are distinct.
+    expect((await systemActor(env, team)).app!.id).not.toBe(scribe.app!.id)
+    await expectError("campflare.apps.info", { app: scribe.app!.id }, w.owner.token, "app_not_found")
+  })
+
+  it("marks a Huddle Scribe made before the mark (migration 0023), and not an app a person named so", async () => {
+    const w = await workspace()
+    const team = (await env.DB.prepare("SELECT * FROM teams WHERE id = ?").bind(w.teamId).first<TeamRow>())!
+    // The Scribe as the server made it before 0023: installed by its own bot user, handle huddle-scribe.
+    const scribe = await scribeActor(env, team)
+    // An app a person made and named the same (apps.create would refuse the handle now).
+    const impostor = await w.addApp("Scribe Impostor")
+    await env.DB.prepare("UPDATE apps SET name = 'Huddle Scribe' WHERE id = ?").bind(impostor.id).run()
+    await env.DB.prepare("UPDATE apps SET built_in = NULL WHERE team_id = ?").bind(w.teamId).run()
+    const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0023_"))!
+    const update = migration.queries.find((q) => q.includes("SET built_in = 'huddle-scribe'"))!
+    await env.DB.prepare(update).run()
+    const marked = await env.DB.prepare("SELECT id FROM apps WHERE team_id = ? AND built_in IS NOT NULL")
+      .bind(w.teamId)
+      .all<{ id: string }>()
+    expect(marked.results.map((r) => r.id)).toEqual([scribe.app!.id])
+    expect(marked.results.map((r) => r.id)).not.toContain(impostor.id)
   })
 })

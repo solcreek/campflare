@@ -8,27 +8,33 @@ import { first, isUniqueViolation, stmt } from "./db/query"
 import type { AppRow, TeamRow, UserRow } from "./db/rows"
 import type { Env } from "./env"
 
-// The workspace's own bot, which reminders and notices come from (as Slack's
-// come from Slackbot): an ordinary app with a bot user and no tokens, made on
-// first use. Found by apps.built_in, never by name, so an app someone names
-// "Campflare" can't stand in for it and read what it sends.
+// Bots the server itself acts as: ordinary apps with a bot user and no tokens,
+// made on first use, one of each per workspace. Each is found by its mark in
+// apps.built_in (migration 0023), never by name, so an app someone names the
+// same can't stand in for it and receive what it is sent or sees.
 
-export const SYSTEM_BOT_NAME = "Campflare"
-const BUILT_IN = "campflare"
-const HANDLE = "campflare"
+/** Which built-in bot: its mark, the name people see, and the handle it asks for. */
+export interface BuiltIn {
+  key: string
+  name: string
+  handle: string
+}
 
-const findApp = (env: Env, teamId: string) =>
-  first<AppRow>(env.DB, "SELECT * FROM apps WHERE team_id = ? AND built_in = ?", teamId, BUILT_IN)
+/** The workspace's own bot, which reminders and notices come from, as Slack's come from Slackbot. */
+export const SYSTEM_BOT: BuiltIn = { key: "campflare", name: "Campflare", handle: "campflare" }
 
-/** The built-in bot as an actor, made if the workspace has none yet. */
-export async function systemActor(env: Env, team: TeamRow): Promise<Actor> {
-  let app = await findApp(env, team.id)
+const findApp = (env: Env, teamId: string, key: string) =>
+  first<AppRow>(env.DB, "SELECT * FROM apps WHERE team_id = ? AND built_in = ?", teamId, key)
+
+/** A built-in bot as an actor, made if the workspace has none yet. */
+export async function builtInBot(env: Env, team: TeamRow, bot: BuiltIn): Promise<Actor> {
+  let app = await findApp(env, team.id, bot.key)
   // A person may already have the handle: then another, with a suffix.
   for (let attempt = 0; !app && attempt < 3; attempt++) {
     const now = nowSeconds()
     const userId = ids.user()
     const botId = ids.bot()
-    const handle = attempt === 0 ? HANDLE : `${HANDLE}-${randomId("", 4).toLowerCase()}`
+    const handle = attempt === 0 ? bot.handle : `${bot.handle}-${randomId("", 4).toLowerCase()}`
     try {
       await env.DB.batch([
         stmt(
@@ -37,7 +43,7 @@ export async function systemActor(env: Env, team: TeamRow): Promise<Actor> {
           userId,
           team.id,
           handle,
-          SYSTEM_BOT_NAME,
+          bot.name,
           botId,
           now,
           now,
@@ -48,24 +54,27 @@ export async function systemActor(env: Env, team: TeamRow): Promise<Actor> {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           ids.app(),
           team.id,
-          SYSTEM_BOT_NAME,
+          bot.name,
           botId,
           userId,
           userId,
           now,
-          BUILT_IN,
+          bot.key,
         ),
       ])
     } catch (error) {
       // Made concurrently by another request (theirs is the one), or the handle is taken.
       if (!isUniqueViolation(error)) throw error
     }
-    app = await findApp(env, team.id)
+    app = await findApp(env, team.id, bot.key)
   }
-  if (!app) throw new Error("could not make the built-in bot")
+  if (!app) throw new Error(`could not make the built-in bot ${bot.key}`)
   const user = (await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ?", app.bot_user_id))!
   return { kind: "bot", team, user, app, scopes: DEFAULT_BOT_SCOPES }
 }
+
+/** The workspace's own bot (SYSTEM_BOT) as an actor. */
+export const systemActor = (env: Env, team: TeamRow) => builtInBot(env, team, SYSTEM_BOT)
 
 /** A request context acting as `auth`, for work the server does with no request (an alarm). */
 export function serverCtx(env: Env, auth: Actor, origin: string, waitUntil: (p: Promise<unknown>) => void): Ctx<Actor> {

@@ -516,7 +516,8 @@ revoked since, the message is its poster's): a `CampflareError` drops
 it and the built-in bot DMs a person the reason; other errors keep the claim
 and retry, up to `MAX_ATTEMPTS`. The built-in bot (`src/system-bot.ts`,
 `systemActor()`) is made lazily, found by `apps.built_in = 'campflare'`, never
-by name, and `campflare.apps.*` can't touch it. Reminders' `time`
+by name, and `campflare.apps.*` can't touch it; `builtInBot()` makes and finds
+every server-run bot that way, the Huddle Scribe (`huddle-scribe`) included. Reminders' `time`
 (`parseWhen()` in `src/api/when.ts`) is a Unix time, seconds from now (≤ 86400)
 or a small set of phrases in the person's `tz`; recurring ones aren't supported.
 Events, RTM-only to the owner: `scheduled_message_added`/`_removed` (`reason`),
