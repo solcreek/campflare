@@ -8,6 +8,7 @@ import { b64url, unb64url } from "./api/tickets"
 import { requireMessage, postMessage } from "./db/messages"
 import { stmt } from "./db/query"
 import type { AppRow, ConversationRow, TeamRow, UserRow } from "./db/rows"
+import { hubOf } from "./events"
 import { postSigned } from "./request-url"
 import type { Env } from "./env"
 import {
@@ -102,7 +103,7 @@ export async function deliverInteraction(
   payload: Json,
   { acceptsResponse = false }: { acceptsResponse?: boolean } = {},
 ): Promise<Delivered> {
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(app.team_id))
+  const hub = hubOf(ctx, app.team_id)
   const trigger =
     typeof payload.trigger_id === "string" ? { id: payload.trigger_id, userId: ctx.auth.user.id } : undefined
   const socket = await hub.interact(app.id, payload, { trigger, acceptsResponse })
@@ -345,7 +346,7 @@ export async function handleResponseUrl(
 ): Promise<Response> {
   const claims = await readResponseUrl(env.SIGNING_KEY, token)
   if (!claims) return answer(404, { ok: false, error: "expired_url" })
-  const hub = env.HUB.get(env.HUB.idFromName(claims.teamId))
+  const hub = hubOf({ env }, claims.teamId)
   if (!(await hub.useResponseUrl(claims.nonce, claims.expires, RESPONSE_URL_MAX_USES))) {
     return answer(404, { ok: false, error: "used_url" })
   }

@@ -3,6 +3,7 @@ import { asApp } from "./api/as-app"
 import type { Actor, Ctx } from "./api/context"
 import { CampflareError } from "./api/errors"
 import { postMessage } from "./db/messages"
+import { hubOf } from "./events"
 import type { AppRow, ConversationRow, UserRow } from "./db/rows"
 import { channelName, issueResponseUrl, triggerId } from "./interactivity"
 import { authorOf, content, sendEphemeral } from "./methods/chat"
@@ -67,7 +68,7 @@ async function deliver(
   command: CommandRow,
   payload: Record<string, string>,
 ): Promise<{ delivered: "socket" | "http"; answer?: Answer }> {
-  const hub = ctx.env.HUB.get(ctx.env.HUB.idFromName(app.team_id))
+  const hub = hubOf(ctx, app.team_id)
   const socket = await hub.interact(app.id, payload, {
     trigger: { id: payload.trigger_id!, userId: ctx.auth.user.id },
     acceptsResponse: true,
