@@ -1,4 +1,4 @@
-import { all, stmt } from "../db/query"
+import { all, first, isUniqueViolation, stmt } from "../db/query"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
@@ -126,37 +126,62 @@ method("campflare.push.subscribe", "user", async (ctx) => {
   const user = ctx.auth.user.id
   const team = ctx.auth.team.id
   const db = ctx.env.DB
-  const [before, saved, pruned] = await db.batch([
-    stmt(db, "SELECT team_id FROM push_subscriptions WHERE endpoint = ?", endpoint),
-    // One browser is one row: subscribing it again replaces it (keeping its id, and making it the newest),
-    // for whoever is signed in there now.
-    stmt(
+  const existing = await first<PushSubscriptionRow>(db, "SELECT * FROM push_subscriptions WHERE endpoint = ?", endpoint)
+  if (existing) {
+    // One browser is one row, and someone else's isn't taken over: whoever signs out there
+    // unsubscribes it (the app does), which deletes the row, and then it's free.
+    if (existing.user_id !== user || existing.team_id !== team) throw new CampflareError("endpoint_in_use")
+    // The app says it again on every load: unchanged, nothing is written and the hub keeps what it has.
+    if (existing.p256dh === p256dh && existing.auth === auth && existing.label === label) {
+      return { subscription: subscriptionJson(existing) }
+    }
+    // New keys or label; created and last_used stay.
+    const [updated] = await all<PushSubscriptionRow>(
       db,
-      `INSERT OR REPLACE INTO push_subscriptions (id, team_id, user_id, endpoint, p256dh, auth, label, created)
-       VALUES (COALESCE((SELECT id FROM push_subscriptions WHERE endpoint = ?4), ?1), ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-       RETURNING *`,
-      randomId("P"),
-      team,
-      user,
-      endpoint,
+      "UPDATE push_subscriptions SET p256dh = ?, auth = ?, label = ? WHERE id = ? RETURNING *",
       p256dh,
       auth,
       label,
-      nowSeconds(),
-    ),
-    stmt(
-      db,
-      `DELETE FROM push_subscriptions WHERE user_id = ?1 AND id NOT IN
-         (SELECT id FROM push_subscriptions WHERE user_id = ?1 ORDER BY created DESC, rowid DESC LIMIT ?2)
-       RETURNING id`,
-      user,
-      MAX_SUBSCRIPTIONS,
-    ),
-  ])
-  const previous = (before!.results as { team_id: string }[]).map((r) => r.team_id)
+      existing.id,
+    )
+    await subscriptionsChanged(ctx, [team])
+    return { subscription: subscriptionJson(updated!) }
+  }
+  let results: D1Result[]
+  try {
+    results = await db.batch([
+      stmt(
+        db,
+        `INSERT INTO push_subscriptions (id, team_id, user_id, endpoint, p256dh, auth, label, created)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        randomId("P"),
+        team,
+        user,
+        endpoint,
+        p256dh,
+        auth,
+        label,
+        nowSeconds(),
+      ),
+      // A 21st device replaces the person's oldest.
+      stmt(
+        db,
+        `DELETE FROM push_subscriptions WHERE user_id = ?1 AND id NOT IN
+           (SELECT id FROM push_subscriptions WHERE user_id = ?1 ORDER BY created DESC, rowid DESC LIMIT ?2)
+         RETURNING id`,
+        user,
+        MAX_SUBSCRIPTIONS,
+      ),
+    ])
+  } catch (error) {
+    // Subscribed meanwhile, by another request.
+    if (isUniqueViolation(error)) throw new CampflareError("endpoint_in_use")
+    throw error
+  }
+  const [saved, pruned] = results
   await subscriptionsChanged(
     ctx,
-    [team, ...previous],
+    [team],
     (pruned!.results as { id: string }[]).map((r) => r.id),
   )
   return { subscription: subscriptionJson(saved!.results[0] as PushSubscriptionRow) }

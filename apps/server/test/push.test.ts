@@ -84,10 +84,10 @@ describe("push subscriptions", () => {
     )
     expect((await list(w.owner.token)).map((s) => s.label)).toEqual(["Chrome · 東京", "Firefox on Linux"])
 
-    // The same browser again: one row, its new label.
+    // The same browser again: one row, its new label, and when it was made stays.
     const again = await subscribe(w.owner.token, firefox, "Firefox en français")
-    expect(again.subscription.id).toBe(subscription.id)
-    expect((await list(w.owner.token)).map((s) => s.label)).toEqual(["Firefox en français", "Chrome · 東京"])
+    expect(again.subscription).toEqual({ ...subscription, label: "Firefox en français" })
+    expect((await list(w.owner.token)).map((s) => s.label)).toEqual(["Chrome · 東京", "Firefox en français"])
 
     // By endpoint (what a browser knows), or by id.
     expect(await ok("campflare.push.unsubscribe", { endpoint: firefox.endpoint }, w.owner.token)).toMatchObject({
@@ -109,14 +109,48 @@ describe("push subscriptions", () => {
     expect(await list(bob.token)).toHaveLength(1)
   })
 
-  it("moves a browser to whoever subscribes it last, in any workspace", async () => {
+  it("never takes over a browser someone else subscribed, here or in another workspace, until they let go", async () => {
     const a = await workspace()
     const b = await workspace()
+    const bob = await a.addUser("bob")
     const sub = await browserSubscription()
-    await subscribe(a.owner.token, sub)
-    await subscribe(b.owner.token, sub)
-    expect(await list(a.owner.token)).toEqual([])
-    expect(await list(b.owner.token)).toHaveLength(1)
+    const { subscription } = await subscribe(a.owner.token, sub)
+    for (const token of [bob.token, b.owner.token]) {
+      const refused = await call("campflare.push.subscribe", { subscription: sub }, token, { json: true })
+      expect(refused.error).toBe("endpoint_in_use")
+    }
+    expect(await list(a.owner.token)).toEqual([subscription])
+    // Signing out there unsubscribes it; then it's free.
+    await ok("campflare.push.unsubscribe", { endpoint: sub.endpoint }, a.owner.token)
+    await subscribe(bob.token, sub)
+    expect(await list(bob.token)).toHaveLength(1)
+  })
+
+  it("does nothing when a browser says again what it said (every load), keeping when it was last used", async () => {
+    service = fakePushService()
+    const w = await workspace()
+    const sub = await browserSubscription()
+    await subscribe(w.owner.token, sub)
+    await ok("campflare.push.test", {}, w.owner.token)
+    const [used] = await list(w.owner.token)
+    expect(used!.last_used).toBeGreaterThan(0)
+    const hubForgets = () =>
+      runInDurableObject(hubOf(w.teamId), async (hub: TeamHub) => {
+        const delivery = (hub as unknown as { push: { subscriptions?: unknown } }).push
+        return delivery.subscriptions === undefined
+      })
+    // The hub has read the subscriptions (the test push doesn't go through it: a mention does).
+    const bob = await w.addUser("bob")
+    await post(bob.token, w.general, `<@${w.owner.id}> 確認`)
+    await service.next()
+    expect(await hubForgets()).toBe(false)
+    expect((await subscribe(w.owner.token, sub)).subscription).toEqual(used)
+    expect(await hubForgets()).toBe(false)
+    // A new key is a change: written, created and last_used kept, and the hub reads again.
+    const rotated = await browserSubscription()
+    const changed = await subscribe(w.owner.token, { ...rotated, endpoint: sub.endpoint })
+    expect(changed.subscription).toEqual(used)
+    expect(await hubForgets()).toBe(true)
   })
 
   it(`keeps the newest ${MAX_SUBSCRIPTIONS} of a person's`, async () => {
