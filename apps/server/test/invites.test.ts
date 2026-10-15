@@ -128,9 +128,24 @@ describe("campflare.invites.create", () => {
     const email = uniqueEmail("zoe")
     const res = await invite(w.owner.token, { email })
     expect(res.emailed).toBe(true)
-    expect(sent).toHaveLength(1)
+    await eventually(() => sent.length === 1)
     expect(sent[0]).toMatchObject({ to: email })
     expect(sent[0]!.text).toContain(res.url)
+  })
+
+  it("answers the URL even when sending the email fails", async () => {
+    let tried = 0
+    setEmailSender({
+      send: async () => {
+        tried++
+        throw new Error("provider down")
+      },
+    })
+    const w = await workspace()
+    const res = await invite(w.owner.token, { email: uniqueEmail("ada") })
+    expect(res.url).toMatch(/\/join\/[0-9a-f]{64}$/)
+    await eventually(() => tried === 1)
+    expect((await accept(res.url, { name: "ada", email: undefined })).ok).toBe(true)
   })
 })
 

@@ -106,19 +106,23 @@ method("campflare.invites.create", "user", async (ctx) => {
     invite.created,
   )
   const url = inviteUrl(ctx.origin, code)
-  // With an email sender, an invite to an address is mailed too; the URL is answered either way.
+  // With an email sender, an invite to an address is mailed too, after the answer: a failed send
+  // must not lose the URL, which is shown only now. `emailed` says a send was started.
   const sender = emailSender(ctx.env)
-  let emailed = false
+  const emailed = Boolean(sender && invite.email)
   if (sender && invite.email) {
     const who = ctx.auth.user.real_name || ctx.auth.user.name
-    await sender.send({
-      to: invite.email,
-      subject: `${who} invited you to ${ctx.auth.team.name} on Campflare`,
-      text:
-        `${who} invited you to join ${ctx.auth.team.name} on Campflare.\n\n` +
-        `Pick your name and password here:\n${url}\n\nThe link works until ${new Date(invite.expires * 1000).toUTCString()}.\n`,
-    })
-    emailed = true
+    ctx.waitUntil(
+      sender
+        .send({
+          to: invite.email,
+          subject: `${who} invited you to ${ctx.auth.team.name} on Campflare`,
+          text:
+            `${who} invited you to join ${ctx.auth.team.name} on Campflare.\n\n` +
+            `Pick your name and password here:\n${url}\n\nThe link works until ${new Date(invite.expires * 1000).toUTCString()}.\n`,
+        })
+        .catch((error: unknown) => console.error("invite email failed", error)),
+    )
   }
   return { invite: inviteJson(invite), url, emailed }
 })
