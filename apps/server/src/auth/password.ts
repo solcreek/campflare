@@ -1,3 +1,4 @@
+import { normalizeEmail } from "../api/email-address"
 import { CampflareError } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { run, stmt } from "../db/query"
@@ -102,8 +103,6 @@ export async function setPassword(
     ...(user.email ? [forgetEmail(env.DB, normalizeEmail(user.email))] : []),
   ])
 }
-
-const normalizeEmail = (email: string) => email.trim().toLowerCase()
 
 interface Candidate {
   user_id: string

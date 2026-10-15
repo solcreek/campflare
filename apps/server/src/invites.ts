@@ -1,4 +1,5 @@
 import { sha256Hex } from "./api/crypto"
+import { isEmail, normalizeEmail } from "./api/email-address"
 import { CampflareError, invalidArguments } from "./api/errors"
 import { ids, nowSeconds, randomSecret } from "./api/ids"
 import { userJson } from "./api/shapes"
@@ -101,9 +102,6 @@ export async function findInvite(env: Env, code: string): Promise<InviteDetails 
 
 const tooManyAttempts = (seconds: number) => new CampflareError("too_many_attempts", { retry_after: seconds })
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const normalizeEmail = (email: string) => email.trim().toLowerCase()
-
 export interface Joining {
   code: string
   /** The handle they pick. */
@@ -141,7 +139,7 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
   if (invite.email && given && given !== invite.email) throw new CampflareError("email_mismatch")
   const email = invite.email ?? given
   if (!email) throw new CampflareError("email_required")
-  if (!EMAIL.test(email)) throw new CampflareError("invalid_email")
+  if (!isEmail(email)) throw new CampflareError("invalid_email")
   const name = joining.name.trim().replace(/^@/, "").toLowerCase()
   if (!HANDLE.test(name)) throw new CampflareError("invalid_name")
   const passwordHash = await hashPassword(checkPassword(joining.password))
@@ -317,7 +315,7 @@ export async function requestReset(lc: LinkContext, opts: { email: string; works
     })
   }
   const email = normalizeEmail(opts.email)
-  if (!EMAIL.test(email)) throw new CampflareError("invalid_email")
+  if (!isEmail(email)) throw new CampflareError("invalid_email")
   const team = opts.workspace?.trim().toLowerCase() || null
   const now = nowSeconds()
   const results = await env.DB.batch([

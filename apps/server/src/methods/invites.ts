@@ -1,6 +1,7 @@
 import { issueToken } from "../api/auth"
 import { method } from "../api/context"
 import { sha256Hex } from "../api/crypto"
+import { isEmail, normalizeEmail } from "../api/email-address"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
 import { userJson } from "../api/shapes"
@@ -46,8 +47,9 @@ method("campflare.invites.create", "user", async (ctx) => {
   if (role !== "member" && role !== "admin") throw invalidArguments("role is member or admin")
   // Making an admin is granting a role: owners only, as in campflare.users.create.
   if (role === "admin") requireOwner(ctx)
-  const email = ctx.args.str("email")?.trim().toLowerCase()
-  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new CampflareError("invalid_email")
+  const given = ctx.args.str("email")
+  const email = given === undefined ? undefined : normalizeEmail(given)
+  if (email !== undefined && !isEmail(email)) throw new CampflareError("invalid_email")
   const ttl = ttlArg(optionalInt(ctx.args.str("expires_in"), "expires_in"), INVITE_TTL, 60, INVITE_MAX_TTL)
   const maxUses = optionalInt(ctx.args.str("max_uses"), "max_uses") ?? 1
   if (maxUses < 1 || maxUses > INVITE_MAX_USES) throw invalidArguments(`max_uses is between 1 and ${INVITE_MAX_USES}`)

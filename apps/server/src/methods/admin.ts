@@ -4,6 +4,7 @@ import { APP_SCOPES, issueToken } from "../api/auth"
 import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES, missingScope } from "../api/scopes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
+import { normalizeEmail } from "../api/email-address"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
 import { activePerson, HANDLE, rank, requireAdmin, requireOutranks, requireOwner } from "../api/roles"
 import { teamJson, userJson } from "../api/shapes"
@@ -46,7 +47,7 @@ async function createUser(
       teamId,
       name,
       opts.realName ?? "",
-      opts.email?.toLowerCase() ?? null,
+      opts.email === undefined ? null : normalizeEmail(opts.email),
       opts.admin || opts.owner ? 1 : 0,
       opts.owner ? 1 : 0,
       opts.bot ? 1 : 0,

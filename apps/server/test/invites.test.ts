@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers"
 import { afterEach, describe, expect, it } from "vitest"
 import { setEmailSender, type EmailMessage } from "../src/email"
 import { joinedPage } from "../src/auth/links"
+import { isEmail, normalizeEmail } from "../src/api/email-address"
 import { IP_FREE_FAILURES, RATE_LIMIT } from "../src/auth/throttle"
 import { browser } from "./browser"
 import { call, connect, eventually, expectError, ok, ORIGIN, workspace, type Body } from "./helpers"
@@ -130,6 +131,25 @@ describe("campflare.invites.create", () => {
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({ to: email })
     expect(sent[0]!.text).toContain(res.url)
+  })
+})
+
+describe("email addresses", () => {
+  it("are one shape everywhere: trimmed, lower case, something@domain.tld", async () => {
+    expect(normalizeEmail("  Zoé@Example.TEST ")).toBe("zoé@example.test")
+    expect(isEmail("zoé@example.test")).toBe(true)
+    expect(isEmail("no spaces@example.test")).toBe(false)
+    expect(isEmail("nodomain@example")).toBe(false)
+    const w = await workspace()
+    const email = uniqueEmail("Zoé")
+    const created = await invite(w.owner.token, { email: `  ${email.toUpperCase()} ` })
+    expect(created.invite.email).toBe(email.toLowerCase())
+    const joined = await accept(created.url, { name: "zoe", email: ` ${email} ` })
+    expect(joined.user.profile.email).toBe(email.toLowerCase())
+    // users.create stores it the same way, so an invite to it is already_in_team.
+    const other = uniqueEmail("Øyvind")
+    await ok("campflare.users.create", { name: "oyvind", email: ` ${other.toUpperCase()}` }, w.owner.token)
+    await expectError("campflare.invites.create", { email: other }, w.owner.token, "already_in_team")
   })
 })
 
