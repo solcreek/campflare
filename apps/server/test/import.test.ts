@@ -466,6 +466,15 @@ describe("campflare.import", () => {
     expect(rows).toEqual({ messages: 12, reactions: 2 })
     const head = (await history(w.owner.token, general)).find((m) => m.ts === HEAD)!
     expect(head.reply_count).toBe(2)
+    // Unmapped people from chunks sent at once all land, once each, in order.
+    await Promise.all(
+      ["U97", "U98"].map((id, i) =>
+        messages(w.owner.token, job.id, "C03", [{ ts: `1700005000.00000${i}`, user: id, text: `<@${id}> · <@U99>` }]),
+      ),
+    )
+    const unmapped = (await status(w.owner.token, job.id)).counts.unmapped_users as string[]
+    expect(unmapped[0]).toBe("U99")
+    expect(unmapped.toSorted()).toEqual(["U97", "U98", "U99"])
   })
 
   it("merges into existing conversations only when asked, and never touches their messages", async () => {

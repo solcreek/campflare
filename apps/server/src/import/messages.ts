@@ -3,7 +3,7 @@ import { CampflareError, invalidArguments } from "../api/errors"
 import { normalizeTs, tsToMicros } from "../api/ids"
 import { MAX_TEXT } from "../db/messages"
 import { stmt } from "../db/query"
-import { bump, CHANGES, limitExceeded, LIMITS, loadJob, MAX_UNMAPPED, type Counts } from "./job"
+import { bump, CHANGES, limitExceeded, LIMITS, loadJob, MAX_UNMAPPED } from "./job"
 import { fileLine, linkedConversations, mentionedUsers, rewriteText, SYSTEM_USER_ID } from "./text"
 
 // campflare.import.messages: one chunk of one conversation's messages, written
@@ -53,6 +53,9 @@ interface Row {
   pinned_by: string | null
   pinned_at: number | null
 }
+
+/** The job's unmapped user ids so far, as SQL inside an UPDATE of import_jobs. */
+const UNMAPPED = "coalesce(json_extract(import_jobs.counts, '$.unmapped_users'), '[]')"
 
 /** D1 binds a string of at most 2 MB: a chunk is written in statements of at most this much JSON. */
 const STATEMENT_BYTES = 900_000
@@ -197,9 +200,6 @@ export async function importMessages(ctx: Ctx<Actor>) {
   const all = [...rows.values()]
   const keys = JSON.stringify(all.map((r) => r.ts))
   const threads = JSON.stringify([...new Set(all.flatMap((r) => (r.thread_ts ? [r.thread_ts] : [])))])
-  const counts = JSON.parse(job.counts) as Counts
-  const known = new Set((counts.unmapped_users as string[] | undefined) ?? [])
-  const added = [...unmapped].filter((id) => !known.has(id))
   const ours = "EXISTS (SELECT 1 FROM messages WHERE channel_id = ?1 AND ts = value ->> 0 AND import_job = ?2)"
   const results = await db.batch([
     // Messages already here that the job didn't write (merging): never touched, noted once, counted once.
@@ -262,12 +262,21 @@ export async function importMessages(ctx: Ctx<Actor>) {
       sql: "h.channel_id = ? AND h.ts IN (SELECT value FROM json_each(?))",
       params: [c.id, threads],
     }),
-    ...(added.length
+    // Appended in SQL, not read and written back: chunks sent at once all add theirs.
+    ...(unmapped.size
       ? [
           stmt(
             db,
-            "UPDATE import_jobs SET counts = json_set(counts, '$.unmapped_users', json(?)) WHERE id = ?",
-            JSON.stringify([...known, ...added].slice(0, MAX_UNMAPPED)),
+            `UPDATE import_jobs SET counts = json_set(counts, '$.unmapped_users', json((
+               SELECT json_group_array(id) FROM (
+                 SELECT id FROM (
+                   SELECT value AS id, 0 AS part, key AS pos FROM json_each(${UNMAPPED})
+                   UNION ALL SELECT value, 1, key FROM json_each(?1)
+                     WHERE value NOT IN (SELECT value FROM json_each(${UNMAPPED})))
+                 ORDER BY part, pos LIMIT ?2))))
+             WHERE id = ?3`,
+            JSON.stringify([...unmapped]),
+            MAX_UNMAPPED,
             job.id,
           ),
         ]
