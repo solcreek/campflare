@@ -98,22 +98,23 @@ it isn't in (`requireWritable()`); without it a bot must be a member.
 
 For `campflare.*` methods, named in Slack's `noun:verb` style:
 
-| scope                              | methods                                                | why it's separate                                         |
-| ---------------------------------- | ------------------------------------------------------ | --------------------------------------------------------- |
-| `rtm:stream`                       | `rtm.connect`                                          | a live feed of everything the person sees                 |
-| `events:read`                      | `campflare.events.poll`                                | the same, by cursor                                       |
-| `views:read` / `views:write`       | `campflare.views.list` / `.submit`, `.close`           | acting in an app's modal as the person                    |
-| `chat:write`                       | `campflare.blocks.action`, `campflare.chat.stopStream` | a click or a stop acts in the conversation                |
-| `apps:read` / `apps:write`         | `apps.list` / `campflare.apps.*`                       | `apps.info` reveals signing secrets, so it's `apps:write` |
-| `tokens:read` / `tokens:write`     | `campflare.tokens.list` / `.create`, `.revoke`         | minting tokens is how a token would escalate              |
-| `users.password:write`             | `campflare.users.setPassword`                          | a password is the whole account                           |
-| `admin.users:write`                | `campflare.users.create`, `.deactivate`, `.setRole`    | plus the admin or owner role                              |
-| `admin.users:write`                | `campflare.users.createPasswordReset`                  | a role above the person's ([invites.md](invites.md))      |
-| `admin.invites:write`              | `campflare.invites.create`, `.revoke`                  | plus the admin role; an admin invite, owner               |
-| `admin.invites:read`               | `campflare.invites.list`                               | plus the admin role                                       |
-| `calls:read` / `calls:write`       | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
-| `activity:read` / `activity:write` | `campflare.activity.list` / `.mark`                    | a person's inbox ([activity.md](activity.md))             |
-| `prefs:read` / `prefs:write`       | `campflare.prefs.get` / `.set`                         | notification levels                                       |
+| scope                              | methods                                                       | why it's separate                                         |
+| ---------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| `rtm:stream`                       | `rtm.connect`                                                 | a live feed of everything the person sees                 |
+| `events:read`                      | `campflare.events.poll`                                       | the same, by cursor                                       |
+| `views:read` / `views:write`       | `campflare.views.list` / `.submit`, `.close`                  | acting in an app's modal as the person                    |
+| `chat:write`                       | `campflare.blocks.action`, `campflare.chat.stopStream`        | a click or a stop acts in the conversation                |
+| `apps:read` / `apps:write`         | `apps.list` / `campflare.apps.*`                              | `apps.info` reveals signing secrets, so it's `apps:write` |
+| `tokens:read` / `tokens:write`     | `campflare.tokens.list` / `.create`, `.revoke`                | minting tokens is how a token would escalate              |
+| `users.password:write`             | `campflare.users.setPassword`                                 | a password is the whole account                           |
+| `admin.users:write`                | `campflare.users.create`, `.deactivate`, `.setRole`           | plus the admin or owner role                              |
+| `admin.users:write`                | `campflare.users.createPasswordReset`                         | a role above the person's ([invites.md](invites.md))      |
+| `admin.invites:write`              | `campflare.invites.create`, `.revoke`                         | plus the admin role; an admin invite, owner               |
+| `admin.invites:read`               | `campflare.invites.list`                                      | plus the admin role                                       |
+| `calls:read` / `calls:write`       | `campflare.huddles.info`, `.ice_servers` / the rest           | Slack's names for calls                                   |
+| `activity:read` / `activity:write` | `campflare.activity.list` / `.mark`                           | a person's inbox ([activity.md](activity.md))             |
+| `prefs:read` / `prefs:write`       | `campflare.prefs.get` / `.set`                                | notification levels                                       |
+| `push:read` / `push:write`         | `campflare.push.list` / `.subscribe`, `.unsubscribe`, `.test` | where a person's notifications go ([push.md](push.md))    |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
 could see, not only those their other scopes allow. Until events are filtered
@@ -140,13 +141,15 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
 - `read`: every `:read` and `:history`, `search:read`, `files:read`,
   `reactions:read`, `pins:read`, `bookmarks:read`, `stars:read`, `emoji:read`,
   `dnd:read`, `reminders:read`, `team:read`, `users:read`, `usergroups:read`,
-  `rtm:stream`, `events:read`, `views:read`, `activity:read`, `prefs:read`.
+  `rtm:stream`, `events:read`, `views:read`, `activity:read`, `prefs:read`,
+  `push:read`.
 - `write`: `read` plus `chat:write`, `reactions:write`, `pins:write`,
   `bookmarks:write`, `stars:write`, `files:write`, `reminders:write`, the
   conversation `:write` scopes, `views:write`, `activity:write`,
   `prefs:write`. What a chat agent needs.
 - `full`: every user scope (`usergroups:write` is here only: changing who a
-  `@handle` reaches is rarely a chat agent's job). What a person's own sign-in gets.
+  `@handle` reaches is rarely a chat agent's job; so is `push:write`: where a
+  person's notifications go is their own client's business). What a person's own sign-in gets.
 
 A token stores presets by name (`tokens.scopes` holds `full`, or
 `read,chat:write`), and they are expanded on every call (`expandScopes()`), so

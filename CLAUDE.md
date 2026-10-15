@@ -667,6 +667,28 @@ sender with `setEmailSender()`. Pages send `referrer-policy: same-origin` (not `
 their URLs hold codes. Role checks and `HANDLE` live in `src/api/roles.ts`,
 email normalizing in `src/api/email-address.ts`.
 
+**Push notifications.** `src/push/` (`docs/push.md`), off unless
+`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are set (`push_not_configured`;
+`pnpm ready --fix` writes a dev pair into `.dev.vars`, `pnpm vapid-keys` prints
+one). Web Push on WebCrypto alone: `vapid.ts` (RFC 8292, ES256 JWTs, cached an
+hour per push service in `send.ts`), `encrypt.ts` (RFC 8291 aes128gcm; the
+test reproduces the RFC's example byte for byte), `send.ts` (one POST, never
+throws: an outcome says ok, `gone` for 404/410, `transient` for 429/5xx/no
+answer). `campflare.push.*` (`src/methods/push.ts`, table `push_subscriptions`,
+migration 0028; one row per endpoint, which is never answered: it's a
+capability). Delivery is `PushDelivery` (`deliver.ts`), owned by `TeamHub`:
+`publishEach()` and `publish()` pass it every input after the RTM sends; it
+pushes the `activity_added` items with `notify`, skipping a recipient with an
+RTM link that sent `{"type":"campflare.active","active":true}` in the last two
+minutes (kept in the link's attachment, `activeAt`), without devices (the
+workspace's subscriptions are read once and dropped by
+`pushSubscriptionsChanged()`), or past 30 a minute (`push_counts`); names for
+the title and body (`payload.ts`) are one D1 batch. 404/410 deletes the
+subscription; transient failures go to `push_retries` in the hub's SQLite and
+are retried by its alarm (10 s, 1 min, 5 min, or Retry-After). Tests replace
+push services with `setPushFetch()`; `test/push-service.ts` makes browser
+subscriptions with real keys and decrypts what was sent as a browser would.
+
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
 the Worker: browsers send WebRTC to Cloudflare's Realtime SFU, and
@@ -754,6 +776,18 @@ near the viewport (`useInView`, IntersectionObserver; tests replace it with
 `ViewportObserver` in `test/setup.ts`), from the best-fitting thumbnail
 (`imageSource`), falling back to `url_private` if it fails; a click opens the
 message's images, as originals, in a viewer dialog.
+
+**Push in the app.** `src/sw.ts` is the service worker, served as `/sw.js` by
+`serviceWorkerPlugin()` in `vite.config.ts` (types and `export`s stripped into a
+classic script, so it imports nothing); its handlers are exported for tests.
+`src/push.ts` has the browser side behind a `PushPlatform` (permission, service
+worker, `PushManager`; `browserPlatform()` reads the globals, none in the
+desktop shell): `currentPush()` on load (replaces a subscription made with
+another key, re-sends a matching one), `turnOnPush()`, `turnOffPush()`. The
+workspace menu's items are `components/notifications.tsx` (`usePush()` lives in
+the always-mounted sidebar, since the menu mounts on opening).
+`src/presence.ts` reports focus through core's `setActive()`. The manifest and
+icons are in `public/`.
 
 **Desktop.** The webview runs the web build and talks to the server itself; the
 Rust side opens other origins' links in the system browser and keeps the session

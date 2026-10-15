@@ -166,25 +166,39 @@ notification stays too.
 
 ## The app
 
-- `apps/web/public/sw.js`, the service worker, at the app's root so its scope is
-  the whole app; registered by `src/push.ts` from `main.tsx` in a browser (not
-  in the desktop shell, whose webview has no Push API). Its handlers are plain
-  functions in `src/sw-handlers.ts`, bundled into `sw.js` by a small Vite
-  plugin, so unit tests call them with fake events. `push` shows the
-  notification (title, body, tag, the app's icon, `data.route`); a click
-  focuses an open window of the app and navigates it to the route, or opens
-  one there.
-- `apps/web/public/manifest.webmanifest` and icons: `display: standalone`, so
-  the app can be installed, and on iOS 16.4+ added to the home screen, where
-  Safari allows push only.
+- `src/sw.ts` is the service worker, served as `sw.js` at the app's root (so
+  its scope is the whole app) by a small Vite plugin (`serviceWorkerPlugin()`
+  in `vite.config.ts`: in development from memory, in a build as a file beside
+  `index.html`), which strips the types and `export`s into a classic script; it
+  imports nothing. Its handlers are plain exported functions that unit tests
+  call with fake events, and a test runs the served script itself against a
+  fake worker. It has no fetch handler and no caches. `push` shows the
+  notification (title, body, tag with `renotify`, the app's icon, the route);
+  a click focuses an open window of the app and sends it the route (a
+  `postMessage` the app turns into `location.hash`), or opens one there.
+  `registerServiceWorker()` (`src/push.ts`) registers it from `main.tsx` in a
+  browser (not in the desktop shell, whose webview has no Push API).
+- `apps/web/public/manifest.webmanifest` and `public/icons/`: `display:
+standalone`, so the app can be installed, and on iOS 16.4+ added to the home
+  screen, where Safari allows push only.
 - The workspace menu has **Turn on notifications** (or **Turn off**, or says
-  why it can't: blocked, unsupported, or not configured on the server). It
-  asks permission (from the click, which browsers require), subscribes with the
-  server's key and calls `campflare.push.subscribe` with a label made from the
-  browser and platform. A subscription made with another key is replaced on
-  load. **Send a test notification** calls `campflare.push.test`.
-- Active: the app reports focus over RTM (above), through `setActive()` on
-  core's workspace, which resends it on every reconnect.
+  why it can't: blocked, unsupported, not configured on the server, or on iOS
+  "Add Campflare to your Home Screen"). It asks permission (from the click,
+  which browsers require), subscribes with the server's key and calls
+  `campflare.push.subscribe` with a label made from the browser and platform
+  ("Firefox on Linux"). On every load, a subscription made with another key is
+  replaced, and one that matches is sent to the server again (it may have
+  dropped it after a 410): a browser that said yes stays subscribed without
+  asking again. **Send a test notification** calls `campflare.push.test`.
+  Browser APIs come in through a `PushPlatform`, so tests drive the whole path
+  with a fake permission, service worker and `PushManager`.
+- Active: `reportActivity()` (`src/presence.ts`) tells the server over RTM
+  (above), through `setActive()` on core's workspace (`Listener.send()` in the
+  client), which says it again on every reconnect.
+
+`pushsubscriptionchange` (a browser rotating a subscription by itself) isn't
+handled in the worker, which has no token to tell the server with; the next
+load of the app subscribes again.
 
 ## CLI
 

@@ -81,7 +81,16 @@ and tell the Worker where it is, so the permalinks `chat.getPermalink` hands out
 wrangler secret put APP_URL              # e.g. https://app.example.com/ (a plain var works too)
 ```
 
-Without it, a permalink answers a page naming the app route to open, with a
+Push notifications want a VAPID key pair (`pnpm vapid-keys` prints one;
+[docs/push.md](docs/push.md)); without it, push is off:
+
+```sh
+wrangler secret put VAPID_PUBLIC_KEY     # from pnpm vapid-keys
+wrangler secret put VAPID_PRIVATE_KEY
+wrangler secret put VAPID_SUBJECT        # mailto:ops@example.com, for push services to reach you
+```
+
+Without `APP_URL`, a permalink answers a page naming the app route to open, with a
 link that opens the desktop app. With `OFFER_DESKTOP_APP=true`, a permalink
 answers a page offering both, the desktop app and the browser, instead of the
 redirect; nothing opens until the person picks one.
@@ -125,7 +134,7 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | search                   | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
 | users                    | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set` (with `status_expiration`), `setPhoto`, `deletePhoto`; `user_change` on every change                                                                 |
 | usergroups               | `create`, `list`, `update`, `disable`, `enable`, `users.list`, `users.update`; `subteam_*` events; mentioned as `<!subteam^S…\|@handle>`                                                                                                         |
-| activity (`campflare.*`) | `activity.list`, `activity.mark` (the inbox: mentions, DMs, thread replies, reactions); `prefs.get`, `prefs.set` (notification levels)                                                                                                           |
+| activity (`campflare.*`) | `activity.list`, `activity.mark` (the inbox: mentions, DMs, thread replies, reactions); `prefs.get`, `prefs.set` (notification levels); `push.vapidKey`, `push.subscribe`, `push.unsubscribe`, `push.list`, `push.test` (Web Push)               |
 | dnd                      | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                                           |
 | realtime                 | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
 | interactivity            | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
@@ -226,6 +235,24 @@ whatever the level. Clients learn of changes over RTM (`activity_added`,
 campflare inbox --unread               # what needs you; --follow keeps printing new items
 campflare inbox read --all
 campflare notify '#random' mentions    # or none, all, default; `campflare notify` shows them
+```
+
+### Push notifications
+
+Items that `notify` are pushed to people's browsers and installed web apps with
+standard Web Push (VAPID and aes128gcm on WebCrypto, in the Worker), from the
+workspace's hub after the response, so posting waits for none of it. The app's
+workspace menu has **Turn on notifications**; the app is installable (a web app
+manifest), which iOS 16.4+ requires for push. A notification says who and where,
+the message as plain text, and opens the message when clicked. Nothing is pushed
+to a person whose app window is focused (the app says so over RTM), at most 30
+pushes per person per minute, and a push service's 404/410 forgets the device;
+429 and 5xx are retried. `campflare.push.subscribe` takes a browser's
+`PushSubscription`; the list never shows endpoints. See [docs/push.md](docs/push.md).
+
+```sh
+campflare push list                    # your devices; push remove <id>
+campflare push test                    # a test notification to each of them, now
 ```
 
 ## Realtime
@@ -483,6 +510,7 @@ campflare save '#dev' 1791990000.000300                       # saved lists them
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare inbox --unread --type mention,dm                    # what needs you (Campflare)
+campflare push test                                           # a test notification to your devices
 campflare api conversations.list limit=5                      # any method, raw JSON
 campflare profile --status 'En réunion' --emoji :calendar: --until 1h --photo me.png
 campflare group create oncall --name 'On call' --members @ana,@kenji   # then mention @oncall
@@ -536,7 +564,9 @@ client and CLI bundles. The Worker is bundled by wrangler.
   resets are links today; [docs/invites.md](docs/invites.md)).
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Push notifications (activity items already say whether to `notify`).
+- Native notifications in the desktop app (its webview has no Push API), and
+  closing a notification on other devices when an item is read
+  ([docs/push.md](docs/push.md)).
 - Custom emoji, an admin setting restricting who may manage user groups,
   scheduled DND hours, setting a person's time zone (reminders read `tz`,
   which no method sets yet). Pinning files (pin the message that shares one),
