@@ -36,6 +36,10 @@ Messages
   history <#channel|@person|id> [-n 20] [--thread <ts>] [--json]
   search <query> [-n 20] [--page N] [--newest] [--json]
   react <#channel|id> <ts> <emoji> [--remove]
+  pin <#channel|id> <ts>           unpin <#channel|id> <ts>
+  pins <#channel|id> [--json]      what's pinned in a conversation
+  save <#channel|@person|id> [ts]  save a message for later (no ts: the conversation); --file <id>
+  unsave <…same…>                  saved [-n 50] [--json]   your saved items, newest first
   edit <#channel|id> <ts> <text>      delete <#channel|id> <ts>
   click <#channel|id> <ts> [action_id] [--block <id>] [--value <v>]
         [--option <value>] [--user <@person>] [--conversation <#channel>]
@@ -62,6 +66,9 @@ Workspace
   channels [--all] [--json]        users [--json]
   create-channel <name> [--private]   join <#channel>   leave <#channel>
   invite <#channel> <@person>…
+  bookmarks <#channel> [--json]    the conversation's bookmarks bar
+  bookmark add <#channel> <url> [--title <t>] [--emoji :x:]
+  bookmark edit <#channel> <id> [--title <t>] [--url <url>] [--emoji :x:]   bookmark remove <#channel> <id>
   listen [--json] [--socket]       stream live events (RTM, or Socket Mode with an app token)
   events [--cursor N] [--wait S] [--follow] [--json]
                                    the event log (Campflare): what came since a cursor, by polling
@@ -715,6 +722,118 @@ const commands: Record<string, Command> = {
     })
   },
 
+  async pin(argv, io) {
+    await pinOrUnpin(argv, io, true)
+  },
+
+  async unpin(argv, io) {
+    await pinOrUnpin(argv, io, false)
+  },
+
+  async pins(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target] = positionals
+    if (!target) throw new UsageError("pins needs a conversation")
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    const res = await s.client.call<{ ok: boolean; items: PinItem[] }>("pins.list", { channel })
+    if (values.json) return s.print(res.items)
+    if (res.items.length === 0) return io.stdout(`Nothing pinned in ${target}\n`)
+    const names = await s.names()
+    for (const item of res.items) {
+      const by = names.get(item.created_by) ?? item.created_by
+      io.stdout(`${messageLine(item.message, names)}  (pinned by @${by}; ts ${item.message.ts})\n`)
+    }
+  },
+
+  async bookmarks(argv, io) {
+    const { values, positionals } = parse(argv)
+    const [target] = positionals
+    if (!target) throw new UsageError("bookmarks needs a conversation")
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    const res = await s.client.call<{ ok: boolean; bookmarks: BookmarkJson[] }>("bookmarks.list", {
+      channel_id: channel,
+    })
+    if (values.json) return s.print(res.bookmarks)
+    if (res.bookmarks.length === 0) return io.stdout(`No bookmarks in ${target}\n`)
+    for (const b of res.bookmarks) io.stdout(bookmarkLine(b))
+  },
+
+  async bookmark(argv, io) {
+    const [sub, ...rest] = argv
+    if (!sub || !["add", "edit", "remove"].includes(sub)) throw new UsageError("bookmark takes add, edit or remove")
+    const { values, positionals } = parse(rest, {
+      title: { type: "string" },
+      emoji: { type: "string" },
+      url: { type: "string" },
+    })
+    const [target, arg] = positionals
+    if (!target || !arg) {
+      throw new UsageError(
+        sub === "add"
+          ? "bookmark add needs a conversation and a link"
+          : `bookmark ${sub} needs a conversation and a bookmark id`,
+      )
+    }
+    const s = await session(io, values)
+    const channel = await s.conversation(target)
+    if (sub === "remove") {
+      await s.client.call("bookmarks.remove", { channel_id: channel, bookmark_id: arg })
+      if (values.json) return s.print({ ok: true })
+      return io.stdout(`Removed ${arg} from ${target}\n`)
+    }
+    const res =
+      sub === "add"
+        ? await s.client.call<{ ok: boolean; bookmark: BookmarkJson }>("bookmarks.add", {
+            channel_id: channel,
+            type: "link",
+            link: arg,
+            title: str(values.title) ?? arg,
+            emoji: str(values.emoji),
+          })
+        : await s.client.call<{ ok: boolean; bookmark: BookmarkJson }>("bookmarks.edit", {
+            channel_id: channel,
+            bookmark_id: arg,
+            title: str(values.title),
+            link: str(values.url),
+            emoji: str(values.emoji),
+          })
+    if (values.json) return s.print(res.bookmark)
+    io.stdout(`${sub === "add" ? "Added" : "Changed"}: ${bookmarkLine(res.bookmark)}`)
+  },
+
+  async save(argv, io) {
+    await saveOrUnsave(argv, io, true)
+  },
+
+  async unsave(argv, io) {
+    await saveOrUnsave(argv, io, false)
+  },
+
+  async saved(argv, io) {
+    const { values } = parse(argv, { n: { type: "string", short: "n" } })
+    const s = await session(io, values)
+    const res = await s.client.call<{ ok: boolean; items: SavedItem[]; paging: { total: number } }>("stars.list", {
+      limit: str(values.n) ?? 50,
+    })
+    if (values.json) return s.print(res.items)
+    if (res.items.length === 0) return io.stdout("Nothing saved\n")
+    const names = await s.names()
+    const where = await conversationNames(s, names)
+    for (const item of res.items) {
+      if (item.type === "message" && item.message) {
+        const place = where.get(item.channel ?? "") ?? item.channel
+        io.stdout(`${messageLine(item.message, names, `${place}  `)}  (ts ${item.message.ts})\n`)
+      } else if (item.type === "file" && item.file) {
+        io.stdout(`${time(String(item.date_create))}  file ${item.file.name ?? item.file.id} (${item.file.id})\n`)
+      } else {
+        io.stdout(`${time(String(item.date_create))}  ${where.get(item.channel ?? "") ?? item.channel}\n`)
+      }
+    }
+    if (res.paging.total > res.items.length) io.stderr(`${res.items.length} of ${res.paging.total} (-n for more)\n`)
+  },
+
   async click(argv, io) {
     const { values, positionals } = parse(argv, CLICK_OPTIONS)
     const [target, ts, actionId] = positionals
@@ -1150,6 +1269,64 @@ const commands: Record<string, Command> = {
       throw new UsageError("token commands: create, list, revoke")
     }
   },
+}
+
+interface PinItem {
+  created_by: string
+  message: MessageRecord
+}
+
+interface BookmarkJson {
+  id: string
+  title: string
+  link: string
+  emoji?: string
+}
+
+const bookmarkLine = (b: BookmarkJson) => `${b.id}  ${b.emoji ? `${b.emoji} ` : ""}${b.title}  ${b.link}\n`
+
+interface SavedItem {
+  type: string
+  channel?: string
+  message?: MessageRecord
+  file?: { id: string; name?: string }
+  date_create: number
+}
+
+async function pinOrUnpin(argv: string[], io: Io, add: boolean) {
+  const { values, positionals } = parse(argv)
+  const [target, ts] = positionals
+  const verb = add ? "pin" : "unpin"
+  if (!target || !ts) throw new UsageError(`${verb} needs a conversation and a message ts`)
+  const s = await session(io, values)
+  const channel = await s.conversation(target)
+  await s.client.call(add ? "pins.add" : "pins.remove", { channel, timestamp: ts })
+  if (values.json) return s.print({ ok: true, channel, ts })
+  io.stdout(`${add ? "Pinned" : "Unpinned"} ${ts} in ${target}\n`)
+}
+
+/** save <conversation> [ts]: a message, or without a ts the conversation itself; save --file <id>: a file. */
+async function saveOrUnsave(argv: string[], io: Io, add: boolean) {
+  const { values, positionals } = parse(argv, { file: { type: "string" } })
+  const [target, ts] = positionals
+  const file = str(values.file)
+  const verb = add ? "save" : "unsave"
+  if (!target && !file) throw new UsageError(`${verb} needs a conversation (and a message ts), or --file <id>`)
+  const s = await session(io, values)
+  const args = file ? { file } : { channel: await s.conversation(target!), timestamp: ts }
+  await s.client.call(add ? "stars.add" : "stars.remove", args)
+  if (values.json) return s.print({ ok: true, ...args })
+  io.stdout(`${add ? "Saved" : "Unsaved"} ${file ?? (ts ? `${ts} in ${target}` : target)}\n`)
+}
+
+/** "#name" for channels, "@person" for DMs: the conversations the person is in. */
+async function conversationNames(s: Session, people: Map<string, string>) {
+  const conversations = await s.client.paginate<Conversation>("users.conversations", "channels", {
+    types: "public_channel,private_channel,im,mpim",
+  })
+  return new Map(
+    conversations.map((c) => [c.id, c.is_im && c.user ? `@${people.get(c.user) ?? c.user}` : `#${c.name ?? c.id}`]),
+  )
 }
 
 interface MessageRecord {
