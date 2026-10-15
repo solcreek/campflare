@@ -35,6 +35,16 @@ methods answer `push_not_configured`.
 - `VAPID_PRIVATE_KEY`: its private scalar `d` (32 bytes), base64url. A secret.
 - `VAPID_SUBJECT`: a `mailto:` or `https:` URL push services can reach the
   operator at; defaults to the request's origin.
+- `PUSH_SERVICE_HOSTS`: push services to allow beyond the browsers' own
+  (a self-hosted one), comma-separated hosts, `*.example.com` for subdomains.
+
+The pair is checked once per isolate (`loadVapid()` in `vapid.ts`): parsed,
+imported, and a signature made with the private key must verify with the
+public one. A pair that doesn't match is logged and push is off
+(`push_not_configured`), rather than every push failing. The imported key is
+kept, so a push parses nothing; a failure signing with it is never blamed on a
+subscription (nothing is deleted; `campflare.push.test` answers
+`push_not_configured`).
 
 The format is the one the `web-push` tools print, so keys made by them work.
 `pnpm vapid-keys` prints a fresh pair; `pnpm ready` reports a `.dev.vars`
@@ -63,11 +73,17 @@ acting for them. User tokens only: a bot has no browser.
 - **`campflare.push.subscribe`** takes `subscription` (what
   `PushSubscription.toJSON()` gives: `{ endpoint, keys: { p256dh, auth } }`),
   or `endpoint`, `p256dh` and `auth` separately, and an optional `label` ("Firefox
-  on Linux"; up to 100 characters). The endpoint must be `https`; `p256dh` a
+  on Linux"; up to 100 characters). The endpoint must be `https` at a known
+  push service (`fcm.googleapis.com`, `updates.push.services.mozilla.com`,
+  `push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`, and
+  `PUSH_SERVICE_HOSTS`), so the server can't be aimed at any URL; `p256dh` a
   65-byte uncompressed P-256 point and `auth` 16 bytes, base64url. An endpoint
-  is one browser: subscribing it again updates its keys and label, and moves it
-  to whoever subscribed last (one browser profile, the person signed in now). A
-  person keeps at most 20 (`MAX_SUBSCRIPTIONS`); a 21st replaces their oldest.
+  is one browser and one row: subscribing it again with the same keys and label
+  writes nothing (the app does it on every load), with new ones updates them
+  and keeps `created` and `last_used`. An endpoint someone else holds, in this
+  workspace or another, answers `endpoint_in_use`: it's never taken over. The
+  app unsubscribes it when that person signs out, which frees it. A person
+  keeps at most 20 (`MAX_SUBSCRIPTIONS`); a 21st replaces their oldest.
   Answers `{ subscription }` as the list shows it.
 - **`campflare.push.list`** answers `{ subscriptions: [{ id, label, service,
 created, last_used }] }`, newest first. `service` is the endpoint's host
@@ -77,8 +93,11 @@ created, last_used }] }`, newest first. `service` is the endpoint's host
   unsubscribes knows its endpoint, not our id); one of the caller's own, else
   `subscription_not_found`.
 - **`campflare.push.test`** sends every device of the caller (or the one `id`)
-  a test notification, now, and answers `{ sent, failed, removed }`: the
-  quickest way to see that a device works, from the CLI or the app.
+  a test notification, now, and answers `{ sent, failed, removed, results }`,
+  `results` saying `delivered`, `gone` (and removed) or `failed` per device,
+  never the push service's status (the answer isn't a probe of other
+  servers): the quickest way to see that a device works, from the CLI or the
+  app.
 
 ## What a notification says
 
@@ -103,8 +122,11 @@ subscriptions. The payload is JSON, encrypted:
 replied in #general`; a reaction, `Olive Owner reacted :tada: in #general`.
   The display name, else the real name, else the handle.
 - `body`: the message's text as plain text (mentions become `@name`, channel
-  links `#name`, links their label, entities decoded), at most 300 characters.
-  A message without text says `sent a file` or `sent a message`.
+  links `#name`, `<!here>`, `<!channel>`, `<!everyone>` and user groups
+  `@here`…, a date its fallback text, other `<!…>` their label, links their
+  label, entities decoded), at most 300 characters; cut further if the whole
+  payload wouldn't fit a push (about 3,990 bytes). A message without text says
+  `sent a file` or `sent a message`. Titles stop at 100 characters.
 - `tag`: the conversation, so a device shows one notification per conversation,
   the newest replacing the older (the service worker sets `renotify` so it
   still alerts). The push request's `Topic` header is the same, so a push
@@ -150,9 +172,15 @@ What the push service answers:
 - `429` or `5xx` or no answer within 10 s: retried after 10 s, 1 min and 5 min
   (`PUSH_RETRY_DELAYS_MS`), or after `Retry-After` if the service sent one
   (at most an hour), then dropped. Retries are kept in the hub's SQLite
-  (`push_retries`) and sent by its alarm, the one that already resends Socket
-  Mode envelopes and Events API POSTs, so a hub that is evicted still retries.
-- Anything else (`400`, `403`, `413`): dropped, logged. A `403` is usually a
+  (`push_pending`: the person, the subscription's id and the payload) and sent
+  by its alarm, the one that already resends Socket Mode envelopes and Events
+  API POSTs (both kinds go out together), so a hub that is evicted still
+  retries. A retry goes to the subscription as it is then: none if it was
+  removed (unsubscribing, the 20-device trim and a 404/410 delete its pending
+  retries) or isn't that person's any more; and like a first push, not while
+  the person is looking at the app, and counted against the cap.
+- Anything else (`400`, `403`, `413`), or a payload that can't fit: dropped,
+  logged, never retried. A `403` is usually a
   subscription made with other VAPID keys; the app subscribes afresh when it
   sees the key changed.
 
@@ -195,6 +223,15 @@ standalone`, so the app can be installed, and on iOS 16.4+ added to the home
 - Active: `reportActivity()` (`src/presence.ts`) tells the server over RTM
   (above), through `setActive()` on core's workspace (`Listener.send()` in the
   client), which says it again on every reconnect.
+
+**Whose subscription it is.** A browser's subscription belongs to whoever
+turned notifications on there: the app remembers the server and person
+(`campflare.push.owner` in localStorage). Signing out first tells the server to
+forget the subscription (best effort, 5 s at most) and then drops it in the
+browser, so the next person to sign in there doesn't receive the last one's
+notifications. On load, a subscription made for someone else (they didn't sign
+out, or storage was cleared) is dropped, never adopted; turning notifications on
+makes a new one.
 
 `pushsubscriptionchange` (a browser rotating a subscription by itself) isn't
 handled in the worker, which has no token to tell the server with; the next

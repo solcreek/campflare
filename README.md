@@ -90,6 +90,10 @@ wrangler secret put VAPID_PRIVATE_KEY
 wrangler secret put VAPID_SUBJECT        # mailto:ops@example.com, for push services to reach you
 ```
 
+Subscriptions are accepted only at the browsers' push services (FCM, Mozilla,
+Apple, Windows); a self-hosted one goes in `PUSH_SERVICE_HOSTS` (comma-separated
+hosts, `*.example.com` for subdomains).
+
 Without `APP_URL`, a permalink answers a page naming the app route to open, with a
 link that opens the desktop app. With `OFFER_DESKTOP_APP=true`, a permalink
 answers a page offering both, the desktop app and the browser, instead of the

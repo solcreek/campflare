@@ -684,8 +684,15 @@ minutes (kept in the link's attachment, `activeAt`), without devices (the
 workspace's subscriptions are read once and dropped by
 `pushSubscriptionsChanged()`), or past 30 a minute (`push_counts`); names for
 the title and body (`payload.ts`) are one D1 batch. 404/410 deletes the
-subscription; transient failures go to `push_retries` in the hub's SQLite and
-are retried by its alarm (10 s, 1 min, 5 min, or Retry-After). Tests replace
+subscription; transient failures go to `push_pending` in the hub's SQLite (the
+subscription's id, not a copy) and are retried by its alarm (10 s, 1 min, 5 min,
+or Retry-After) to the subscription as it is then, re-checking presence and the
+cap; removing a subscription (`pushSubscriptionsChanged(removed)`) drops its
+retries. Endpoints must be at a known push service (`isPushService()`,
+`PUSH_SERVICE_HOSTS` adds more); one held by someone else is `endpoint_in_use`;
+re-subscribing unchanged writes nothing. `loadVapid()` checks the key pair once
+per isolate (a mismatch turns push off) and keeps the imported key; a signing
+failure is `misconfigured`, never `gone`. Tests replace
 push services with `setPushFetch()`; `test/push-service.ts` makes browser
 subscriptions with real keys and decrypts what was sent as a browser would.
 
@@ -782,8 +789,10 @@ message's images, as originals, in a viewer dialog.
 classic script, so it imports nothing); its handlers are exported for tests.
 `src/push.ts` has the browser side behind a `PushPlatform` (permission, service
 worker, `PushManager`; `browserPlatform()` reads the globals, none in the
-desktop shell): `currentPush()` on load (replaces a subscription made with
-another key, re-sends a matching one), `turnOnPush()`, `turnOffPush()`. The
+desktop shell): `currentPush()` on load (drops a subscription made for
+someone else, per `campflare.push.owner` in localStorage; replaces one made
+with another key; re-sends a matching one), `turnOnPush()`, `turnOffPush()`,
+and `signOutPush()`, which `App` runs before revoking the token. The
 workspace menu's items are `components/notifications.tsx` (`usePush()` lives in
 the always-mounted sidebar, since the menu mounts on opening).
 `src/presence.ts` reports focus through core's `setActive()`. The manifest and
