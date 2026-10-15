@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
+import { reportActivity } from "@/presence"
 import { useRoute } from "@/route"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
 import { ConversationView, ThreadPanel } from "./conversation"
@@ -24,6 +25,9 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
     void workspace.start()
     return () => workspace.stop()
   }, [workspace])
+
+  // No push to this person's devices while they're looking at the app.
+  useEffect(() => reportActivity(workspace), [workspace])
 
   // With no conversation in the URL, open #general (or the first one you're in).
   useEffect(() => {

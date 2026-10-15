@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useWorkspace, useWorkspaceState } from "@/workspace"
 import { reportError } from "./message"
+import { NotificationItems, usePush } from "./notifications"
 
 const CONNECTION_LABEL = {
   offline: "Offline",
@@ -173,6 +174,7 @@ export function Sidebar({
   const me = useWorkspaceState((s) => (s.self ? s.users[s.self.userId] : undefined))
   const connection = useWorkspaceState((s) => s.connection)
   const [browsing, setBrowsing] = useState(false)
+  const push = usePush()
 
   return (
     <div className="flex w-64 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
@@ -203,6 +205,8 @@ export function Sidebar({
             <DropdownMenuLabel>{me ? `Signed in as ${me.name}` : "Signed in"}</DropdownMenuLabel>
             <DropdownMenuLabel className="font-normal text-muted-foreground">{self?.url}</DropdownMenuLabel>
           </DropdownMenuGroup>
+          <DropdownMenuSeparator />
+          <NotificationItems push={push} />
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSignOut}>
             <LogOutIcon />
