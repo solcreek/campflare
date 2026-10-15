@@ -5,6 +5,7 @@ import { publish } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { decodeCursor, encodeCursor } from "../api/args"
 import { invalidArguments } from "../api/errors"
+import { nowSeconds } from "../api/ids"
 import { loadExtras, messageJson, reactionsOfQuery } from "../api/shapes"
 
 // The activity inbox (docs/activity.md): list it, mark it read.
@@ -30,14 +31,17 @@ const LISTABLE = `FROM activity a
 const historyTypes = (ctx: Ctx<Actor>) =>
   JSON.stringify(TYPE_PREFIXES.filter((p) => ctx.auth.scopes.includes(`${p}:history`)))
 
+/** Unread counts by kind: `a.read = 0` lets it read only activity_unread's rows. */
+export const UNREAD_COUNTS = `SELECT a.kind, COUNT(*) AS n ${LISTABLE} AND a.read = 0 GROUP BY a.kind`
+
 /** Unread counts by kind, as a statement to batch with a read or a change. */
-const unreadStatement = (ctx: Ctx<Actor>) =>
-  stmt(
-    ctx.env.DB,
-    `SELECT a.kind, COUNT(*) AS n ${LISTABLE} AND a.read = 0 GROUP BY a.kind`,
-    ctx.auth.user.id,
-    historyTypes(ctx),
-  )
+const unreadStatement = (ctx: Ctx<Actor>) => stmt(ctx.env.DB, UNREAD_COUNTS, ctx.auth.user.id, historyTypes(ctx))
+
+/** Read items are kept this long, then pruned; unread ones stay until their message goes. */
+export const READ_RETENTION_SECONDS = 90 * 24 * 60 * 60
+
+/** Read items pruned per mark, at most: a bounded delete, after the response. */
+const PRUNE_BATCH = 100
 
 /** The unread counts from an unreadStatement's result: every kind, and the total. */
 function unreadFrom(result: D1Result) {
@@ -136,5 +140,16 @@ method("campflare.activity.mark", "actor", async (ctx) => {
       unread,
     },
   })
+  // Now and then is enough: a mark is when items turn read.
+  ctx.waitUntil(
+    stmt(
+      db,
+      `DELETE FROM activity WHERE id IN (
+         SELECT id FROM activity WHERE user_id = ? AND read = 1 AND created < ? ORDER BY id LIMIT ?)`,
+      user,
+      nowSeconds() - READ_RETENTION_SECONDS,
+      PRUNE_BATCH,
+    ).run(),
+  )
   return { marked: changed!.meta.changes, unread }
 })

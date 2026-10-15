@@ -475,8 +475,7 @@ client and CLI bundles. The Worker is bundled by wrangler.
   when one person is in several.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Push notifications (activity items already say whether to `notify`), and
-  pruning old read activity.
+- Push notifications (activity items already say whether to `notify`).
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
   emoji, scheduled DND hours, time zones.
 - Sharding a very large workspace's hub across several Durable Objects.

@@ -21,6 +21,8 @@ CREATE TABLE activity (
 );
 -- A person's inbox, newest first.
 CREATE INDEX activity_user ON activity (user_id, id);
+-- Unread counts (the badge), read on every list and mark: only the unread rows.
+CREATE INDEX activity_unread ON activity (user_id, kind) WHERE read = 0;
 -- What a message's deletion removes.
 CREATE INDEX activity_message ON activity (channel_id, ts);
 -- One item per message per person, and per reaction for reactions.

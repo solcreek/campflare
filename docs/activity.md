@@ -67,7 +67,11 @@ recipient, in one RPC to the hub (`publishEach()`), after the response.
   (`channels:`, `groups:`, `im:`, `mpim:`), as `conversations.history` would
   refuse it the rest: an item carries the message.
 
-Items are kept until their message goes. Pruning old read items is left for later.
+Retention: unread items are kept until their message goes; read items are
+kept 90 days (`READ_RETENTION_SECONDS`). Each `campflare.activity.mark` prunes
+up to 100 of the person's read items older than that, after the response, so the
+table stays bounded without a timer. Unread counts read only the unread rows,
+through a partial index (`activity_unread`, `WHERE read = 0`).
 
 ## Methods
 
