@@ -92,17 +92,19 @@ it isn't in (`requireWritable()`); without it a bot must be a member.
 
 For `campflare.*` methods, named in Slack's `noun:verb` style:
 
-| scope                          | methods                                                | why it's separate                                         |
-| ------------------------------ | ------------------------------------------------------ | --------------------------------------------------------- |
-| `rtm:stream`                   | `rtm.connect`                                          | a live feed of everything the person sees                 |
-| `events:read`                  | `campflare.events.poll`                                | the same, by cursor                                       |
-| `views:read` / `views:write`   | `campflare.views.list` / `.submit`, `.close`           | acting in an app's modal as the person                    |
-| `chat:write`                   | `campflare.blocks.action`, `campflare.chat.stopStream` | a click or a stop acts in the conversation                |
-| `apps:read` / `apps:write`     | `apps.list` / `campflare.apps.*`                       | `apps.info` reveals signing secrets, so it's `apps:write` |
-| `tokens:read` / `tokens:write` | `campflare.tokens.list` / `.create`, `.revoke`         | minting tokens is how a token would escalate              |
-| `users.password:write`         | `campflare.users.setPassword`                          | a password is the whole account                           |
-| `admin.users:write`            | `campflare.users.create`, `.deactivate`, `.setRole`    | plus the admin or owner role                              |
-| `calls:read` / `calls:write`   | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
+| scope                              | methods                                                | why it's separate                                         |
+| ---------------------------------- | ------------------------------------------------------ | --------------------------------------------------------- |
+| `rtm:stream`                       | `rtm.connect`                                          | a live feed of everything the person sees                 |
+| `events:read`                      | `campflare.events.poll`                                | the same, by cursor                                       |
+| `views:read` / `views:write`       | `campflare.views.list` / `.submit`, `.close`           | acting in an app's modal as the person                    |
+| `chat:write`                       | `campflare.blocks.action`, `campflare.chat.stopStream` | a click or a stop acts in the conversation                |
+| `apps:read` / `apps:write`         | `apps.list` / `campflare.apps.*`                       | `apps.info` reveals signing secrets, so it's `apps:write` |
+| `tokens:read` / `tokens:write`     | `campflare.tokens.list` / `.create`, `.revoke`         | minting tokens is how a token would escalate              |
+| `users.password:write`             | `campflare.users.setPassword`                          | a password is the whole account                           |
+| `admin.users:write`                | `campflare.users.create`, `.deactivate`, `.setRole`    | plus the admin or owner role                              |
+| `calls:read` / `calls:write`       | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
+| `activity:read` / `activity:write` | `campflare.activity.list` / `.mark`                    | a person's inbox ([activity.md](activity.md))             |
+| `prefs:read` / `prefs:write`       | `campflare.prefs.get` / `.set`                         | notification levels                                       |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
 could see, not only those their other scopes allow. Until events are filtered
@@ -128,9 +130,10 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
 
 - `read`: every `:read` and `:history`, `search:read`, `files:read`,
   `reactions:read`, `emoji:read`, `dnd:read`, `team:read`, `users:read`,
-  `rtm:stream`, `events:read`, `views:read`.
+  `rtm:stream`, `events:read`, `views:read`, `activity:read`, `prefs:read`.
 - `write`: `read` plus `chat:write`, `reactions:write`, `files:write`, the
-  conversation `:write` scopes, `views:write`. What a chat agent needs.
+  conversation `:write` scopes, `views:write`, `activity:write`,
+  `prefs:write`. What a chat agent needs.
 - `full`: every user scope. What a person's own sign-in gets.
 
 A token stores presets by name (`tokens.scopes` holds `full`, or
@@ -154,8 +157,9 @@ without it never expire, as before.
 - `campflare.bootstrap`, `campflare.users.create`, a password or token sign-in:
   `full`.
 - `campflare.apps.create`: the bot gets `bot` (`DEFAULT_BOT_SCOPES`, now with
-  `assistant:write`, `mpim:write`, `channels:manage`, `rtm:stream` and
-  `events:read`), the app token `connections:write`.
+  `assistant:write`, `mpim:write`, `channels:manage`, `rtm:stream`,
+  `events:read`, `activity:read` and `activity:write`), the app token
+  `connections:write`.
 - `oauth.v2.access`: what the person consented to, out of the known user
   scopes and presets. The CLI, the web app and the desktop app ask for
   `user_scope=full`, since they expose everything; the consent page says in

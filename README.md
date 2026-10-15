@@ -111,22 +111,23 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 `{ "ok": false, "error": "<code>" }`, using Slack's error codes. Lists page with
 `cursor` and `response_metadata.next_cursor`.
 
-| Area                  | Methods                                                                                                                                                                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                                                           |
-| conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`                                         |
-| chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                                                  |
-| streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                                |
-| reactions             | `add`, `remove`, `get`                                                                                                                                                                                                                           |
-| files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
-| search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
-| users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                                                      |
-| dnd                   | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                                           |
-| realtime              | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
-| interactivity         | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
-| views (modals)        | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                                   |
-| other                 | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                                              |
-| admin (`campflare.*`) | `bootstrap`, `methods.list`, `users.create`, `users.deactivate`, `users.setRole`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
+| Area                     | Methods                                                                                                                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| auth                     | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                                                           |
+| conversations            | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`                                         |
+| chat                     | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                                                  |
+| streaming                | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                                |
+| reactions                | `add`, `remove`, `get`                                                                                                                                                                                                                           |
+| files                    | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
+| search                   | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
+| users                    | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                                                      |
+| activity (`campflare.*`) | `activity.list`, `activity.mark` (the inbox: mentions, DMs, thread replies, reactions); `prefs.get`, `prefs.set` (notification levels)                                                                                                           |
+| dnd                      | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                                           |
+| realtime                 | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
+| interactivity            | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
+| views (modals)           | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                                   |
+| other                    | `team.info`, `emoji.list`, `bots.info`, `apps.list`                                                                                                                                                                                              |
+| admin (`campflare.*`)    | `bootstrap`, `methods.list`, `users.create`, `users.deactivate`, `users.setRole`, `tokens.create`, `tokens.list`, `tokens.revoke`, `apps.create`, `apps.info`, `apps.setEventSubscriptions`, `apps.setInteractivity`, `apps.rotateSigningSecret` |
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
@@ -155,6 +156,29 @@ Search uses an FTS5 trigram index that ignores case and diacritics. It matches
 substrings in any script: words in Chinese, Japanese and Korean, which aren't
 separated by spaces, as well as `cafe` for `Café` and `munchen` for `München`.
 Terms shorter than three characters fall back to a LIKE scan.
+
+### The activity inbox
+
+What needs a person's attention is recorded as it happens, one item per person:
+a message that mentions them (`<@U…>`, or `<!here>`/`<!channel>`/`<!everyone>`
+in a conversation they're in), a new message in their DMs, a reply in a thread
+they wrote or replied in, a reaction to their message. `campflare.activity.list`
+pages them newest first with the message and unread counts by kind
+(`unread_only`, `types`); `campflare.activity.mark` marks some (`ids`), all up
+to one (`up_to`) or `all` read. Items of a conversation the person left are
+hidden, and a deleted message takes its items with it. Each item says whether
+it should `notify`, from the person's level for that conversation
+(`campflare.prefs.set`: `all`, `mentions` or `none`, and a default) and their
+snooze, so a push sender or a client just follows it; items are recorded
+whatever the level. Clients learn of changes over RTM (`activity_added`,
+`activity_marked`, `activity_removed`, `prefs_changed`). See
+[docs/activity.md](docs/activity.md).
+
+```sh
+campflare inbox --unread               # what needs you; --follow keeps printing new items
+campflare inbox read --all
+campflare notify '#random' mentions    # or none, all, default; `campflare notify` shows them
+```
 
 ## Realtime
 
@@ -344,6 +368,7 @@ or a bot:
 | `search_messages`                             | search, with the same syntax as `search.messages`            |
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
+| `get_activity`, `mark_activity_read`          | what needs your attention (unread by default), and done with |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
 
@@ -399,6 +424,7 @@ llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791
 campflare stop '#dev' 1791990000.000200                       # as a person: stop an app's reply mid-stream
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
+campflare inbox --unread --type mention,dm                    # what needs you (Campflare)
 campflare api conversations.list limit=5                      # any method, raw JSON
 ```
 
@@ -449,6 +475,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
   when one person is in several.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
+- Push notifications (activity items already say whether to `notify`), and
+  pruning old read activity.
 - Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
   emoji, scheduled DND hours, time zones.
 - Sharding a very large workspace's hub across several Durable Objects.

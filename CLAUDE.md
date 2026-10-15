@@ -491,6 +491,30 @@ each reconnect), with `submitView`/`closeView`/`clickInView` and `formField()`
 describing inputs; the app's `ViewDialog` (`components/view-dialog.tsx`) shows
 the top one as a Dialog. CLI: `campflare view list|submit|close|click`.
 
+**Activity inbox.** `src/activity.ts`, `src/methods/activity.ts` and
+`src/methods/prefs.ts` (`docs/activity.md`, migration 0019): per-person items
+of kind `mention` (`<@U…>`, `<!here|channel|everyone>`), `dm` (im/mpim),
+`thread_reply` (a thread they wrote or replied in) and `reaction` (to their
+message), one per message per person by that precedence, never for the author.
+`postMessage()` batches `messageActivity()`, one `INSERT … SELECT … RETURNING`
+over `members` (members only; the thread's participants from `messages`), and
+`reactions.add` batches `reactionActivity()`; only "saying" subtypes count, and
+edits record nothing. Each row stores `notify`, decided then: the
+conversation's level in `notification_prefs`, else the person's default
+(`conversation_id` ''), else `all`; `mentions` notifies only mention and dm;
+`none` nothing; snoozed nothing. Items are recorded whatever the level. The
+returned rows go out as RTM-only `activity_added` (with the message), one per
+recipient, in one hub RPC (`publishEach()`). Deleting a message (or tombstoning
+a head) and removing a reaction delete their items in the same batch
+(`activity_removed`). `campflare.activity.list` joins `members` and the message,
+so items of a conversation the person left are hidden (back on rejoining), and
+lists only conversation types the token holds `:history` for; the page, its
+messages, their reactions and the unread counts are one batch.
+`campflare.activity.mark` (`ids`, `up_to`, `all`) sends `activity_marked`;
+`campflare.prefs.set` sends `prefs_changed`. User group mentions would join the
+mentioned-ids list in the INSERT, in SQL. CLI: `campflare inbox`,
+`campflare notify`; MCP: `get_activity`, `mark_activity_read`.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, set roles
