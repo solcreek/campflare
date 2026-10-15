@@ -63,6 +63,11 @@ describe("usergroups", () => {
     await w.addUser("bob")
     const derived = await ok<{ usergroup: Group }>("usergroups.create", { name: "Équipe Front-end" }, w.owner.token)
     expect(derived.usergroup.handle).toBe("equipe-front-end")
+    const trimmed = await ok<{ usergroup: Group }>("usergroups.create", { name: "_Ops (Café)." }, w.owner.token)
+    expect(trimmed.usergroup.handle).toBe("ops-cafe")
+    // Cut at 80 characters where a separator falls: the separator goes too.
+    const long = await ok<{ usergroup: Group }>("usergroups.create", { name: `${"a".repeat(79)} tail` }, w.owner.token)
+    expect(long.usergroup.handle).toBe("a".repeat(79))
     await expectError("usergroups.create", { name: "日本語チーム" }, w.owner.token, "invalid_arguments")
     await expectError(
       "usergroups.create",

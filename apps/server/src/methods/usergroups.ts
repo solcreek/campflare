@@ -31,8 +31,9 @@ function handleFromName(name: string): string {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[-._]+|-+$/g, "")
+    // Cut to length first, so the cut can't leave a separator at the end.
     .slice(0, 80)
+    .replace(/^[-._]+|[-._]+$/g, "")
   if (!handle) throw invalidArguments("handle is required when the name has no Latin letters or digits")
   return handleArg(handle)
 }
