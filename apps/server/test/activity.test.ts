@@ -106,6 +106,25 @@ describe("activity items", () => {
     expect((await inbox(w.owner.token)).items).toEqual([])
   })
 
+  it("keeps the thread's author and those whose replies went taking part, the head tombstoned or not", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const carol = await w.addUser("carol")
+    const dave = await w.addUser("dave")
+    const root = await post(bob.token, w.general, "Hilo 话题")
+    const reply = await post(carol.token, w.general, "première", { thread_ts: root })
+    await post(dave.token, w.general, "zweite", { thread_ts: root })
+    await ok("chat.delete", { channel: w.general, ts: root }, bob.token)
+    await ok("chat.delete", { channel: w.general, ts: reply }, carol.token)
+    for (const who of [bob, carol, dave]) await ok("campflare.activity.mark", { all: true }, who.token)
+    await post(w.owner.token, w.general, "세 번째", { thread_ts: root })
+    for (const who of [bob, carol, dave]) {
+      expect((await inbox(who.token, { unread_only: true })).items.map((i) => [i.type, i.actor])).toEqual([
+        ["thread_reply", w.owner.id],
+      ])
+    }
+  })
+
   it("records thread replies for the thread's author and those who replied, not bystanders", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")

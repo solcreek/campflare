@@ -42,10 +42,21 @@ const RECIPIENTS = `JOIN users u ON u.id = r.user_id AND u.deleted = 0
 const threadOf = (m: Pick<MessageRow, "ts" | "thread_ts">) => (m.thread_ts && m.thread_ts !== m.ts ? m.thread_ts : null)
 
 /**
+ * Who takes part in a thread (`?4` in conversation `?2`): everyone who wrote in
+ * it, deleted replies included (they followed it), and its head's author as
+ * every reply recorded it (`parent_user_id`), which survives the head being
+ * tombstoned. Two range scans of the thread index.
+ */
+const PARTICIPANTS = `SELECT user_id FROM messages WHERE channel_id = ?2 AND thread_ts = ?4
+  UNION SELECT parent_user_id FROM messages WHERE channel_id = ?2 AND thread_ts = ?4`
+
+/**
  * The items a new message makes, as one INSERT … RETURNING to batch with the
  * message itself; undefined when it can make none (most channel messages).
  * Recipients are the conversation's members other than the author, each once,
- * with the strongest kind: mention, then dm, then thread_reply.
+ * with the strongest kind: mention, then dm, then thread_reply. Only a
+ * broadcast or a DM reads every member; otherwise the members are looked up
+ * by the candidates alone (those named, the thread's participants).
  */
 export function messageActivity(
   db: D1Database,
@@ -58,21 +69,25 @@ export function messageActivity(
   const thread = threadOf(m)
   if (!dm && !thread && !everyone && users.length === 0) return undefined
   // User groups (<!subteam^S…>) would add their members to ?6 here, in SQL: see docs/activity.md.
+  const named = "m.user_id IN (SELECT value FROM json_each(?6))"
+  // A broadcast makes everyone's a mention, and a DM makes no thread_reply: either way no thread to read.
+  const [kind, who] = everyone
+    ? ["'mention'", ""]
+    : dm
+      ? [`CASE WHEN ${named} THEN 'mention' ELSE 'dm' END`, ""]
+      : [
+          `CASE WHEN ${named} THEN 'mention' ELSE 'thread_reply' END`,
+          `AND m.user_id IN (SELECT value FROM json_each(?6)${thread ? ` UNION ${PARTICIPANTS}` : ""})`,
+        ]
   return stmt(
     db,
     `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, thread_ts, actor_id, created, notify)
-     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, COALESCE(?5, ''), ?9, ${notify("?9")}
+     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, COALESCE(?5, ''), ?7, ${notify("?7")}
      FROM (
-       SELECT m.user_id, CASE
-         WHEN ?7 OR m.user_id IN (SELECT value FROM json_each(?6)) THEN 'mention'
-         WHEN ?8 THEN 'dm'
-         WHEN m.user_id IN (SELECT p.user_id FROM messages p
-           WHERE p.channel_id = ?2 AND (p.ts = ?4 OR p.thread_ts = ?4) AND p.deleted = 0) THEN 'thread_reply'
-       END AS kind
-       FROM members m WHERE m.conversation_id = ?2 AND m.user_id IS NOT ?5
+       SELECT m.user_id, ${kind} AS kind
+       FROM members m WHERE m.conversation_id = ?2 AND m.user_id IS NOT ?5 ${who}
      ) r
      ${RECIPIENTS}
-     WHERE r.kind IS NOT NULL
      RETURNING *`,
     c.team_id,
     c.id,
@@ -80,8 +95,6 @@ export function messageActivity(
     thread,
     m.user_id,
     JSON.stringify(users),
-    everyone ? 1 : 0,
-    dm ? 1 : 0,
     nowSeconds(),
   )
 }

@@ -14,12 +14,12 @@ migration 0019): its recipient, `kind`, the conversation and message `ts`, the
 message's thread, who did it (`actor_id`), the reaction for a reaction, when, and
 whether it is read and should notify.
 
-| kind           | when                                                                                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `mention`      | a new message names the recipient (`<@U…>`), or says `<!here>`, `<!channel>` or `<!everyone>` in a conversation they are in |
-| `dm`           | a new message in an im or mpim they are in                                                                                  |
-| `thread_reply` | a new reply in a thread they take part in: they wrote its first message, or replied before                                  |
-| `reaction`     | someone reacts to their message (one item per person and emoji: two emoji from one person are two items)                    |
+| kind           | when                                                                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mention`      | a new message names the recipient (`<@U…>`), or says `<!here>`, `<!channel>` or `<!everyone>` in a conversation they are in                    |
+| `dm`           | a new message in an im or mpim they are in                                                                                                     |
+| `thread_reply` | a new reply in a thread they take part in: they wrote its first message, or replied before (a deleted reply or a tombstoned head still counts) |
+| `reaction`     | someone reacts to their message (one item per person and emoji: two emoji from one person are two items)                                       |
 
 Rules:
 
@@ -46,7 +46,11 @@ Rules:
 
 The items are written by one `INSERT … SELECT … RETURNING` in the same batch as
 the message (`messageActivity()` in `src/activity.ts`): the recipients come from
-`members` in SQL, the thread's participants from `messages`, the preferences and
+`members` in SQL, looked up by the candidates (those named, the thread's
+participants) unless a broadcast or a DM reaches every member. A thread's
+participants are its messages' authors, deleted replies included, and its head's
+author as every reply recorded it (`parent_user_id`), which a tombstone doesn't
+erase: no table of its own, and two range scans of the thread index; the preferences and
 snooze from `notification_prefs` and `users`, so posting costs no extra round
 trip. A reaction's item is one more statement in `reactions.add`'s batch. The
 returned rows go out as `activity_added` RTM events (`rtmOnly`), one per
