@@ -10,7 +10,9 @@ CREATE TABLE activity (
   channel_id TEXT NOT NULL,
   ts TEXT NOT NULL,
   thread_ts TEXT,
-  actor_id TEXT,
+  -- Who did it; '' when nobody is known (a message without a user), never NULL,
+  -- since NULLs are distinct in a unique index and would let duplicates in.
+  actor_id TEXT NOT NULL DEFAULT '',
   -- The emoji, for a reaction; '' otherwise, so the unique index below holds.
   reaction TEXT NOT NULL DEFAULT '',
   created INTEGER NOT NULL,

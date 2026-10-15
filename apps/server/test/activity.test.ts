@@ -187,6 +187,17 @@ describe("activity items", () => {
   })
 })
 
+describe("the activity table", () => {
+  it("holds one item per message per person even when nobody is known to have done it", async () => {
+    const insert = () =>
+      env.DB.prepare(
+        `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, created) VALUES ('T1', 'U1', 'dm', 'D1', '1.000001', 1)`,
+      ).run()
+    await insert()
+    await expect(insert()).rejects.toThrow(/UNIQUE/)
+  })
+})
+
 describe("listing", () => {
   it("pages newest first, filters by type and by unread", async () => {
     const w = await workspace()

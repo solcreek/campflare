@@ -61,7 +61,7 @@ export function messageActivity(
   return stmt(
     db,
     `INSERT INTO activity (team_id, user_id, kind, channel_id, ts, thread_ts, actor_id, created, notify)
-     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, ?5, ?9, ${notify("?9")}
+     SELECT ?1, r.user_id, r.kind, ?2, ?3, ?4, COALESCE(?5, ''), ?9, ${notify("?9")}
      FROM (
        SELECT m.user_id, CASE
          WHEN ?7 OR m.user_id IN (SELECT value FROM json_each(?6)) THEN 'mention'

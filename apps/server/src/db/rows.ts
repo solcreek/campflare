@@ -166,7 +166,8 @@ export interface ActivityRow {
   channel_id: string
   ts: string
   thread_ts: string | null
-  actor_id: string | null
+  /** Who did it; '' when unknown. */
+  actor_id: string
   /** The emoji, for a reaction; '' otherwise. */
   reaction: string
   created: number
