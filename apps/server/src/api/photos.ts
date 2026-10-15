@@ -76,7 +76,11 @@ export function photoVariantOf(u: WithPhoto, name: string): number | "original" 
   return (PHOTO_SIZES as readonly number[]).includes(size) && ext === sizedFormat(u.photo_type).ext ? size : undefined
 }
 
-/** The transformations that make one size: the crop square if there is one, then a square of n. */
+/**
+ * The transformations that make one size: the crop square if there is one, then a square of n.
+ * The crop is in the photo's upright coordinates (users.setPhoto checks it against the size
+ * after a JPEG's EXIF orientation), as Images turns a photo upright before transforming it.
+ */
 export function photoTransforms(crop: Crop | null, size: number): ImageTransform[] {
   const square: ImageTransform = { width: size, height: size, fit: "cover" }
   return crop ? [{ trim: { left: crop.x, top: crop.y, width: crop.w, height: crop.w } }, square] : [square]

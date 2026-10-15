@@ -7,7 +7,7 @@ import { CampflareError, invalidArguments } from "../api/errors"
 import { requireConversationScope } from "../api/scopes"
 import { imPeer } from "../db/conversations"
 import { nowSeconds, randomSecret } from "../api/ids"
-import { imageSize, isAnimated } from "../api/media"
+import { displaySize, imageSize, isAnimated } from "../api/media"
 import { photoKeys, photoPrefix, photoType, type Crop } from "../api/photos"
 import { userChanged } from "../events"
 
@@ -118,7 +118,7 @@ method("users.profile.set", "user", async (ctx) => {
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024
 const PHOTO_MAX_SIDE = 8192
 
-/** The crop square users.setPhoto was given (crop_x, crop_y, crop_w), checked against the image; else null. */
+/** The crop square users.setPhoto was given (crop_x, crop_y, crop_w), checked against the image as shown (upright); else null. */
 function cropOf(ctx: Ctx<Actor>, size: { width: number; height: number }): Crop | null {
   if (!ctx.args.has("crop_w")) return null
   const crop = { x: ctx.args.int("crop_x", 0), y: ctx.args.int("crop_y", 0), w: ctx.args.int("crop_w", 0) }
@@ -148,7 +148,8 @@ method("users.setPhoto", "user", async (ctx) => {
   if (!size || !type || !size.width || !size.height) throw new CampflareError("bad_image")
   if (Math.max(size.width, size.height) > PHOTO_MAX_SIDE) throw new CampflareError("too_large")
   if (isAnimated(bytes)) throw new CampflareError("too_many_frames")
-  const crop = cropOf(ctx, size)
+  // In the coordinates people (and the Images binding, which turns the photo upright) see.
+  const crop = cropOf(ctx, displaySize(bytes, size))
   const photo = randomSecret(8)
   const me = ctx.auth.user
   await ctx.env.FILES.put(`${photoPrefix(me, photo)}original`, bytes, { httpMetadata: { contentType: type } })

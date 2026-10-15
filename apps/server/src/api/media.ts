@@ -100,3 +100,42 @@ export function isAnimated(b: Uint8Array): boolean {
   }
   return false
 }
+
+/**
+ * A JPEG's EXIF orientation (1–8; 1 when there is none): how the stored pixels are turned to
+ * stand upright. Browsers and the Images binding apply it, so 5–8 (a quarter turn) swap the
+ * width and height people see.
+ */
+export function jpegOrientation(b: Uint8Array): number {
+  const at = (i: number) => b[i] ?? 0
+  const be16 = (i: number) => (at(i) << 8) | at(i + 1)
+  if (at(0) !== 0xff || at(1) !== 0xd8) return 1
+  let i = 2
+  while (i + 4 < b.length && at(i) === 0xff) {
+    const marker = at(i + 1)
+    // Start of scan: no metadata after it.
+    if (marker === 0xda) return 1
+    if (marker === 0xe1 && String.fromCharCode(...b.subarray(i + 4, i + 10)) === "Exif\0\0") {
+      const tiff = i + 10
+      const little = at(tiff) === 0x49 // "II"; else "MM"
+      const u16 = (j: number) => (little ? at(j) | (at(j + 1) << 8) : be16(j))
+      const u32 = (j: number) => (little ? u16(j) + u16(j + 2) * 0x10000 : u16(j) * 0x10000 + u16(j + 2))
+      const ifd = tiff + u32(tiff + 4)
+      for (let e = 0; e < u16(ifd); e++) {
+        const entry = ifd + 2 + e * 12
+        if (u16(entry) === 0x0112) {
+          const value = u16(entry + 8)
+          return value >= 1 && value <= 8 ? value : 1
+        }
+      }
+      return 1
+    }
+    i += 2 + be16(i + 2)
+  }
+  return 1
+}
+
+/** The size people see: the stored size, turned by a JPEG's EXIF orientation. */
+export function displaySize(b: Uint8Array, size: { width: number; height: number }) {
+  return jpegOrientation(b) >= 5 ? { width: size.height, height: size.width } : size
+}

@@ -1,7 +1,7 @@
 import { SELF } from "cloudflare:test"
 import { env } from "cloudflare:workers"
 import { afterEach, describe, expect, it } from "vitest"
-import { imageSize } from "../src/api/media"
+import { displaySize, imageSize, jpegOrientation } from "../src/api/media"
 import { photoJson, photoTransforms, photoType, photoVariantOf } from "../src/api/photos"
 import { setImagesOverride } from "../src/api/thumbs"
 import { ORIGIN, connect, ok, workspace, type Body } from "./helpers"
@@ -129,6 +129,20 @@ describe("users.setPhoto", () => {
     expect(outside.error).toBe("invalid_arguments")
   })
 
+  it("takes the crop in the upright photo's coordinates, after a JPEG's EXIF orientation", async () => {
+    const w = await workspace()
+    const stored = await convert(env.IMAGES!, await makePng(400, 300), "image/jpeg")
+    // Turned a quarter: people see it 300 wide and 400 high.
+    const turned = withOrientation(stored, 6)
+    expect(jpegOrientation(turned)).toBe(6)
+    const tall = { crop_x: "0", crop_y: "100", crop_w: "300" }
+    expect((await setPhoto(w.owner.token, turned, tall)).ok).toBe(true)
+    expect((await setPhoto(w.owner.token, stored, tall)).error).toBe("invalid_arguments")
+    const wide = { crop_x: "100", crop_y: "0", crop_w: "300" }
+    expect((await setPhoto(w.owner.token, stored, wide)).ok).toBe(true)
+    expect((await setPhoto(w.owner.token, turned, wide)).error).toBe("invalid_arguments")
+  })
+
   it("refuses what isn't a still image, and needs users.profile:write on a person's token", async () => {
     const w = await workspace()
     const res = await SELF.fetch(`${ORIGIN}/api/users.setPhoto`, {
@@ -228,6 +242,45 @@ describe("status_expiration", () => {
     // Without an expiry it stays.
     await ok("users.profile.set", { profile: { status_text: "회의 중", status_expiration: 0 } }, w.owner.token)
     expect(await profileOf(w.owner.token)).toMatchObject({ status_text: "회의 중", status_emoji: ":calendar:" })
+  })
+})
+
+/** A JPEG with an EXIF APP1 segment, right after SOI, giving this orientation. */
+function withOrientation(jpeg: Uint8Array, orientation: number, little = false): Uint8Array<ArrayBuffer> {
+  const u16 = (n: number) => (little ? [n & 0xff, n >> 8] : [n >> 8, n & 0xff])
+  const u32 = (n: number) => (little ? [n, 0, 0, 0] : [0, 0, 0, n])
+  const tiff = [
+    ...(little ? [0x49, 0x49] : [0x4d, 0x4d]),
+    ...u16(42),
+    ...u32(8),
+    ...u16(1), // one entry
+    ...u16(0x0112),
+    ...u16(3), // SHORT
+    ...u32(1),
+    ...u16(orientation),
+    0,
+    0,
+    ...u32(0), // no next IFD
+  ]
+  const payload = [...new TextEncoder().encode("Exif\0\0"), ...tiff]
+  const app1 = [0xff, 0xe1, (payload.length + 2) >> 8, (payload.length + 2) & 0xff, ...payload]
+  return new Uint8Array([0xff, 0xd8, ...app1, ...jpeg.subarray(2)])
+}
+
+describe("EXIF orientation", () => {
+  it("reads it from either byte order, and is 1 without one", async () => {
+    const jpeg = await convert(env.IMAGES!, await makePng(40, 30), "image/jpeg")
+    expect(jpegOrientation(jpeg)).toBe(1)
+    expect(jpegOrientation(withOrientation(jpeg, 8, true))).toBe(8)
+    expect(jpegOrientation(withOrientation(jpeg, 3))).toBe(3)
+    expect(jpegOrientation(withOrientation(jpeg, 42))).toBe(1)
+    expect(jpegOrientation(await makePng(4, 4))).toBe(1)
+    expect(displaySize(withOrientation(jpeg, 5), { width: 40, height: 30 })).toEqual({ width: 30, height: 40 })
+    expect(displaySize(withOrientation(jpeg, 2), { width: 40, height: 30 })).toEqual({ width: 40, height: 30 })
+    // An Exif segment with no orientation entry.
+    const other = withOrientation(jpeg, 6)
+    other[22] = 0x10 // SOI, APP1 header, "Exif\0\0", TIFF header, count: the tag 0x0112 becomes 0x1012
+    expect(jpegOrientation(other)).toBe(1)
   })
 })
 
