@@ -30,6 +30,11 @@ Account
   whoami                         who the token belongs to, their role and the token's scopes
   profiles                       list saved profiles; --use <name> switches
   password set                   set your password for signing in with your email (asks, or reads stdin)
+  password reset <url>           set a new one through a reset link an admin gave you
+  join <url> <handle> [--name <real name>] [--email <e>] [--profile <name>]
+                                 accept an invitation link: pick a handle and a password
+                                 (asked, or stdin; --email unless the invite names one), then
+                                 log in as that person, as login does
 
 Messages
   send <#channel|@person|id> [text] [--thread <ts>] [-f <file>]…   text from stdin if piped
@@ -79,6 +84,14 @@ Admin (Campflare only)
                                    Shows how deliveries are doing, and if they were
                                    turned off for failing (set the URL again to resume)
   admin role <@person> member|admin|owner   (owners only)
+  admin invite [--email <e>] [--admin] [--channel <#c>]… [--expires 7d] [--uses N]
+                                   an invitation link, printed alone on stdout: to one email,
+                                   or open to N people; joins #general and the channels
+  admin invites                    the invitations and their states
+  admin invite revoke <id>         stop one at once
+  admin reset-password <@person> [--expires 1h]
+                                   a single-use link that sets a new password (an admin's for
+                                   a member, an owner's for an admin); printed on stdout
   token create [--preset read|write|full] [--scopes a,b] [--expires 1h|7d|<seconds>] [--label <l>]
                                    a token for a script or an agent: the preset and scopes
                                    together, never more than this token holds; prints the
@@ -413,6 +426,50 @@ async function streamRecipient(s: Session, channel: string, thread: string | und
   const user = res.messages[0]?.user
   if (!user) throw new UsageError("the thread's first message has no author to answer: give --to @person")
   return user
+}
+
+/** A new password: the first line of stdin, else asked twice at a hidden prompt. Never from argv. */
+async function newPassword(io: Io, command: string): Promise<string> {
+  // Not from argv, where shell history and process lists would keep it.
+  const piped = (await io.stdin())?.split(/\r?\n/)[0]
+  if (piped !== undefined) return piped
+  if (!io.secret) throw new UsageError(`${command} reads the password from stdin or a terminal prompt`)
+  const password = await io.secret("New password: ")
+  if ((await io.secret("Again: ")) !== password) throw new UsageError("the two passwords differ")
+  return password
+}
+
+/**
+ * `join <server>/join/<code> <handle>`: accepts an invitation and saves the
+ * new person's token as a profile, as login does. The token was minted for
+ * this profile alone, so it is kept as a sign-in's ("oauth"): logout revokes it.
+ */
+async function joinWorkspace(io: Io, link: string, handle: string | undefined, values: Values) {
+  if (!handle) throw new UsageError("join <link> needs the handle you want: campflare join <link> <handle>")
+  const url = link.slice(0, link.lastIndexOf("/join/"))
+  const password = await newPassword(io, "join")
+  const res = await createClient({ url, fetch: io.fetch }).call<{
+    ok: boolean
+    user: { id: string; name: string }
+    team_id: string
+    token: string
+  }>("campflare.invites.accept", {
+    code: link.slice(link.lastIndexOf("/") + 1),
+    name: handle,
+    real_name: str(values.name),
+    email: str(values.email),
+    password,
+  })
+  const who = await createClient({ url, token: res.token, fetch: io.fetch }).call<AuthTest>("auth.test")
+  const name = str(values.profile) ?? "default"
+  const config = await loadConfig(io)
+  const old = config.profiles[name]
+  config.profiles[name] = { url, token: res.token, via: "oauth" }
+  config.current = name
+  await saveConfig(io, config)
+  if (values.json) io.stdout(`${JSON.stringify({ user: res.user, team_id: res.team_id, profile: name }, null, 2)}\n`)
+  else io.stdout(`Joined ${who.team} as @${who.user} (profile ${name})\n`)
+  await replaceProfile(io, old, url, res.token, who)
 }
 
 type Command = (argv: string[], io: Io) => Promise<number | void>
@@ -883,9 +940,10 @@ const commands: Record<string, Command> = {
   },
 
   async join(argv, io) {
-    const { values, positionals } = parse(argv)
+    const { values, positionals } = parse(argv, { name: { type: "string" }, email: { type: "string" } })
     const [ref] = positionals
-    if (!ref) throw new UsageError("join needs a channel")
+    if (!ref) throw new UsageError("join needs a channel, or an invitation link")
+    if (/^https?:\/\/.+\/join\/[^/]+$/.test(ref)) return joinWorkspace(io, ref, positionals[1], values)
     const s = await session(io, values)
     const name = ref.replace(/^#/, "").toLowerCase()
     const all = await s.client.paginate<Conversation>("conversations.list", "channels", { exclude_archived: true })
@@ -1004,9 +1062,56 @@ const commands: Record<string, Command> = {
       events: { type: "string" },
       "interactivity-url": { type: "string" },
       "rotate-secret": { type: "boolean" },
+      channel: { type: "string", multiple: true },
+      expires: { type: "string" },
+      uses: { type: "string" },
     })
     const s = await session(io, values)
-    if (sub === "role") {
+    if (sub === "invite" && positionals[0] === "revoke") {
+      const id = positionals[1]
+      if (!id) throw new UsageError("admin invite revoke needs an invite id (from admin invites)")
+      const res = await s.client.call<{ ok: boolean; invite: InviteJson }>("campflare.invites.revoke", { invite: id })
+      if (values.json) return s.print(res.invite)
+      io.stdout(`Revoked invite ${res.invite.id}\n`)
+    } else if (sub === "invite") {
+      if (positionals.length) throw new UsageError(`admin invite takes options, not ${positionals.join(" ")}`)
+      const channels = await Promise.all(((values.channel as string[] | undefined) ?? []).map((c) => s.conversation(c)))
+      const expires = str(values.expires)
+      const res = await s.client.call<{ ok: boolean; invite: InviteJson; url: string; emailed: boolean }>(
+        "campflare.invites.create",
+        {
+          email: str(values.email),
+          role: values.admin ? "admin" : "member",
+          channels: channels.length ? channels.join(",") : undefined,
+          expires_in: expires === undefined ? undefined : seconds(expires),
+          max_uses: str(values.uses),
+        },
+      )
+      if (values.json) return s.print({ url: res.url, invite: res.invite, emailed: res.emailed })
+      // The URL alone on stdout, for URL=$(campflare admin invite …); what it allows on stderr.
+      io.stdout(`${res.url}\n`)
+      io.stderr(`${inviteLine(res.invite)}${res.emailed ? `; emailed to ${res.invite.email}` : ""}\n`)
+    } else if (sub === "invites") {
+      const res = await s.client.call<{ ok: boolean; invites: InviteJson[] }>("campflare.invites.list")
+      if (values.json) return s.print(res.invites)
+      for (const invite of res.invites) io.stdout(`${inviteLine(invite)}\n`)
+    } else if (sub === "reset-password") {
+      const [who] = positionals
+      if (!who) throw new UsageError("admin reset-password needs a person")
+      const expires = str(values.expires)
+      const res = await s.client.call<{ ok: boolean; url: string; user_id: string; expires: number }>(
+        "campflare.users.createPasswordReset",
+        {
+          user: await resolveUser(s.client, who, s.self),
+          expires_in: expires === undefined ? undefined : seconds(expires),
+        },
+      )
+      if (values.json) return s.print({ url: res.url, user_id: res.user_id, expires: res.expires })
+      io.stdout(`${res.url}\n`)
+      io.stderr(
+        `Single use, until ${isoTime(res.expires)}. Opening it (or campflare password reset <url>) sets a new password.\n`,
+      )
+    } else if (sub === "role") {
       const [who, role] = positionals
       if (!who || !role) throw new UsageError("admin role needs a person and a role: member, admin or owner")
       const user = await resolveUser(s.client, who, s.self)
@@ -1078,22 +1183,30 @@ const commands: Record<string, Command> = {
         io.stdout("The old signing secret no longer signs anything: update the app's secret now.\n")
       }
     } else {
-      throw new UsageError("admin commands: add-user, add-app, app")
+      throw new UsageError("admin commands: add-user, add-app, app, role, invite, invites, reset-password")
     }
   },
 
   async password(argv, io) {
     const [sub, ...rest] = argv
-    const { values } = parse(rest)
-    if (sub !== "set") throw new UsageError("password commands: set")
-    const s = await session(io, values)
-    // Never from argv, where shell history and process lists would keep it.
-    let password = (await io.stdin())?.split(/\r?\n/)[0]
-    if (password === undefined) {
-      if (!io.secret) throw new UsageError("password set reads the password from stdin or a terminal prompt")
-      password = await io.secret("New password: ")
-      if ((await io.secret("Again: ")) !== password) throw new UsageError("the two passwords differ")
+    const { values, positionals } = parse(rest)
+    if (sub === "reset") {
+      // A reset link stands in for a token: no profile needed.
+      const [link] = positionals
+      const match = link ? /^(https?:\/\/.+)\/reset\/([^/]+)$/.exec(link) : null
+      if (!match) throw new UsageError("password reset needs the link an admin gave you: <server>/reset/<code>")
+      const password = await newPassword(io, "password reset")
+      const res = await createClient({ url: match[1]!, fetch: io.fetch }).call("campflare.users.resetPassword", {
+        code: match[2],
+        password,
+      })
+      if (values.json) return void io.stdout(`${JSON.stringify(res, null, 2)}\n`)
+      io.stdout("Password changed: sign in with your email and it\n")
+      return
     }
+    if (sub !== "set") throw new UsageError("password commands: set, reset")
+    const s = await session(io, values)
+    const password = await newPassword(io, "password set")
     await s.client.call("campflare.users.setPassword", { password })
     io.stdout("Password set: sign in with your email and it\n")
   },
@@ -1171,6 +1284,26 @@ export function seconds(text: string): number {
 }
 
 const isoTime = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d+Z$/, "Z")
+
+interface InviteJson {
+  id: string
+  email: string | null
+  role: string
+  channels: string[]
+  inviter_name?: string
+  max_uses: number
+  uses: number
+  expires: number
+  state: string
+}
+
+/** One invite in a line: id, state, who it's for, what it grants, uses and expiry. */
+function inviteLine(i: InviteJson): string {
+  const who = i.email ?? `open link, ${i.uses}/${i.max_uses} used`
+  const channels = i.channels.length ? `, + ${i.channels.length} channel${i.channels.length === 1 ? "" : "s"}` : ""
+  const by = i.inviter_name ? `  by @${i.inviter_name}` : ""
+  return `${i.id}  ${i.state}  ${who}  ${i.role}${channels}  expires ${isoTime(i.expires)}${by}`
+}
 
 /** A person's role from users.info, when the token may read it (users:read); bots have none. */
 async function roleOf(client: Client, userId: string, scopes: string[]): Promise<string | undefined> {
