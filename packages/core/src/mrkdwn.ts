@@ -239,5 +239,26 @@ export function emojiChar(name: string): string | undefined {
   return EMOJI[name]
 }
 
+/** How to draw an emoji: a standard one's character, or a custom one's image. */
+export type EmojiLook = { char: string } | { url: string }
+
+/**
+ * An emoji by name: standard first (custom names can't take a standard one's), then the
+ * workspace's own (emoji.list's map), following aliases to an image or a standard emoji.
+ * Undefined when unknown: show the :name: people typed.
+ */
+export function emojiLook(custom: Record<string, string>, name: string): EmojiLook | undefined {
+  // Aliases of aliases are made to name the original, but a few hops cost nothing.
+  for (let hops = 0; hops < 4; hops++) {
+    const char = EMOJI[name]
+    if (char) return { char }
+    const value = custom[name]
+    if (!value) return undefined
+    if (!value.startsWith("alias:")) return /^https?:\/\//i.test(value) ? { url: value } : undefined
+    name = value.slice("alias:".length)
+  }
+  return undefined
+}
+
 /** Common shortcodes, for a reaction picker. */
 export const commonEmoji = ["+1", "heart", "joy", "eyes", "tada", "raised_hands", "fire", "white_check_mark"]

@@ -629,4 +629,31 @@ describe("createWorkspace", () => {
     expect(ws.getState().bookmarks.C1).toEqual([])
     ws.stop()
   })
+
+  it("loads custom emoji, follows emoji_changed, and reads them again after a reconnect", async () => {
+    const { api, ws } = await started(
+      { "emoji.list": () => ({ emoji: { fiesta: "https://x.test/emoji/T1/aa.png", party: "alias:fiesta" } }) },
+      "rtm",
+    )
+    await settle()
+    expect(ws.getState().emoji).toEqual({ fiesta: "https://x.test/emoji/T1/aa.png", party: "alias:fiesta" })
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    FakeSocket.all[0]!.receive({ type: "emoji_changed", subtype: "add", name: "fete", value: "https://x.test/b.gif" })
+    expect(ws.getState().emoji.fete).toBe("https://x.test/b.gif")
+    // Missed while the link was down.
+    api.handlers["emoji.list"] = () => ({ emoji: {} })
+    FakeSocket.all[0]!.close()
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    await settle()
+    expect(ws.getState().emoji).toEqual({})
+    ws.stop()
+  })
+
+  it("starts without custom emoji when emoji.list is refused", async () => {
+    const { ws } = await started({ "emoji.list": () => new Error("missing_scope") })
+    await settle()
+    expect(ws.getState()).toMatchObject({ status: "ready", emoji: {} })
+  })
 })

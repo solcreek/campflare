@@ -163,6 +163,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       ...Object.keys(state.pins).map((c) => loadPins(c).catch(() => {})),
       ...Object.keys(state.bookmarks).map((c) => loadBookmarks(c).catch(() => {})),
       loadViews(),
+      loadEmoji(),
     ])
   }
 
@@ -219,11 +220,22 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
         conversations,
       })
       void loadViews()
+      void loadEmoji()
     } catch (error) {
       dispatch({ type: "failed", error: error instanceof ApiError ? error.code : String(error) })
       return false
     }
     return true
+  }
+
+  /** Custom emoji, for drawing :name: as images; emoji_changed keeps them current. Text stands in without them. */
+  async function loadEmoji() {
+    try {
+      const r = await client.call<ApiResult & { emoji: Record<string, string> }>("emoji.list")
+      dispatch({ type: "emoji", emoji: r.emoji })
+    } catch {
+      // A token without emoji:read, or an older server: names show as :name:.
+    }
   }
 
   async function loadHistory(channel: string, opts: { older?: boolean } = {}) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { emojiChar, parse, parseInline, plainText, unescape } from "../src/mrkdwn"
+import { emojiChar, emojiLook, parse, parseInline, plainText, unescape } from "../src/mrkdwn"
 
 describe("parseInline", () => {
   it("reads mentions, channels, links and broadcasts", () => {
@@ -97,5 +97,29 @@ describe("plainText", () => {
 
   it("unescapes entities once", () => {
     expect(unescape("&amp;lt; &lt;b&gt;")).toBe("&lt; <b>")
+  })
+})
+
+describe("emojiLook", () => {
+  const custom = {
+    fiesta: "https://x.test/emoji/T1/aa.png",
+    matsuri: "alias:fiesta",
+    again: "alias:matsuri",
+    yay: "alias:+1",
+    lost: "alias:nowhere",
+    odd: "javascript:alert(1)",
+    loop: "alias:loop",
+  }
+
+  it("draws standard emoji as characters and custom ones as images, through aliases", () => {
+    expect(emojiLook(custom, "tada")).toEqual({ char: "🎉" })
+    expect(emojiLook(custom, "fiesta")).toEqual({ url: custom.fiesta })
+    expect(emojiLook(custom, "matsuri")).toEqual({ url: custom.fiesta })
+    expect(emojiLook(custom, "again")).toEqual({ url: custom.fiesta })
+    expect(emojiLook(custom, "yay")).toEqual({ char: "👍" })
+  })
+
+  it("knows nothing of unknown names, broken aliases, loops or URLs that aren't http(s)", () => {
+    for (const name of ["nope", "lost", "odd", "loop"]) expect(emojiLook(custom, name)).toBeUndefined()
   })
 })
