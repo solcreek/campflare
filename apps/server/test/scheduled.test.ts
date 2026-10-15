@@ -226,6 +226,12 @@ describe("chat.scheduledMessages.list", () => {
     expect(second.scheduled_messages.map((m) => m.text)).toEqual(["late"])
     expect(second.response_metadata.next_cursor).toBe("")
     await expectError("chat.scheduledMessages.list", { cursor: "nope" }, w.owner.token, "invalid_cursor")
+    // A well-encoded cursor that doesn't hold a position.
+    await expectError("chat.scheduledMessages.list", { cursor: btoa("next:soon") }, w.owner.token, "invalid_cursor")
+    await expectError("chat.scheduledMessages.list", { oldest: "yesterday" }, w.owner.token, "invalid_arguments")
+    await expectError("chat.scheduledMessages.list", { latest: "-5" }, w.owner.token, "invalid_arguments")
+    const ts = await ok<Listed>("chat.scheduledMessages.list", { oldest: `${base}.000100` }, w.owner.token)
+    expect(ts.scheduled_messages.map((m) => m.text)).toEqual(["elsewhere", "late"])
 
     expect(
       (await ok<Listed>("chat.scheduledMessages.list", {}, bob.token)).scheduled_messages.map((m) => m.text),

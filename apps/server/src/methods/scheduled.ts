@@ -1,6 +1,6 @@
 import { decodeCursor, encodeCursor } from "../api/args"
 import { method, type Actor, type Ctx } from "../api/context"
-import { CampflareError } from "../api/errors"
+import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
 import { requireWritable, resolveConversation } from "../db/conversations"
 import { all, first, stmt } from "../db/query"
@@ -131,13 +131,23 @@ method("chat.scheduleMessage", "actor", async (ctx) => {
   }
 })
 
+/** A Unix time argument (a ts like "1700000000.000100" too), or invalid_arguments. */
+function epochArg(ctx: Ctx<Actor>, name: string): number | undefined {
+  const value = ctx.args.str(name)
+  if (value === undefined) return undefined
+  if (!/^\d+(\.\d+)?$/.test(value)) throw invalidArguments(`${name} must be a Unix timestamp`)
+  return Number(value)
+}
+
 /** The caller's own scheduled messages (a bot's, for a bot token), soonest first. */
 method("chat.scheduledMessages.list", "actor", async (ctx) => {
   const limit = ctx.args.int("limit", 100, { min: 1, max: 1000 })
   const channel = ctx.args.str("channel")
-  const oldest = ctx.args.str("oldest")
-  const latest = ctx.args.str("latest")
+  const oldest = epochArg(ctx, "oldest")
+  const latest = epochArg(ctx, "latest")
   const cursor = decodeCursor(ctx.args.str("cursor"))
+  const position = cursor === undefined ? undefined : /^(\d+):([A-Z0-9]+)$/.exec(cursor)
+  if (position === null) throw new CampflareError("invalid_cursor")
   const where = ["team_id = ?", "user_id = ?"]
   const params: unknown[] = [ctx.auth.team.id, ctx.auth.user.id]
   if (channel) {
@@ -146,16 +156,15 @@ method("chat.scheduledMessages.list", "actor", async (ctx) => {
   }
   if (oldest !== undefined) {
     where.push("post_at >= ?")
-    params.push(Number(oldest))
+    params.push(oldest)
   }
   if (latest !== undefined) {
     where.push("post_at <= ?")
-    params.push(Number(latest))
+    params.push(latest)
   }
-  if (cursor) {
-    const [at, id] = cursor.split(":")
+  if (position) {
     where.push("(post_at, id) > (?, ?)")
-    params.push(Number(at), id)
+    params.push(Number(position[1]), position[2])
   }
   const rows = await all<ScheduledMessageRow>(
     ctx.env.DB,
