@@ -1,7 +1,17 @@
 import { all } from "../db/query"
-import type { AppRow, ConversationRow, FileRow, MessageRow, ReactionRow, TeamRow, UserRow } from "../db/rows"
+import type {
+  AppRow,
+  ConversationRow,
+  FileRow,
+  MessageRow,
+  ReactionRow,
+  TeamRow,
+  UsergroupRow,
+  UserRow,
+} from "../db/rows"
 import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
+import { PHOTO_SIZES, photoJson } from "./photos"
 import { imagesOf, thumbsJson } from "./thumbs"
 
 // Rows → the JSON shapes Slack's Web API returns. Fields Slack always sends
@@ -16,16 +26,20 @@ function color(id: string) {
   return COLORS[h % COLORS.length]!
 }
 
-function avatar(origin: string, user: UserRow) {
+/** The profile's image_* fields: the photo's sizes (photos.ts), else the drawn initials, any size. */
+function avatar(origin: string, user: UserRow): Record<string, string | boolean> {
+  const photo = photoJson(origin, user)
+  if (photo) return photo
   const base = `${origin}/avatars/${user.id}`
-  return {
-    image_24: `${base}?s=24`,
-    image_32: `${base}?s=32`,
-    image_48: `${base}?s=48`,
-    image_72: `${base}?s=72`,
-    image_192: `${base}?s=192`,
-    image_512: `${base}?s=512`,
-  }
+  return Object.fromEntries(PHOTO_SIZES.map((n) => [`image_${n}`, `${base}?s=${n}`]))
+}
+
+/** A status past its status_expiration reads as none, as Slack clears it. */
+function status(user: UserRow) {
+  const expired = user.status_expiration > 0 && user.status_expiration <= Math.floor(Date.now() / 1000)
+  return expired
+    ? { status_text: "", status_emoji: "", status_expiration: 0 }
+    : { status_text: user.status_text, status_emoji: user.status_emoji, status_expiration: user.status_expiration }
 }
 
 export function teamJson(team: TeamRow, origin: string) {
@@ -63,11 +77,10 @@ export function userJson(user: UserRow, origin: string) {
       display_name: user.display_name,
       display_name_normalized: user.display_name,
       fields: null,
-      status_text: user.status_text,
-      status_emoji: user.status_emoji,
+      ...status(user),
       status_emoji_display_info: [],
-      status_expiration: user.status_expiration,
-      avatar_hash: user.id.slice(-8).toLowerCase(),
+      // Changes with the photo, as Slack's does.
+      avatar_hash: (user.photo ?? user.id).slice(-8).toLowerCase(),
       email: user.email ?? undefined,
       first_name: firstName,
       last_name: rest.join(" "),
@@ -86,6 +99,35 @@ export function userJson(user: UserRow, origin: string) {
     is_email_confirmed: Boolean(user.email),
     has_2fa: false,
     who_can_share_contact_card: "EVERYONE",
+  }
+}
+
+/**
+ * A user group, as Slack's usergroups.* answer it. `users` is sent when asked
+ * for (usergroups.list's include_users; always for one group); user_count always.
+ */
+export function usergroupJson(g: UsergroupRow, members: string[], { users = true } = {}) {
+  return {
+    id: g.id,
+    team_id: g.team_id,
+    is_usergroup: true,
+    is_subteam: true,
+    name: g.name,
+    description: g.description,
+    handle: g.handle,
+    is_external: false,
+    date_create: g.date_create,
+    date_update: g.date_update,
+    date_delete: g.date_delete,
+    auto_type: null,
+    auto_provision: false,
+    enterprise_subteam_id: "",
+    created_by: g.created_by,
+    updated_by: g.updated_by,
+    deleted_by: g.deleted_by,
+    prefs: { channels: JSON.parse(g.channels) as string[], groups: [] },
+    ...(users ? { users: members } : {}),
+    user_count: members.length,
   }
 }
 

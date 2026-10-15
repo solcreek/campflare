@@ -55,6 +55,7 @@ describe("MCP over Streamable HTTP", () => {
       "add_reaction",
       "get_events",
       "list_conversations",
+      "list_groups",
       "list_people",
       "read_messages",
       "read_thread",
@@ -126,7 +127,7 @@ describe("MCP over Streamable HTTP", () => {
 
   it("names DMs by @handle and lists conversations and people", async () => {
     const w = await workspace()
-    await w.addUser("bob", { real_name: "Bob Builder" })
+    const bob = await w.addUser("bob", { real_name: "Bob Builder" })
     const client = await connect(w.owner.token)
     const sent = await callTool<{ conversation: string }>(client, "send_message", {
       conversation: "@bob",
@@ -140,6 +141,28 @@ describe("MCP over Streamable HTTP", () => {
     expect(dms.conversations).toHaveLength(1)
     const people = await callTool<{ people: Record<string, unknown>[] }>(client, "list_people", { query: "builder" })
     expect(people.people).toEqual([{ id: expect.any(String), handle: "@bob", name: "Bob Builder" }])
+    const { usergroup } = await ok<{ usergroup: { id: string } }>(
+      "usergroups.create",
+      { name: "Équipe 建設", handle: "builders", description: "Obras · 공사" },
+      w.owner.token,
+    )
+    await ok("usergroups.users.update", { usergroup: usergroup.id, users: bob.id }, w.owner.token)
+    await ok("usergroups.create", { name: "Plain", handle: "plain" }, w.owner.token)
+    const groups = await callTool<{ groups: Record<string, unknown>[] }>(client, "list_groups")
+    expect(groups.groups).toEqual(
+      expect.arrayContaining([
+        {
+          id: usergroup.id,
+          handle: "@builders",
+          name: "Équipe 建設",
+          description: "Obras · 공사",
+          mention: `<!subteam^${usergroup.id}|@builders>`,
+          members: ["@bob"],
+        },
+        { id: expect.any(String), handle: "@plain", name: "Plain", mention: expect.any(String), members: [] },
+      ]),
+    )
+    expect(groups.groups).toHaveLength(2)
     await client.close()
   })
 

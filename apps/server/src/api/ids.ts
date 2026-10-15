@@ -22,6 +22,7 @@ export const ids = {
   im: () => randomId("D"),
   mpim: () => randomId("G"),
   file: () => randomId("F"),
+  usergroup: () => randomId("S"),
   event: () => randomId("Ev"),
   envelope: () => crypto.randomUUID(),
 }

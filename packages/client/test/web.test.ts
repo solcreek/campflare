@@ -37,6 +37,20 @@ describe("call", () => {
     expect(String(seen[0]!.init!.body)).toBe("a=b&n=1&o=%7B%22k%22%3A1%7D")
   })
 
+  it("posts multipart when an arg is a file", async () => {
+    const { fetch, seen } = fakeFetch([json({ ok: true }), json({ ok: true })])
+    const client = createClient({ url: "https://x.test", token: "xoxp-1", fetch })
+    await client.call("users.setPhoto", { image: new File([new Uint8Array([1, 2])], "me.png"), crop_w: 2 })
+    const body = seen[0]!.init!.body as FormData
+    expect(body).toBeInstanceOf(FormData)
+    expect((body.get("image") as File).name).toBe("me.png")
+    expect(body.get("crop_w")).toBe("2")
+    await client.call("users.setPhoto", { image: new Blob([new Uint8Array([1])]), meta: { a: 1 } })
+    const second = seen[1]!.init!.body as FormData
+    expect((second.get("image") as File).name).toBe("image")
+    expect(second.get("meta")).toBe('{"a":1}')
+  })
+
   it("throws ApiError with Slack's code", async () => {
     const { fetch } = fakeFetch([json({ ok: false, error: "channel_not_found" })])
     const client = createClient({ url: "https://x.test", fetch })

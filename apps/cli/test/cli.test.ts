@@ -1,6 +1,7 @@
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { describe, expect, it } from "vitest"
+import { sunsetPng } from "../../../scripts/seed"
 import { baseUrl, loggedIn, memoryIo } from "./harness"
 
 describe("help and usage", () => {
@@ -894,5 +895,118 @@ describe("events", () => {
     await until(() => cli.err.includes("[error: invalid_cursor"))
     cli.interrupt()
     expect(await done).toBe(0)
+  })
+})
+
+describe("profiles and groups", () => {
+  it("shows and sets a profile: title, status with an expiry, photo", async () => {
+    const cli = await loggedIn()
+    const png = await sunsetPng(96, 96)
+    cli.io.readFile = async (path) => {
+      if (path !== "/tmp/yo.png") throw new Error(`ENOENT: ${path}`)
+      return png
+    }
+    expect(await cli.run("profile")).toBe(0)
+    expect(cli.out).toContain("Olive Owner")
+    expect(cli.out).toContain("Photo: none (initials)")
+    cli.clear()
+    expect(
+      await cli.run(
+        "profile",
+        "--title",
+        "Jefa · 部長",
+        "--status",
+        "En vacances",
+        "--emoji",
+        ":palm_tree:",
+        "--until",
+        "2h",
+      ),
+    ).toBe(0)
+    expect(cli.out).toContain("Title: Jefa · 部長")
+    expect(cli.out).toMatch(/Status: :palm_tree: En vacances \(until \d{4}-\d\d-\d\dT/)
+    cli.clear()
+    expect(await cli.run("profile", "--photo", "/tmp/yo.png", "--json")).toBe(0)
+    const shown = JSON.parse(cli.out) as { is_custom_image: boolean; image_192: string; status_expiration: number }
+    expect(shown.is_custom_image).toBe(true)
+    expect((await fetch(shown.image_192)).status).toBe(200)
+    expect(shown.status_expiration).toBeGreaterThan(Date.now() / 1000 + 3500)
+    cli.clear()
+    expect(await cli.run("profile", "--status", "", "--remove-photo")).toBe(0)
+    expect(cli.out).not.toContain("Status:")
+    expect(cli.out).toContain("Photo: none (initials)")
+
+    expect(await cli.run("admin", "add-user", "kenji", "--name", "Kenji Sato")).toBe(0)
+    cli.clear()
+    expect(await cli.run("profile", "@kenji")).toBe(0)
+    expect(cli.out).toContain("Kenji Sato")
+    expect(await cli.run("profile", "@kenji", "--title", "x")).toBe(2)
+    expect(await cli.run("profile", "--emoji", ":x:")).toBe(2)
+    expect(await cli.run("profile", "--photo", "/tmp/yo.png", "--remove-photo")).toBe(2)
+    expect(await cli.run("profile", "--status", "x", "--until", "soon")).toBe(2)
+  })
+
+  it("creates groups, fills and lists them, and turns them off and on", async () => {
+    const cli = await loggedIn()
+    await cli.run("admin", "add-user", "ines", "--name", "Inès Moreau")
+    await cli.run("admin", "add-user", "minjun", "--name", "Min-jun Park")
+    cli.clear()
+    expect(await cli.run("groups")).toBe(0)
+    expect(cli.out).toContain("No groups yet")
+    cli.clear()
+    expect(
+      await cli.run(
+        "group",
+        "create",
+        "@diseno",
+        "--name",
+        "Diseño · 디자인",
+        "--members",
+        "@ines,@me",
+        "--channels",
+        "#general",
+      ),
+    ).toBe(0)
+    expect(cli.out).toMatch(/Created @diseno \(S[A-Z0-9]+\)/)
+    expect(cli.out).toContain("(2 members)")
+    cli.clear()
+    expect(await cli.run("group", "add", "diseno", "@minjun")).toBe(0)
+    expect(cli.out).toContain("(3 members)")
+    cli.clear()
+    expect(await cli.run("group", "remove", "@diseno", "@ines", "--json")).toBe(0)
+    const group = JSON.parse(cli.out) as { id: string; users: string[]; prefs: { channels: string[] } }
+    expect(group.users).toHaveLength(2)
+    expect(group.prefs.channels).toHaveLength(1)
+    cli.clear()
+    expect(await cli.run("group", "update", "diseno", "--description", "Équipe de design", "--handle", "design")).toBe(
+      0,
+    )
+    expect(cli.out).toContain("Updated @design")
+    cli.clear()
+    expect(await cli.run("group", "show", group.id)).toBe(0)
+    expect(cli.out).toContain("Équipe de design")
+    expect(await cli.run("group", "disable", "design")).toBe(0)
+    cli.clear()
+    expect(await cli.run("groups")).toBe(0)
+    expect(cli.out).not.toContain("@design")
+    expect(await cli.run("groups", "--all")).toBe(0)
+    expect(cli.out).toContain("disabled")
+    cli.clear()
+    expect(await cli.run("group", "enable", "design")).toBe(0)
+    expect(cli.out).toContain("Enabled @design")
+    cli.clear()
+    expect(await cli.run("groups", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toMatchObject([{ handle: "design", user_count: 2 }])
+
+    expect(await cli.run("group", "show", "nope")).toBe(2)
+    expect(await cli.run("group", "add", "design")).toBe(2)
+    cli.clear()
+    expect(await cli.run("group", "remove", "design", "@minjun", "@me")).toBe(2)
+    expect(cli.err).toContain("campflare group disable design")
+    expect(await cli.run("group", "frobnicate", "design")).toBe(2)
+    expect(await cli.run("group")).toBe(2)
+    cli.clear()
+    expect(await cli.run("group", "create", "design")).toBe(1)
+    expect(cli.err).toContain("handle_already_exists")
   })
 })

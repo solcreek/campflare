@@ -1,6 +1,7 @@
 import { SocketModeClient } from "@slack/socket-mode"
 import { LogLevel, WebClient } from "@slack/web-api"
 import { beforeAll, describe, expect, inject, it } from "vitest"
+import { sunsetPng } from "../../scripts/seed"
 
 // The official Slack SDKs, unmodified, pointed at Campflare by URL alone.
 
@@ -242,6 +243,41 @@ describe("@slack/web-api", () => {
     expect(stopped.message?.streaming_state).toBe("completed")
     await expect(streamer.append({ chunks: [{ type: "markdown_text", text: "more" }] })).rejects.toMatchObject({
       data: { error: "stopped_by_user" },
+    })
+  })
+
+  it("users.setPhoto and users.deletePhoto", async () => {
+    const png = await sunsetPng(300, 200)
+    const set = await bob.client.users.setPhoto({ image: Buffer.from(png), crop_x: 50, crop_y: 0, crop_w: 200 })
+    expect(set.ok).toBe(true)
+    const profile = (await bob.client.users.profile.get({})).profile!
+    expect(profile.is_custom_image).toBe(true)
+    const small = await fetch(profile.image_72!)
+    expect(small.status).toBe(200)
+    expect(small.headers.get("content-type")).toBe("image/png")
+    expect(new Uint8Array(await (await fetch(profile.image_original!)).arrayBuffer())).toEqual(png)
+    await bob.client.users.deletePhoto({})
+    expect((await bob.client.users.profile.get({})).profile?.image_72).toBe(`${base}/avatars/${bob.id}?s=72`)
+  })
+
+  it("usergroups: create, members, list, update, disable and enable", async () => {
+    const created = await owner.usergroups.create({ name: "Soporte · サポート", handle: "soporte", channels: general })
+    const id = created.usergroup!.id!
+    expect(created.usergroup).toMatchObject({ handle: "soporte", prefs: { channels: [general] } })
+    const filled = await owner.usergroups.users.update({ usergroup: id, users: `${ownerId},${bob.id}` })
+    expect(filled.usergroup?.users?.toSorted()).toEqual([ownerId, bob.id].toSorted())
+    expect((await bob.client.usergroups.users.list({ usergroup: id })).users?.toSorted()).toEqual(
+      [ownerId, bob.id].toSorted(),
+    )
+    const listed = await bob.client.usergroups.list({ include_users: true, include_count: true })
+    expect(listed.usergroups?.find((g) => g.id === id)).toMatchObject({ user_count: 2 })
+    const updated = await owner.usergroups.update({ usergroup: id, description: "Hilfe · 도움" })
+    expect(updated.usergroup?.description).toBe("Hilfe · 도움")
+    expect((await owner.usergroups.disable({ usergroup: id })).usergroup?.date_delete).toBeGreaterThan(0)
+    expect((await owner.usergroups.list()).usergroups?.some((g) => g.id === id)).toBe(false)
+    expect((await owner.usergroups.enable({ usergroup: id })).usergroup?.date_delete).toBe(0)
+    await expect(owner.usergroups.create({ name: "Other", handle: "soporte" })).rejects.toMatchObject({
+      data: { error: "handle_already_exists" },
     })
   })
 })

@@ -316,6 +316,12 @@ describe("Mrkdwn", () => {
     expect(container.querySelector("pre")?.textContent).toBe("pre")
   })
 
+  it("shows a user group mention as its @handle", () => {
+    renderText("<!subteam^S1|@diseño> <!subteam^S2>")
+    expect(screen.getByText("@diseño")).toBeTruthy()
+    expect(screen.getByText("@S2")).toBeTruthy()
+  })
+
   it("never links anything but web and mail addresses", () => {
     renderText("<javascript:alert(1)|click> <mailto:a@x.test|mail>")
     expect(screen.queryByRole("link", { name: "click" })).toBeNull()

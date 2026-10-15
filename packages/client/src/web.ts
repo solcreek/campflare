@@ -72,12 +72,17 @@ export function apiBase(url: string): string {
   return `${url.replace(/\/+$/, "").replace(/\/api$/, "")}/api/`
 }
 
-/** Form-encodes args as the Slack SDKs do: objects become JSON strings. */
-function form(args: ApiArgs): URLSearchParams {
-  const body = new URLSearchParams()
-  for (const [k, v] of Object.entries(args)) {
-    if (v === undefined || v === null) continue
-    body.set(k, typeof v === "object" ? JSON.stringify(v) : String(v))
+/**
+ * Form-encodes args as the Slack SDKs do: objects become JSON strings. With a
+ * Blob or File among them (users.setPhoto's image) it's multipart instead.
+ */
+function form(args: ApiArgs): URLSearchParams | FormData {
+  const entries = Object.entries(args).filter(([, v]) => v !== undefined && v !== null)
+  const multipart = entries.some(([, v]) => v instanceof Blob)
+  const body = multipart ? new FormData() : new URLSearchParams()
+  for (const [k, v] of entries) {
+    if (v instanceof Blob) (body as FormData).set(k, v, v instanceof File ? v.name : k)
+    else body.set(k, typeof v === "object" ? JSON.stringify(v) : String(v))
   }
   return body
 }

@@ -6,7 +6,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
 import { teamJson, userJson } from "../api/shapes"
-import { publish } from "../events"
+import { userChanged } from "../events"
 import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
 import { EVENT_TYPE } from "../app-events"
@@ -50,15 +50,6 @@ async function activePerson(ctx: Ctx<Actor>, id: string, { bots = false } = {}):
   return user
 }
 
-/** Everyone in the workspace learns of a change to a person, as Slack's user_change. */
-function userChanged(ctx: Ctx<Actor>, user: UserRow) {
-  publish(ctx, {
-    teamId: ctx.auth.team.id,
-    event: { type: "user_change", user: userJson(user, ctx.origin) },
-    audience: "team",
-  })
-}
-
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,79}$/
 
 async function createUser(
@@ -88,6 +79,10 @@ async function createUser(
       now,
     )
   } catch (error) {
+    // A user group's handle is a name too (@handle): the trigger from migration 0021 refuses it.
+    if (error instanceof Error && error.message.includes("name_taken_by_usergroup")) {
+      throw new CampflareError("name_taken")
+    }
     if (isUniqueViolation(error)) throw new CampflareError(opts.email ? "already_in_team" : "name_taken")
     throw error
   }

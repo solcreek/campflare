@@ -18,6 +18,7 @@ import { readScribeTicket } from "./huddle/ticket"
 import "./methods/reactions"
 import "./methods/search"
 import "./methods/users"
+import "./methods/usergroups"
 import "./methods/views"
 import { mountAuth } from "./auth/routes"
 import { handlePermalink, offersDesktop } from "./permalinks"
@@ -31,6 +32,7 @@ import { acceptedScopes, NEEDS, type Verb } from "./api/scopes"
 import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
 import { avatarSvg } from "./api/avatar"
+import { handlePhoto } from "./api/photos"
 import { first } from "./db/query"
 import type { UserRow } from "./db/rows"
 
@@ -178,5 +180,8 @@ app.get("/avatars/:id", async (c) => {
   // An hour: a renamed person's initials catch up soon enough, and lists of avatars stay cached.
   return c.body(svg, 200, { "content-type": "image/svg+xml", "cache-control": "public, max-age=3600" })
 })
+
+/** Profile photos (users.setPhoto): /avatars/<user>/<photo>_<size>.<ext>, no token, as the initials. */
+app.get("/avatars/:id/:name", (c) => handlePhoto(c.env, c.req.param("id"), c.req.param("name")))
 
 export default app

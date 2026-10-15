@@ -77,7 +77,8 @@ and, when the method asks for any, `x-accepted-oauth-scopes`. The official
 | `users.info`, `.list`, `.getPresence`, `bots.info`                                                                                                | `users:read`                                 |
 | `users.lookupByEmail`                                                                                                                             | `users:read.email`                           |
 | `users.setPresence`                                                                                                                               | `users:write`                                |
-| `users.profile.get` / `.set`                                                                                                                      | `users.profile:read` / `users.profile:write` |
+| `users.profile.get` / `.set`, `users.setPhoto`, `.deletePhoto`                                                                                    | `users.profile:read` / `users.profile:write` |
+| `usergroups.list`, `.users.list` / `usergroups.create`, `.update`, `.disable`, `.enable`, `.users.update`                                         | `usergroups:read` / `usergroups:write`       |
 | `team.info`                                                                                                                                       | `team:read`                                  |
 | `emoji.list`                                                                                                                                      | `emoji:read`                                 |
 | `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`                                                                                | `dnd:read` / `dnd:write`                     |
@@ -128,10 +129,11 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
 
 - `read`: every `:read` and `:history`, `search:read`, `files:read`,
   `reactions:read`, `emoji:read`, `dnd:read`, `team:read`, `users:read`,
-  `rtm:stream`, `events:read`, `views:read`.
+  `usergroups:read`, `rtm:stream`, `events:read`, `views:read`.
 - `write`: `read` plus `chat:write`, `reactions:write`, `files:write`, the
   conversation `:write` scopes, `views:write`. What a chat agent needs.
-- `full`: every user scope. What a person's own sign-in gets.
+- `full`: every user scope (`usergroups:write` is here only: changing who a
+  `@handle` reaches is rarely a chat agent's job). What a person's own sign-in gets.
 
 A token stores presets by name (`tokens.scopes` holds `full`, or
 `read,chat:write`), and they are expanded on every call (`expandScopes()`), so
@@ -195,6 +197,7 @@ send `false` today, and adding them is a new role here plus a channel check.
 | action                                                          | member | admin | owner |
 | --------------------------------------------------------------- | ------ | ----- | ----- |
 | their own messages, files, profile, tokens, password, apps      | ✓      | ✓     | ✓     |
+| create and manage any user group (Slack's default)              | ✓      | ✓     | ✓     |
 | delete anyone's message or file                                 |        | ✓     | ✓     |
 | manage anyone's app                                             |        | ✓     | ✓     |
 | add a person (`campflare.users.create`), mint a token for one   |        | ✓     | ✓     |

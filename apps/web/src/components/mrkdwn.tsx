@@ -82,6 +82,9 @@ function InlineNode({ node }: { node: Inline }) {
       return <UserMention id={node.id} label={node.label} />
     case "channel":
       return <ChannelMention id={node.id} label={node.label} />
+    case "usergroup":
+      // The handle rides in the mention (<!subteam^S123|@handle>); the app doesn't load groups yet.
+      return <Mention>{`@${node.label ?? node.id}`}</Mention>
     case "broadcast":
       return <Mention>{`@${node.name}`}</Mention>
     case "emoji":
