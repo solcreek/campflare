@@ -220,9 +220,10 @@ export function fakeRequestUrls() {
     const raw = String(init?.body ?? "")
     const headers = new Headers(init?.headers)
     // Interactivity POSTs a form whose `payload` is the JSON; slash commands a form of fields; events are JSON.
-    const form = headers.get("content-type") === "application/x-www-form-urlencoded" && new URLSearchParams(raw)
-    const payload = form && form.get("payload")
-    const body = form ? (payload !== null ? JSON.parse(payload) : Object.fromEntries(form)) : JSON.parse(raw)
+    const form =
+      headers.get("content-type") === "application/x-www-form-urlencoded" ? new URLSearchParams(raw) : undefined
+    const payload = form?.get("payload")
+    const body = form ? (typeof payload === "string" ? JSON.parse(payload) : Object.fromEntries(form)) : JSON.parse(raw)
     const hit = { url: String(input), headers, raw, body }
     hits.push(hit)
     return fake.answer(hit)
