@@ -39,7 +39,16 @@ export { HuddleScribe } from "./huddle/scribe"
 
 const app = new Hono<{ Bindings: Env }>()
 
-app.use("/api/*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type"], maxAge: 86_400 }))
+app.use(
+  "/api/*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Authorization", "Content-Type"],
+    // So a browser client can read a token's scopes, as @campflare/client's authTest() does.
+    exposeHeaders: ["X-OAuth-Scopes", "X-Accepted-OAuth-Scopes"],
+    maxAge: 86_400,
+  }),
+)
 // Browser apps fetch url_private with their Bearer token (as Slack clients do) and
 // show the bytes as a blob: URL, since <img src> can't send a header. Credentials
 // are never cookies, so any origin may ask; it still needs the token.

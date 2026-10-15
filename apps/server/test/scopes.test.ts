@@ -392,3 +392,16 @@ describe("file downloads", () => {
     expect(await res.text()).toBe("hello")
   })
 })
+
+describe("scope headers in a browser", () => {
+  it("are exposed to other origins, so a web client can read them", async () => {
+    const w = await workspace()
+    const res = await SELF.fetch(
+      new Request(`${ORIGIN}/api/auth.test`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${w.owner.token}`, origin: "https://app.example" },
+      }),
+    )
+    expect(res.headers.get("access-control-expose-headers")?.toLowerCase()).toContain("x-oauth-scopes")
+  })
+})
