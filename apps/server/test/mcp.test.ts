@@ -53,9 +53,11 @@ describe("MCP over Streamable HTTP", () => {
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).toSorted()).toEqual([
       "add_reaction",
+      "cancel_scheduled",
       "get_events",
       "list_conversations",
       "list_people",
+      "list_scheduled",
       "read_messages",
       "read_thread",
       "schedule_message",
@@ -156,8 +158,30 @@ describe("MCP over Streamable HTTP", () => {
     )
     expect(scheduled.conversation).toBe(w.general)
     expect(Date.parse(scheduled.post_at) - before).toBeGreaterThanOrEqual(7_199_000)
-    const listed = await ok<{ scheduled_messages: { id: string }[] }>("chat.scheduledMessages.list", {}, w.owner.token)
-    expect(listed.scheduled_messages.map((m) => m.id)).toEqual([scheduled.scheduled_message_id])
+    type Scheduled = {
+      scheduled: { scheduled_message_id: string; conversation: string; post_at: string; text: string }[]
+    }
+    const listed = await callTool<Scheduled>(client, "list_scheduled", { conversation: "#general" })
+    expect(listed.scheduled).toEqual([
+      {
+        scheduled_message_id: scheduled.scheduled_message_id,
+        conversation: w.general,
+        post_at: scheduled.post_at,
+        text: "Rappel : réunion, 회의, 会议",
+      },
+    ])
+    expect(
+      await callTool(client, "cancel_scheduled", {
+        conversation: "#general",
+        scheduled_message_id: scheduled.scheduled_message_id,
+      }),
+    ).toEqual({ cancelled: true, scheduled_message_id: scheduled.scheduled_message_id })
+    expect((await callTool<Scheduled>(client, "list_scheduled")).scheduled).toEqual([])
+    const again = (await client.callTool({
+      name: "cancel_scheduled",
+      arguments: { conversation: "#general", scheduled_message_id: scheduled.scheduled_message_id },
+    })) as ToolResult
+    expect(again).toMatchObject({ isError: true, content: [{ text: "error: invalid_scheduled_message_id" }] })
 
     const reminder = await callTool<{ reminder_id: string; at: string }>(client, "set_reminder", {
       text: "Stand-up",

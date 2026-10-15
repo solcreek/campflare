@@ -249,7 +249,7 @@ export function buildServer(caller: Caller): McpServer {
     {
       title: "Schedule a message",
       description:
-        "Post a message later, as you, at a given time. It can be listed and deleted with chat.scheduledMessages.list and chat.deleteScheduledMessage until then.",
+        "Post a message later, as you, at a given time. Until then, list_scheduled shows it and cancel_scheduled deletes it.",
       inputSchema: z.object({
         conversation,
         text: z.string().min(1).max(40_000),
@@ -270,6 +270,45 @@ export function buildServer(caller: Caller): McpServer {
         scheduled_message_id: res.scheduled_message_id,
         post_at: new Date(res.post_at * 1000).toISOString(),
       }
+    }),
+  )
+
+  server.registerTool(
+    "list_scheduled",
+    {
+      title: "List scheduled messages",
+      description: "Your messages waiting to be posted, soonest first.",
+      inputSchema: z.object({ conversation: conversation.optional().describe("Only those for this conversation") }),
+      annotations: READ,
+    },
+    tool(async ({ conversation: ref }) => {
+      const channel = ref ? await conversationId(caller, ref) : undefined
+      const res = await invoke<{
+        scheduled_messages: { id: string; channel_id: string; post_at: number; text: string }[]
+      }>(caller, "chat.scheduledMessages.list", { channel, limit: 1000 })
+      return {
+        scheduled: res.scheduled_messages.map((m) => ({
+          scheduled_message_id: m.id,
+          conversation: m.channel_id,
+          post_at: new Date(m.post_at * 1000).toISOString(),
+          text: m.text,
+        })),
+      }
+    }),
+  )
+
+  server.registerTool(
+    "cancel_scheduled",
+    {
+      title: "Cancel a scheduled message",
+      description: "Delete one of your scheduled messages before it is posted.",
+      inputSchema: z.object({ conversation, scheduled_message_id: z.string().min(1) }),
+      annotations: { ...WRITE, destructiveHint: true },
+    },
+    tool(async ({ conversation: ref, scheduled_message_id }) => {
+      const channel = await conversationId(caller, ref)
+      await invoke(caller, "chat.deleteScheduledMessage", { channel, scheduled_message_id })
+      return { cancelled: true, scheduled_message_id }
     }),
   )
 

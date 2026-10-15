@@ -360,6 +360,7 @@ or a bot:
 | `search_messages`                             | search, with the same syntax as `search.messages`            |
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
 | `schedule_message`, `set_reminder`            | post later; remind yourself (times as people say them)       |
+| `list_scheduled`, `cancel_scheduled`          | your scheduled messages; delete one before it posts          |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
