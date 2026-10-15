@@ -224,6 +224,29 @@ describe("@slack/web-api", () => {
     })
   })
 
+  it("users.info's tz fields, from campflare.users.setTimezone", async () => {
+    await bob.client.apiCall("campflare.users.setTimezone", { tz: "Asia/Tokyo" })
+    const { user } = await owner.users.info({ user: bob.id })
+    expect(user).toMatchObject({ tz: "Asia/Tokyo", tz_label: "Japan Standard Time", tz_offset: 32_400 })
+  })
+
+  it("dnd.info, teamInfo, setSnooze, endSnooze and endDnd, with DND hours", async () => {
+    expect(await bob.client.dnd.info()).toMatchObject({ dnd_enabled: false, next_dnd_start_ts: 1, next_dnd_end_ts: 1 })
+    await bob.client.apiCall("campflare.dnd.setSchedule", { start: "22:00", end: "08:00", days: "weekdays" })
+    const info = await owner.dnd.info({ user: bob.id })
+    expect(info.dnd_enabled).toBe(true)
+    expect(info.next_dnd_end_ts! - info.next_dnd_start_ts!).toBe(10 * 3600)
+    const snoozed = await bob.client.dnd.setSnooze({ num_minutes: 15 })
+    expect(snoozed).toMatchObject({ snooze_enabled: true, snooze_is_indefinite: false })
+    const team = await owner.dnd.teamInfo({ users: bob.id })
+    expect(team.users?.[bob.id]).toMatchObject({ dnd_enabled: true, snooze_enabled: true })
+    expect(await bob.client.dnd.endSnooze()).toMatchObject({ snooze_enabled: false, dnd_enabled: true })
+    await expect(bob.client.dnd.endSnooze()).rejects.toMatchObject({ data: { ok: false, error: "snooze_not_active" } })
+    expect((await bob.client.dnd.endDnd()).ok).toBe(true)
+    await bob.client.apiCall("campflare.dnd.setSchedule", { enabled: false })
+    expect((await bob.client.dnd.info()).dnd_enabled).toBe(false)
+  })
+
   it("streams a reply with chatStream (startStream, appendStream, stopStream) after setStatus", async () => {
     const bot = client(app.botToken)
     const question = await owner.chat.postMessage({ channel: general, text: "what's new?" })
