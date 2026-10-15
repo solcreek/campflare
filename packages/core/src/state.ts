@@ -1,5 +1,6 @@
 import type { RealtimeEvent } from "@campflare/client"
 import type { Bookmark, Conversation, Message, Pin, Reaction, Self, User } from "./types"
+import { ownValue } from "./mrkdwn"
 import type { View } from "./views"
 
 // The workspace as an app sees it, and one pure function that moves it on.
@@ -488,7 +489,7 @@ function onEmoji(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
   } else if (event.subtype === "remove" && Array.isArray(event.names)) {
     for (const name of event.names as string[]) delete emoji[name]
   } else if (event.subtype === "rename" && typeof event.old_name === "string" && typeof event.new_name === "string") {
-    const value = typeof event.value === "string" ? event.value : emoji[event.old_name]
+    const value = typeof event.value === "string" ? event.value : ownValue(emoji, event.old_name)
     delete emoji[event.old_name]
     if (value !== undefined) emoji[event.new_name] = value
     // Its aliases follow it, as the server's do.

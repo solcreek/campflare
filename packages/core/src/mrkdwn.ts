@@ -235,8 +235,17 @@ const EMOJI: Record<string, string> = {
   campfire: "🏕️",
 }
 
+/**
+ * A map's own string value for a key, never one inherited from Object.prototype: names
+ * come from message text, so `:constructor:` or `:__proto__:` must find nothing.
+ */
+export function ownValue(map: Record<string, string>, key: string): string | undefined {
+  const value = Object.hasOwn(map, key) ? map[key] : undefined
+  return typeof value === "string" ? value : undefined
+}
+
 export function emojiChar(name: string): string | undefined {
-  return EMOJI[name]
+  return ownValue(EMOJI, name)
 }
 
 /** How to draw an emoji: a standard one's character, or a custom one's image. */
@@ -250,9 +259,9 @@ export type EmojiLook = { char: string } | { url: string }
 export function emojiLook(custom: Record<string, string>, name: string): EmojiLook | undefined {
   // Aliases of aliases are made to name the original, but a few hops cost nothing.
   for (let hops = 0; hops < 4; hops++) {
-    const char = EMOJI[name]
+    const char = emojiChar(name)
     if (char) return { char }
-    const value = custom[name]
+    const value = ownValue(custom, name)
     if (!value) return undefined
     if (!value.startsWith("alias:")) return /^https?:\/\//i.test(value) ? { url: value } : undefined
     name = value.slice("alias:".length)

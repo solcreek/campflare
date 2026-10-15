@@ -122,4 +122,14 @@ describe("emojiLook", () => {
   it("knows nothing of unknown names, broken aliases, loops or URLs that aren't http(s)", () => {
     for (const name of ["nope", "lost", "odd", "loop"]) expect(emojiLook(custom, name)).toBeUndefined()
   })
+
+  it("never finds Object.prototype's members, in either table", () => {
+    const names = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"]
+    for (const name of names) {
+      expect(emojiChar(name)).toBeUndefined()
+      expect(emojiLook(custom, name)).toBeUndefined()
+      expect(emojiLook({ trap: `alias:${name}` }, "trap")).toBeUndefined()
+    }
+    expect(plainText(":__proto__: :constructor: :tostring:")).toBe(":__proto__: :constructor: :tostring:")
+  })
 })

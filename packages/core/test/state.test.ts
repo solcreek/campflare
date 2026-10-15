@@ -565,4 +565,10 @@ describe("custom emoji", () => {
     expect(reduce(s, emoji({ subtype: "other" }))).toBe(s)
     expect(reduce(s, emoji({ subtype: "add", name: "x" }))).toBe(s)
   })
+
+  it("never takes a value from Object.prototype on a rename", () => {
+    const s = reduce(run(loaded), emoji({ subtype: "rename", old_name: "constructor", new_name: "kept" }))
+    expect(s.emoji.kept).toBeUndefined()
+    expect(Object.keys(s.emoji).toSorted()).toEqual(["fiesta", "matsuri", "yay"])
+  })
 })

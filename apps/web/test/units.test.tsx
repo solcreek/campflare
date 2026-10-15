@@ -316,6 +316,12 @@ describe("Mrkdwn", () => {
     expect(container.querySelector("pre")?.textContent).toBe("pre")
   })
 
+  it("shows names that are Object.prototype's members as text, not as what they inherit", () => {
+    const { container } = renderText("a :__proto__: b :constructor: c :toString: d :hasownproperty:")
+    expect(container.textContent).toBe("a :__proto__: b :constructor: c :toString: d :hasownproperty:")
+    expect(screen.queryByRole("img")).toBeNull()
+  })
+
   it("shows a user group mention as its @handle", () => {
     renderText("<!subteam^S1|@diseño> <!subteam^S2>")
     expect(screen.getByText("@diseño")).toBeTruthy()
