@@ -1,5 +1,6 @@
 import { ApiError, listen, type ApiResult, type Client, type Listener, type RealtimeEvent } from "@campflare/client"
 import type { Click } from "./blocks"
+import type { SlashCommand } from "./commands"
 import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
 import { type Action, initialState, isReply, keyOf, type PinItem, reduce, type WorkspaceState } from "./state"
 import type { Bookmark, Conversation, Message, User } from "./types"
@@ -20,6 +21,13 @@ export interface WorkspaceOptions {
   maxDelayMs?: number
   /** Object URL hooks and grace period for `files` (tests). */
   files?: Omit<FileCacheOptions, "fetchFile">
+}
+
+/** What an app answered a slash command with at once, as it was shown (to you alone, or posted). */
+export interface CommandResponse {
+  response_type: "ephemeral" | "in_channel"
+  text: string
+  ts: string
 }
 
 /** A file to upload: its name, bytes, and MIME type if known (for the pending message). */
@@ -88,6 +96,14 @@ export interface Workspace {
   submitView(viewId: string, values: FormValues): Promise<{ errors?: Record<string, string> }>
   /** Closes an open view (and those opened on it). */
   closeView(viewId: string): Promise<void>
+  /** The workspace's slash commands, into `commands`; commands_changed reloads them. */
+  loadCommands(): Promise<void>
+  /**
+   * Runs a slash command in a conversation (campflare.commands.invoke), as
+   * typing it there does. Resolves with the app's immediate answer, if any;
+   * it also arrives as an event (an ephemeral message, or a posted one).
+   */
+  invokeCommand(channel: string, command: string, text: string): Promise<CommandResponse | undefined>
   /** Marks a conversation read up to its newest loaded message. */
   markRead(channel: string): Promise<void>
   join(channel: string): Promise<void>
@@ -163,6 +179,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       ...Object.keys(state.pins).map((c) => loadPins(c).catch(() => {})),
       ...Object.keys(state.bookmarks).map((c) => loadBookmarks(c).catch(() => {})),
       loadViews(),
+      loadCommands(),
     ])
   }
 
@@ -177,6 +194,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       onEvent(event) {
         dispatch({ type: "event", event })
         fillIn(event)
+        if (event.type === "commands_changed") void loadCommands()
       },
       onStatus(status) {
         dispatch({ type: "connection", status })
@@ -219,6 +237,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
         conversations,
       })
       void loadViews()
+      void loadCommands()
     } catch (error) {
       dispatch({ type: "failed", error: error instanceof ApiError ? error.code : String(error) })
       return false
@@ -470,6 +489,22 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     if (r) dispatch({ type: "views", views: r.views })
   }
 
+  async function loadCommands() {
+    const r = await client
+      .call<ApiResult & { commands: SlashCommand[] }>("campflare.commands.list")
+      .catch(() => undefined)
+    if (r) dispatch({ type: "commands", commands: r.commands })
+  }
+
+  async function invokeCommand(channel: string, command: string, text: string) {
+    const r = await client.call<ApiResult & { response?: CommandResponse }>("campflare.commands.invoke", {
+      channel,
+      command,
+      text,
+    })
+    return r.response
+  }
+
   async function markRead(channel: string) {
     const keys = state.timelines[channel]?.keys ?? []
     const newest = keys
@@ -547,6 +582,8 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     clickInView,
     submitView,
     closeView,
+    loadCommands,
+    invokeCommand,
     markRead,
     join,
     createChannel,

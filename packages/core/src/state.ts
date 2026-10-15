@@ -1,5 +1,6 @@
 import type { RealtimeEvent } from "@campflare/client"
 import type { Bookmark, Conversation, Message, Pin, Reaction, Self, User } from "./types"
+import type { SlashCommand } from "./commands"
 import type { View } from "./views"
 
 // The workspace as an app sees it, and one pure function that moves it on.
@@ -32,6 +33,8 @@ export interface WorkspaceState {
   statuses: Record<string, ThreadStatus>
   /** Modals apps opened for you, bottom of the stack first: the last is shown. */
   views: View[]
+  /** The workspace's slash commands, by name (campflare.commands.list). */
+  commands: SlashCommand[]
   /** A conversation's pinned messages, most recently pinned first, by channel id, once loaded (pins.list). */
   pins: Record<string, Pin[]>
   /** A conversation's bookmarks bar, in rank order, by channel id, once loaded (bookmarks.list). */
@@ -72,6 +75,8 @@ export type Action =
   | { type: "event"; event: RealtimeEvent }
   /** Your open views, as the server has them now (campflare.views.list, or an answer to a submit or close). */
   | { type: "views"; views: View[] }
+  /** The workspace's slash commands (campflare.commands.list). */
+  | { type: "commands"; commands: SlashCommand[] }
   /** pins.list's items for a conversation. */
   | { type: "pins"; channel: string; items: PinItem[] }
   /** bookmarks.list for a conversation. */
@@ -97,6 +102,7 @@ export const initialState: WorkspaceState = {
   unread: {},
   statuses: {},
   views: [],
+  commands: [],
   pins: {},
   bookmarks: {},
 }
@@ -170,6 +176,8 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
       return markRead(state, action.channel, action.ts)
     case "views":
       return { ...state, views: action.views }
+    case "commands":
+      return { ...state, commands: action.commands }
     case "pins":
       return { ...state, pins: { ...state.pins, [action.channel]: action.items.map(pinOf) } }
     case "bookmarks":
