@@ -13,6 +13,8 @@ export type Inline =
   | { type: "user"; id: string; label?: string }
   | { type: "channel"; id: string; label?: string }
   | { type: "broadcast"; name: string }
+  /** A user group mention, <!subteam^S123|@handle>: the label is the handle without its @. */
+  | { type: "usergroup"; id: string; label?: string }
   | { type: "emoji"; name: string }
 
 export type Block =
@@ -45,13 +47,16 @@ const INLINE = new RegExp(
   "gu",
 )
 
-/** What a <…> holds: a link, a mention or a broadcast. */
+/** What a <…> holds: a link, a mention (of a person, a channel or a user group) or a broadcast. */
 export function angle(inner: string): Inline {
   const bar = inner.indexOf("|")
   const target = bar < 0 ? inner : inner.slice(0, bar)
   const label = bar < 0 ? undefined : unescape(inner.slice(bar + 1))
   if (target.startsWith("@")) return { type: "user", id: target.slice(1), label }
   if (target.startsWith("#")) return { type: "channel", id: target.slice(1), label }
+  if (target.startsWith("!subteam^")) {
+    return { type: "usergroup", id: target.slice("!subteam^".length), label: label?.replace(/^@/, "") || undefined }
+  }
   if (target.startsWith("!")) {
     const name = target.slice(1).split("^")[0]!
     return label ? { type: "text", text: label } : { type: "broadcast", name }
@@ -120,7 +125,11 @@ export function parse(text: string): MrkdwnBlock[] {
 /** The text without markup, for previews, notifications and titles. */
 export function plainText(
   text: string,
-  names: { user?: (id: string) => string; channel?: (id: string) => string } = {},
+  names: {
+    user?: (id: string) => string
+    channel?: (id: string) => string
+    usergroup?: (id: string) => string | undefined
+  } = {},
 ) {
   const flat = (nodes: Inline[]): string =>
     nodes
@@ -139,6 +148,8 @@ export function plainText(
             return `@${n.label ?? names.user?.(n.id) ?? n.id}`
           case "channel":
             return `#${n.label ?? names.channel?.(n.id) ?? n.id}`
+          case "usergroup":
+            return `@${n.label ?? names.usergroup?.(n.id) ?? n.id}`
           case "broadcast":
             return `@${n.name}`
           case "emoji":

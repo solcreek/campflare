@@ -13,7 +13,15 @@ describe("parseInline", () => {
       { type: "text", text: " " },
       { type: "broadcast", name: "here" },
     ])
-    expect(parseInline("<!subteam^S1|@ops> <!date^1|fallback>")).toEqual([{ type: "text", text: "@ops fallback" }])
+    expect(parseInline("<!subteam^S1|@ops> <!date^1|fallback>")).toEqual([
+      { type: "usergroup", id: "S1", label: "ops" },
+      { type: "text", text: " fallback" },
+    ])
+    expect(parseInline("<!subteam^S2> <!subteam^S3|équipe>")).toEqual([
+      { type: "usergroup", id: "S2", label: undefined },
+      { type: "text", text: " " },
+      { type: "usergroup", id: "S3", label: "équipe" },
+    ])
     expect(parseInline("<mailto:a@x.test>")).toEqual([{ type: "link", url: "mailto:a@x.test", label: undefined }])
   })
 
@@ -80,6 +88,11 @@ describe("plainText", () => {
       "Hi @alex in #dev about this and https://y.test @channel 🔥 :nope: x\ncode",
     )
     expect(plainText("<@U1|ada> <#C1> _it_ ~st~")).toBe("@ada #C1 it st")
+    expect(
+      plainText("<!subteam^S1|@ops> <!subteam^S2> <!subteam^S3>", {
+        usergroup: (id) => (id === "S2" ? "設計" : undefined),
+      }),
+    ).toBe("@ops @設計 @S3")
   })
 
   it("unescapes entities once", () => {
