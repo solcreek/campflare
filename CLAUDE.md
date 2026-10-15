@@ -491,6 +491,31 @@ each reconnect), with `submitView`/`closeView`/`clickInView` and `formField()`
 describing inputs; the app's `ViewDialog` (`components/view-dialog.tsx`) shows
 the top one as a Dialog. CLI: `campflare view list|submit|close|click`.
 
+**Scheduling** (`docs/scheduling.md`). `chat.scheduleMessage` /
+`scheduledMessages.list` / `deleteScheduledMessage` (`src/methods/scheduled.ts`)
+and `reminders.*` (`src/methods/reminders.ts`, user tokens) keep rows in D1
+(`scheduled_messages`, `reminders`, migration 0023). The `Scheduler` Durable
+Object (`src/scheduler.ts`, one per workspace, binding `SCHEDULER`) holds only
+an alarm: methods `await armScheduler()` before answering, and `alarm()` reads
+what's due from D1 (`runDue()`), fires it in order and re-arms at the next due
+time in D1. A separate class, not `TeamHub`'s alarm, which retries deliveries
+every few seconds and must not read D1 each time. Firing claims a row with a
+guarded UPDATE (`claimed_until`, a 60 s lease; `chat.deleteScheduledMessage`
+refuses a claimed row) and finishes it in the post's own batch:
+`postMessage()`'s `also` statements (the row's DELETE, a reminder's `fired = 1`)
+commit with the message, so a row posts once. At fire time the poster is
+checked again as they are then (`requireWritable` as a rebuilt actor; scopes
+don't matter, the message is theirs, not the token's): a `CampflareError` drops
+it and the built-in bot DMs a person the reason; other errors keep the claim
+and retry, up to `MAX_ATTEMPTS`. The built-in bot (`src/system-bot.ts`,
+`systemActor()`) is made lazily, found by `apps.built_in = 'campflare'`, never
+by name, and `campflare.apps.*` can't touch it. Reminders' `time`
+(`parseWhen()` in `src/api/when.ts`) is a Unix time, seconds from now (≤ 86400)
+or a small set of phrases in the person's `tz`; recurring ones aren't supported.
+Events, RTM-only to the owner: `scheduled_message_added`/`_removed` (`reason`),
+`reminder_added`/`_changed`/`_deleted`. Tests make a row due by moving its time
+back in D1 and run `runDurableObjectAlarm()`, or call `runDue()` directly.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, set roles

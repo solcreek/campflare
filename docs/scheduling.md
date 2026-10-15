@@ -122,12 +122,13 @@ and read people's reminders.
 - `reminders.info`, `.complete`, `.delete` (`reminder`), `.list`
   (`reminders:read` for info and list). `not_found` for one that isn't yours.
   Completing one before it fires means it won't.
-- `recurring` is always false: recurring reminders (`every Thursday`) are not
-  supported yet and answer `cannot_parse`.
+- `recurring` is always false: recurring reminders are not supported yet. A
+  phrase like `every Thursday` answers `cannot_parse`, a `recurrence` argument
+  `invalid_recurrence`.
 
 ### `time`
 
-In the person's `tz` (their profile; UTC if unknown), case-insensitive:
+In the person's `tz` (`users.tz`; UTC if unknown, and no method sets it yet), case-insensitive:
 
 | form                                                    | means                                                   |
 | ------------------------------------------------------- | ------------------------------------------------------- |

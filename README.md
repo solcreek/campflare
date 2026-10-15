@@ -116,6 +116,8 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | auth                  | `api.test`, `auth.test`, `auth.revoke`                                                                                                                                                                                                           |
 | conversations         | `list`, `info`, `history`, `replies`, `create`, `join`, `leave`, `invite`, `kick`, `members`, `open`, `close`, `mark`, `rename`, `setTopic`, `setPurpose`, `archive`, `unarchive`; `users.conversations`                                         |
 | chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                                                  |
+| scheduled messages    | `chat.scheduleMessage`, `chat.scheduledMessages.list`, `chat.deleteScheduledMessage`                                                                                                                                                             |
+| reminders             | `add`, `info`, `list`, `complete`, `delete`; DMed by the built-in Campflare bot                                                                                                                                                                  |
 | streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                                |
 | reactions             | `add`, `remove`, `get`                                                                                                                                                                                                                           |
 | files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
@@ -130,6 +132,20 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 
 The `campflare.*` methods cover what Slack does in its admin UI and OAuth
 flow. They're named so they can't collide with Slack's.
+
+### Scheduled messages and reminders
+
+`chat.scheduleMessage` keeps a message (up to 120 days ahead) and posts it at
+`post_at` exactly as `chat.postMessage` would, as the person or bot that
+scheduled it, with the same events and `app_mention`. `reminders.add` takes a
+Unix time, seconds from now, or a phrase (`in 15 minutes`, `tomorrow at 9am`,
+`friday`) in the person's time zone; at the time the workspace's built-in
+**Campflare** bot DMs them "Reminder: …". A Durable Object per workspace
+(`Scheduler`) keeps one alarm at the earliest due time; each item is claimed in
+D1 before it is posted and finished in the post's own batch, so it posts once
+even if the alarm runs twice. A message whose poster has since left the
+channel is dropped, and the bot tells them. Recurring reminders aren't
+supported yet. See [docs/scheduling.md](docs/scheduling.md).
 
 ### Scopes, roles and tokens for agents
 
@@ -343,6 +359,7 @@ or a bot:
 | `read_messages`, `read_thread`                | a conversation's recent messages, or a whole thread          |
 | `search_messages`                             | search, with the same syntax as `search.messages`            |
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
+| `schedule_message`, `set_reminder`            | post later; remind yourself (times as people say them)       |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
@@ -397,6 +414,9 @@ campflare search 'deploy in:#dev from:@bob after:2026-10-01'
 llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791990000.000100 --status "is thinking…"
                                                               # as a bot: one message that grows as stdin arrives
 campflare stop '#dev' 1791990000.000200                       # as a person: stop an app's reply mid-stream
+campflare send '#dev' "standup in 5" --at 2026-10-16T08:55:00Z # schedule it (or --at 30m, 2h, epoch seconds)
+campflare scheduled                                           # unschedule '#dev' <id> deletes one
+campflare remind "renew the certificate" tomorrow at 9am      # reminders; reminder done <id>
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
@@ -449,8 +469,10 @@ client and CLI bundles. The Worker is bundled by wrangler.
   when one person is in several.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
-  emoji, scheduled DND hours, time zones.
+- Pins, bookmarks, stars, user groups, custom emoji, scheduled DND hours,
+  setting a person's time zone (reminders read `tz`, which no method sets yet).
+- Recurring reminders, and reminders for someone else
+  ([docs/scheduling.md](docs/scheduling.md)).
 - Sharding a very large workspace's hub across several Durable Objects.
 - Huddles: expiring the seat of a browser that died without leaving, and
   Slack's `calls.*` API (see [docs/huddles.md](docs/huddles.md)).
