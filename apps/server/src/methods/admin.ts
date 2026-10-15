@@ -1,4 +1,4 @@
-import { all, first, isUniqueViolation, run, stmt } from "../db/query"
+import { all, first, isNameClash, isUniqueViolation, run, stmt } from "../db/query"
 import type { AppRow, TokenRow, UserRow } from "../db/rows"
 import { APP_SCOPES, issueToken } from "../api/auth"
 import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES, missingScope } from "../api/scopes"
@@ -48,10 +48,11 @@ async function createUser(
     )
   } catch (error) {
     // A user group's handle is a name too (@handle): the trigger from migration 0021 refuses it.
-    if (error instanceof Error && error.message.includes("name_taken_by_usergroup")) {
-      throw new CampflareError("name_taken")
+    if (isNameClash(error)) {
+      throw new CampflareError(
+        opts.email && isUniqueViolation(error) && /email/.test(String(error)) ? "already_in_team" : "name_taken",
+      )
     }
-    if (isUniqueViolation(error)) throw new CampflareError(opts.email ? "already_in_team" : "name_taken")
     throw error
   }
   // Everyone is in #general, as in Slack.
@@ -374,7 +375,8 @@ async function appOut(ctx: Ctx<Actor>, app: AppRow) {
 async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
   const app = await first<AppRow>(
     ctx.env.DB,
-    "SELECT * FROM apps WHERE id = ? AND team_id = ?",
+    // The built-in bot (system-bot.ts) is the server's: nobody manages it.
+    "SELECT * FROM apps WHERE id = ? AND team_id = ? AND built_in IS NULL",
     ctx.args.req("app", "app_not_found"),
     ctx.auth.team.id,
   )

@@ -53,14 +53,18 @@ describe("MCP over Streamable HTTP", () => {
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).toSorted()).toEqual([
       "add_reaction",
+      "cancel_scheduled",
       "get_events",
       "list_conversations",
       "list_groups",
       "list_people",
+      "list_scheduled",
       "read_messages",
       "read_thread",
+      "schedule_message",
       "search_messages",
       "send_message",
+      "set_reminder",
       "wait_for_reply",
       "whoami",
     ])
@@ -163,6 +167,55 @@ describe("MCP over Streamable HTTP", () => {
       ]),
     )
     expect(groups.groups).toHaveLength(2)
+    await client.close()
+  })
+
+  it("schedules a message and sets a reminder, at times as people say them", async () => {
+    const w = await workspace()
+    const client = await connect(w.owner.token)
+    const before = Date.now()
+    const scheduled = await callTool<{ conversation: string; scheduled_message_id: string; post_at: string }>(
+      client,
+      "schedule_message",
+      { conversation: "#general", text: "Rappel : réunion, 회의, 会议", at: "in 2 hours" },
+    )
+    expect(scheduled.conversation).toBe(w.general)
+    expect(Date.parse(scheduled.post_at) - before).toBeGreaterThanOrEqual(7_199_000)
+    type Scheduled = {
+      scheduled: { scheduled_message_id: string; conversation: string; post_at: string; text: string }[]
+    }
+    const listed = await callTool<Scheduled>(client, "list_scheduled", { conversation: "#general" })
+    expect(listed.scheduled).toEqual([
+      {
+        scheduled_message_id: scheduled.scheduled_message_id,
+        conversation: w.general,
+        post_at: scheduled.post_at,
+        text: "Rappel : réunion, 회의, 会议",
+      },
+    ])
+    expect(
+      await callTool(client, "cancel_scheduled", {
+        conversation: "#general",
+        scheduled_message_id: scheduled.scheduled_message_id,
+      }),
+    ).toEqual({ cancelled: true, scheduled_message_id: scheduled.scheduled_message_id })
+    expect((await callTool<Scheduled>(client, "list_scheduled")).scheduled).toEqual([])
+    const again = (await client.callTool({
+      name: "cancel_scheduled",
+      arguments: { conversation: "#general", scheduled_message_id: scheduled.scheduled_message_id },
+    })) as ToolResult
+    expect(again).toMatchObject({ isError: true, content: [{ text: "error: invalid_scheduled_message_id" }] })
+
+    const reminder = await callTool<{ reminder_id: string; at: string }>(client, "set_reminder", {
+      text: "Stand-up",
+      at: "2h",
+    })
+    expect(reminder.reminder_id).toMatch(/^Rm/)
+    const bad = (await client.callTool({
+      name: "set_reminder",
+      arguments: { text: "x", at: "whenever" },
+    })) as ToolResult
+    expect(bad).toMatchObject({ isError: true, content: [{ text: "error: cannot_parse" }] })
     await client.close()
   })
 

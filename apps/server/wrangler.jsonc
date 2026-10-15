@@ -21,11 +21,14 @@
     "bindings": [
       { "name": "HUB", "class_name": "TeamHub" },
       { "name": "SCRIBE", "class_name": "HuddleScribe" },
+      // Scheduled messages and reminders: one per workspace, an alarm at the earliest due time (docs/scheduling.md).
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["TeamHub"] },
     { "tag": "v2", "new_sqlite_classes": ["HuddleScribe"] },
+    { "tag": "v3", "new_sqlite_classes": ["Scheduler"] },
   ],
   // Secrets (`wrangler secret put`, or .dev.vars locally):
   //   SIGNING_KEY       signs upload URLs and WebSocket tickets

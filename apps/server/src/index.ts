@@ -17,6 +17,8 @@ import "./huddle/methods"
 import { huddlePage, huddleScript } from "./huddle/page"
 import { readScribeTicket } from "./huddle/ticket"
 import "./methods/reactions"
+import "./methods/reminders"
+import "./methods/scheduled"
 import "./methods/search"
 import "./methods/users"
 import "./methods/usergroups"
@@ -40,6 +42,7 @@ import type { UserRow } from "./db/rows"
 
 export { TeamHub } from "./hub"
 export { HuddleScribe } from "./huddle/scribe"
+export { Scheduler } from "./scheduler"
 
 const app = new Hono<{ Bindings: Env }>()
 

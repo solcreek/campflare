@@ -29,8 +29,16 @@ export const stmt = (db: D1Database, sql: string, ...params: unknown[]) => db.pr
 
 // Lists go in as one JSON argument, `IN (SELECT value FROM json_each(?))`: D1 binds at most 100 parameters.
 
+/** A UNIQUE or PRIMARY KEY clash; not other constraints (NOT NULL, CHECK), which a retry won't fix. */
 export const isUniqueViolation = (error: unknown) =>
-  error instanceof Error && /UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(error.message)
+  error instanceof Error && /UNIQUE constraint failed|SQLITE_CONSTRAINT_(?:UNIQUE|PRIMARYKEY)/.test(error.message)
+
+/**
+ * A person's handle that is taken: by another person (a UNIQUE clash) or by a
+ * user group, which migration 0021's trigger refuses by name.
+ */
+export const isNameClash = (error: unknown) =>
+  isUniqueViolation(error) || (error instanceof Error && error.message.includes("name_taken_by_usergroup"))
 
 /** A SQL condition with its parameters, for writes in a batch that happen only where it holds. */
 export interface Guard {

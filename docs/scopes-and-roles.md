@@ -82,6 +82,8 @@ and, when the method asks for any, `x-accepted-oauth-scopes`. The official
 | `team.info`                                                                                                                                       | `team:read`                                  |
 | `emoji.list`                                                                                                                                      | `emoji:read`                                 |
 | `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`                                                                                | `dnd:read` / `dnd:write`                     |
+| `chat.scheduleMessage`, `.scheduledMessages.list`, `.deleteScheduledMessage`                                                                      | `chat:write`                                 |
+| `reminders.info`, `.list` / `reminders.add`, `.complete`, `.delete`                                                                               | `reminders:read` / `reminders:write`         |
 | `assistant.threads.setStatus`                                                                                                                     | `assistant:write` or `chat:write`            |
 | `apps.connections.open`                                                                                                                           | `connections:write`                          |
 | `api.test`, `auth.test`, `auth.revoke`, `chat.getPermalink`, `views.open`, `.push`, `.update`, `oauth.v2.access`                                  | none                                         |
@@ -131,10 +133,10 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
 `scopes.ts`, so the CLI, MCP and anyone calling the API share one meaning:
 
 - `read`: every `:read` and `:history`, `search:read`, `files:read`,
-  `reactions:read`, `emoji:read`, `dnd:read`, `team:read`, `users:read`,
+  `reactions:read`, `emoji:read`, `dnd:read`, `reminders:read`, `team:read`, `users:read`,
   `usergroups:read`, `rtm:stream`, `events:read`, `views:read`.
-- `write`: `read` plus `chat:write`, `reactions:write`, `files:write`, the
-  conversation `:write` scopes, `views:write`. What a chat agent needs.
+- `write`: `read` plus `chat:write`, `reactions:write`, `files:write`,
+  `reminders:write`, the conversation `:write` scopes, `views:write`. What a chat agent needs.
 - `full`: every user scope (`usergroups:write` is here only: changing who a
   `@handle` reaches is rarely a chat agent's job). What a person's own sign-in gets.
 

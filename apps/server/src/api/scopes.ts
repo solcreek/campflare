@@ -111,6 +111,15 @@ export const NEEDS: Record<string, Need> = {
   "dnd.endSnooze": ["dnd:write"],
   "dnd.endDnd": ["dnd:write"],
 
+  "chat.scheduleMessage": ["chat:write"],
+  "chat.scheduledMessages.list": ["chat:write"],
+  "chat.deleteScheduledMessage": ["chat:write"],
+  "reminders.add": ["reminders:write"],
+  "reminders.complete": ["reminders:write"],
+  "reminders.delete": ["reminders:write"],
+  "reminders.info": ["reminders:read"],
+  "reminders.list": ["reminders:read"],
+
   "apps.connections.open": ["connections:write"],
   // The live feeds carry every message the person sees, so they want every type's :history too.
   "rtm.connect": { all: ["rtm:stream", ...HISTORY] },
@@ -206,6 +215,7 @@ const READ = [
   "reactions:read",
   "emoji:read",
   "dnd:read",
+  "reminders:read",
   "team:read",
   "users:read",
   "users.profile:read",
@@ -222,6 +232,7 @@ const WRITE = [
   "chat:write",
   "reactions:write",
   "files:write",
+  "reminders:write",
   "views:write",
 ]
 

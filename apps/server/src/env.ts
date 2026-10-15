@@ -1,5 +1,6 @@
 import type { HuddleScribe } from "./huddle/scribe"
 import type { TeamHub } from "./hub"
+import type { Scheduler } from "./scheduler"
 
 export interface Env {
   DB: D1Database
@@ -8,6 +9,8 @@ export interface Env {
   IMAGES?: ImagesBinding
   HUB: DurableObjectNamespace<TeamHub>
   SCRIBE: DurableObjectNamespace<HuddleScribe>
+  /** Fires scheduled messages and reminders: one per workspace (docs/scheduling.md). */
+  SCHEDULER: DurableObjectNamespace<Scheduler>
   SIGNING_KEY: string
   BOOTSTRAP_SECRET?: string
   /** Huddles (off without them): the Realtime SFU app, and an optional TURN key. */

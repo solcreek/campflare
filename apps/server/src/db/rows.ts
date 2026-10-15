@@ -72,6 +72,8 @@ export interface AppRow {
   event_delivery_disabled_at: number | null
   /** Why it was turned off. */
   event_delivery_disabled_reason: string | null
+  /** Set on an app the server itself acts as (migration 0023): "campflare" for the built-in bot. */
+  built_in?: string | null
 }
 
 export interface TokenRow {
@@ -174,4 +176,46 @@ export interface FileRow {
   status: "reserved" | "uploaded" | "complete"
   channels: string
   created: number
+}
+
+/** A message waiting to be posted (chat.scheduleMessage, migration 0023). */
+export interface ScheduledMessageRow {
+  id: string
+  team_id: string
+  channel_id: string
+  user_id: string
+  app_id: string | null
+  username: string | null
+  text: string
+  blocks: string | null
+  attachments: string | null
+  metadata: string | null
+  thread_ts: string | null
+  reply_broadcast: number
+  post_at: number
+  created: number
+  origin: string
+  /** The scheduling token's scopes, as it held them: what posting checks at fire time. */
+  scopes: string
+  claimed_until: number | null
+  /** The claiming runner's token while claimed: its post only commits while the row still holds it. */
+  claim: string | null
+  attempts: number
+}
+
+/** reminders.add (migration 0023). */
+export interface ReminderRow {
+  id: string
+  team_id: string
+  creator_id: string
+  user_id: string
+  text: string
+  time: number
+  complete_ts: number
+  fired: number
+  created: number
+  origin: string
+  claimed_until: number | null
+  claim: string | null
+  attempts: number
 }

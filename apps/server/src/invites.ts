@@ -6,7 +6,7 @@ import { ids, nowSeconds, randomSecret } from "./api/ids"
 import { userJson } from "./api/shapes"
 import { checkPassword, hashPassword, passwordStatements } from "./auth/password"
 import { addressChecks, counter, countFailure, IP_FREE_FAILURES, keys, readCounter, waitFor } from "./auth/throttle"
-import { all, first, isUniqueViolation, stmt } from "./db/query"
+import { all, first, isNameClash, stmt } from "./db/query"
 import type { UserRow } from "./db/rows"
 import { emailSender, type EmailSender } from "./email"
 import type { Env } from "./env"
@@ -233,7 +233,7 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<{
       ...(minted ? [minted.insert] : []),
     ])
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (isNameClash(error)) {
       throw new CampflareError(String(error).includes("email") ? "already_in_team" : "name_taken")
     }
     throw error
