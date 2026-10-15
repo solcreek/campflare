@@ -651,6 +651,27 @@ describe("createWorkspace", () => {
     ws.stop()
   })
 
+  it("keeps emoji_changed events that arrive while emoji.list is in flight", async () => {
+    const listed = { fiesta: "https://x.test/a.png", party: "alias:fiesta" }
+    const { api, ws } = await started({ "emoji.list": () => ({ emoji: listed }) }, "rtm")
+    await settle()
+    FakeSocket.all[0]!.receive({ type: "hello" })
+    FakeSocket.all[0]!.close()
+    // After the reconnect, the list is read as it was; changes land before it answers.
+    api.handlers["emoji.list"] = () => {
+      const socket = FakeSocket.all[1]!
+      socket.receive({ type: "emoji_changed", subtype: "add", name: "late", value: "https://x.test/l.png" })
+      socket.receive({ type: "emoji_changed", subtype: "remove", names: ["fiesta", "party"] })
+      return { emoji: listed }
+    }
+    await new Promise((r) => setTimeout(r, 5))
+    await settle()
+    FakeSocket.all[1]!.receive({ type: "hello" })
+    await settle()
+    expect(ws.getState().emoji).toEqual({ late: "https://x.test/l.png" })
+    ws.stop()
+  })
+
   it("starts without custom emoji when emoji.list is refused", async () => {
     const { ws } = await started({ "emoji.list": () => new Error("missing_scope") })
     await settle()
