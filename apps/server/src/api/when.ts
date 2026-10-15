@@ -43,26 +43,23 @@ export interface Wall {
   weekday: number
 }
 
-/** The zone if the runtime knows it, else UTC. */
-export function validZone(tz: string | undefined): string {
-  if (!tz) return "UTC"
-  try {
-    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone
-  } catch {
-    return "UTC"
-  }
-}
+/** The zone if the runtime knows it (an IANA name, as ianaZone() takes them), else UTC. */
+export const validZone = (tz: string | undefined): string => ianaZone(tz) ?? "UTC"
 
 /**
- * The zone's canonical name if `tz` is an IANA time zone the runtime knows
+ * `tz` if it is an IANA time zone the runtime knows, in the runtime's case
  * ("europe/paris" is Europe/Paris); undefined for anything else, a fixed
- * offset like "+02:00" included: a person's zone follows its DST rules.
+ * offset like "+02:00" included: a person's zone follows its DST rules. A
+ * link keeps the name given (Asia/Kolkata, which the runtime calls
+ * Asia/Calcutta), as Slack sends the current names.
  */
 export function ianaZone(tz: string | undefined): string | undefined {
-  if (!tz || /^[+-]|^\d/.test(tz.trim())) return undefined
+  const name = tz?.trim()
+  if (!name || /^[+-]|^\d/.test(name)) return undefined
   try {
-    const zone = new Intl.DateTimeFormat("en-US", { timeZone: tz.trim() }).resolvedOptions().timeZone
-    return /^[+-]/.test(zone) ? undefined : zone
+    const zone = new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone
+    if (/^[+-]/.test(zone)) return undefined
+    return zone.toLowerCase() === name.toLowerCase() ? zone : name
   } catch {
     return undefined
   }
