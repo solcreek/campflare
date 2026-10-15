@@ -327,6 +327,10 @@ describe("pins, bookmarks and saved items", () => {
     ).toBe(0)
     expect(cli.out).toBe(`Changed: ${id}  :books: Documentación  https://example.com/doc\n`)
     cli.clear()
+    // An empty --emoji clears it.
+    expect(await cli.run("bookmark", "edit", "#general", id, "--emoji", "")).toBe(0)
+    expect(cli.out).toBe(`Changed: ${id}  Documentación  https://example.com/doc\n`)
+    cli.clear()
     expect(await cli.run("bookmarks", "#general")).toBe(0)
     expect(cli.out.split("\n").filter(Boolean)).toHaveLength(2)
     expect(await cli.run("bookmarks", "#general", "--json")).toBe(0)

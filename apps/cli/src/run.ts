@@ -797,6 +797,7 @@ const commands: Record<string, Command> = {
             bookmark_id: arg,
             title: str(values.title),
             link: str(values.url),
+            // str() keeps "", so --emoji "" clears the emoji.
             emoji: str(values.emoji),
           })
     if (values.json) return s.print(res.bookmark)
