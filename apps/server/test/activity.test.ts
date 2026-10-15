@@ -258,6 +258,35 @@ describe("marking read", () => {
   })
 })
 
+describe("marking what can't be listed", () => {
+  it("leaves items the token can't list unread: other types, conversations left", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const im = await dmWith(w.owner.token, bob.id)
+    await post(w.owner.token, im, "secreto 秘密")
+    const room = await channel(w.owner.token, "salida")
+    await ok("conversations.join", { channel: room }, bob.token)
+    await post(w.owner.token, room, `<@${bob.id}> adiós 再见`)
+    await ok("conversations.leave", { channel: room }, bob.token)
+    await post(w.owner.token, w.general, `<@${bob.id}> público`)
+    const narrow = await issueToken(env, {
+      teamId: w.teamId,
+      kind: "user",
+      userId: bob.id,
+      scopes: ["activity:read", "activity:write", "channels:history"],
+      label: "agente",
+    })
+    expect(await ok("campflare.activity.mark", { all: true }, narrow)).toMatchObject({
+      marked: 1,
+      unread: { total: 0 },
+    })
+    // The DM is still unread for a token that can read it; the channel left stays hidden and unread.
+    expect((await inbox(bob.token)).unread).toMatchObject({ total: 1, dm: 1 })
+    await ok("conversations.join", { channel: room }, bob.token)
+    expect(await ok("campflare.activity.mark", { all: true }, bob.token)).toMatchObject({ marked: 2 })
+  })
+})
+
 describe("live", () => {
   it("sends activity_added, activity_marked and activity_removed to the recipient only", async () => {
     const w = await workspace()

@@ -115,7 +115,9 @@ to read only the counts. Items, messages, their reactions and the counts are one
 batch.
 
 **`campflare.activity.mark`** marks read: `ids` (a list), or `up_to` (an id:
-that item and every older one), or `all=true`; exactly one of them. It answers
+that item and every older one), or `all=true`; exactly one of them. It marks
+only what the token can list (the same filter), so a narrow token never clears
+items it can't see and `marked` is what leaves the unread counts. It answers
 `{ marked, unread }` and sends the person's clients `activity_marked` (`ids`,
 `up_to` or `all`, and `unread`) so every client clears the same badge.
 

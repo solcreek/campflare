@@ -109,17 +109,20 @@ method("campflare.activity.mark", "actor", async (ctx) => {
   if (given !== 1) throw invalidArguments("give exactly one of ids, up_to or all")
   const user = ctx.auth.user.id
   const db = ctx.env.DB
-  const change =
+  // Only what the token can list, so `marked` is what leaves the unread counts.
+  const [condition, value]: [string, unknown] =
     ids.length > 0
-      ? stmt(
-          db,
-          "UPDATE activity SET read = 1 WHERE user_id = ? AND read = 0 AND id IN (SELECT value FROM json_each(?))",
-          user,
-          JSON.stringify(ids.map(itemId)),
-        )
+      ? ["a.id IN (SELECT value FROM json_each(?3))", JSON.stringify(ids.map(itemId))]
       : upTo !== undefined
-        ? stmt(db, "UPDATE activity SET read = 1 WHERE user_id = ? AND read = 0 AND id <= ?", user, itemId(upTo))
-        : stmt(db, "UPDATE activity SET read = 1 WHERE user_id = ? AND read = 0", user)
+        ? ["a.id <= ?3", itemId(upTo)]
+        : ["?3 IS NULL", null]
+  const change = stmt(
+    db,
+    `UPDATE activity SET read = 1 WHERE id IN (SELECT a.id ${LISTABLE} AND a.read = 0 AND ${condition})`,
+    user,
+    historyTypes(ctx),
+    value,
+  )
   const [changed, counts] = await db.batch([change, unreadStatement(ctx)])
   const unread = unreadFrom(counts!)
   // Every client of the person clears the same badge.
