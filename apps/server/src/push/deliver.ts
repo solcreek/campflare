@@ -20,8 +20,9 @@ const MAX_RETRY_AFTER_MS = 60 * 60 * 1000
 
 type Sub = Pick<PushSubscriptionRow, "id" | "endpoint" | "p256dh" | "auth">
 
-/** One push to send: where, what, and (on a retry) its row in push_retries. */
+/** One push to send: to whom, where, what, and (on a retry) its row in push_pending. */
 interface Outgoing {
+  userId: string
   sub: Sub
   message: PushMessage
   /** For the VAPID subject's default. */
@@ -43,17 +44,20 @@ export class PushDelivery {
     private readonly scheduleAlarm: (at: number) => Promise<void>,
   ) {
     const sql = ctx.storage.sql
-    // Pushes a push service couldn't take yet, until they go or run out of retries.
-    sql.exec(`CREATE TABLE IF NOT EXISTS push_retries (
+    // Pushes a push service couldn't take yet, until they go or run out of retries. Only
+    // the subscription's id is kept: a retry sends to the subscription as it is then, if
+    // it is still the same person's.
+    sql.exec(`CREATE TABLE IF NOT EXISTS push_pending (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       team_id TEXT NOT NULL,
-      origin TEXT NOT NULL,
+      user_id TEXT NOT NULL,
       subscription_id TEXT NOT NULL,
-      subscription TEXT NOT NULL,
+      origin TEXT NOT NULL,
       message TEXT NOT NULL,
       attempts INTEGER NOT NULL,
       due INTEGER NOT NULL
     )`)
+    sql.exec("CREATE INDEX IF NOT EXISTS push_pending_subscription ON push_pending (subscription_id)")
     // Pushes per person per minute, for the cap.
     sql.exec(`CREATE TABLE IF NOT EXISTS push_counts (
       user_id TEXT NOT NULL,
@@ -63,8 +67,10 @@ export class PushDelivery {
     )`)
   }
 
-  forget() {
+  /** Subscriptions changed: read them again for the next push; those removed lose their pending retries. */
+  forget(removed: string[] = []) {
     this.subscriptions = undefined
+    for (const id of removed) this.ctx.storage.sql.exec("DELETE FROM push_pending WHERE subscription_id = ?", id)
   }
 
   private subscriptionsOf(teamId: string): Promise<Map<string, Sub[]>> {
@@ -162,7 +168,7 @@ export class PushDelivery {
       teamId,
       due.flatMap((i) => {
         const message = itemPush(i.item, names)
-        return subs.get(i.userId)!.map((sub) => ({ sub, message, origin }))
+        return subs.get(i.userId)!.map((sub) => ({ userId: i.userId, sub, message, origin }))
       }),
     )
   }
@@ -181,7 +187,7 @@ export class PushDelivery {
     let next: number | undefined
     outgoing.forEach((o, i) => {
       const outcome = outcomes[i]
-      if (o.retry) sql.exec("DELETE FROM push_retries WHERE id = ?", o.retry.id)
+      if (o.retry) sql.exec("DELETE FROM push_pending WHERE id = ?", o.retry.id)
       if (!outcome || outcome.misconfigured) return
       if (outcome.ok) used.add(o.sub.id)
       else if (outcome.gone) gone.add(o.sub.id)
@@ -194,12 +200,12 @@ export class PushDelivery {
             : PUSH_RETRY_DELAYS_MS[attempts]!
         const at = Date.now() + delay
         sql.exec(
-          `INSERT INTO push_retries (team_id, origin, subscription_id, subscription, message, attempts, due)
+          `INSERT INTO push_pending (team_id, user_id, subscription_id, origin, message, attempts, due)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           teamId,
-          o.origin,
+          o.userId,
           o.sub.id,
-          JSON.stringify(o.sub),
+          o.origin,
           JSON.stringify(o.message),
           attempts + 1,
           at,
@@ -218,7 +224,7 @@ export class PushDelivery {
           user,
           list.filter((s) => !gone.has(s.id)),
         )
-      for (const id of gone) sql.exec("DELETE FROM push_retries WHERE subscription_id = ?", id)
+      for (const id of gone) sql.exec("DELETE FROM push_pending WHERE subscription_id = ?", id)
     }
     const db = this.env.DB
     const writes = [
@@ -241,33 +247,53 @@ export class PushDelivery {
     if (writes.length) await db.batch(writes)
   }
 
-  /** Sends the retries that are due (the hub's alarm calls this). */
+  /**
+   * Sends the retries that are due (the hub's alarm calls this), each to its
+   * subscription as it is now: none if it was removed or is no longer that
+   * person's, and not while they're looking at the app or past their cap.
+   */
   async retryDue(now: number): Promise<void> {
-    const rows = this.ctx.storage.sql
-      .exec<{ id: number; team_id: string; origin: string; subscription: string; message: string; attempts: number }>(
-        "SELECT id, team_id, origin, subscription, message, attempts FROM push_retries WHERE due <= ? ORDER BY id",
+    const sql = this.ctx.storage.sql
+    const rows = sql
+      .exec<{
+        id: number
+        team_id: string
+        user_id: string
+        subscription_id: string
+        origin: string
+        message: string
+        attempts: number
+      }>(
+        `SELECT id, team_id, user_id, subscription_id, origin, message, attempts FROM push_pending
+         WHERE due <= ? ORDER BY id`,
         now,
       )
       .toArray()
     const byTeam = new Map<string, Outgoing[]>()
     for (const r of rows) {
+      const sub = (await this.subscriptionsOf(r.team_id)).get(r.user_id)?.find((s) => s.id === r.subscription_id)
+      if (!sub || this.isActive(r.user_id, now) || !this.underCap(r.user_id, now)) {
+        sql.exec("DELETE FROM push_pending WHERE id = ?", r.id)
+        continue
+      }
       byTeam.set(r.team_id, [
         ...(byTeam.get(r.team_id) ?? []),
         {
-          sub: JSON.parse(r.subscription) as Sub,
+          userId: r.user_id,
+          sub,
           message: JSON.parse(r.message) as PushMessage,
           origin: r.origin,
           retry: { id: r.id, attempts: r.attempts },
         },
       ])
     }
-    for (const [teamId, outgoing] of byTeam) await this.send(teamId, outgoing)
+    await Promise.all([...byTeam].map(([teamId, outgoing]) => this.send(teamId, outgoing)))
   }
 
   /** When the next retry is due, if any. */
   nextDue(): number | undefined {
     const due = this.ctx.storage.sql
-      .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM push_retries")
+      .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM push_pending")
       .toArray()[0]?.due
     return due ?? undefined
   }

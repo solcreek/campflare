@@ -45,10 +45,13 @@ function subscriptionJson(row: PushSubscriptionRow) {
   }
 }
 
-/** The workspace's hub drops the subscriptions it keeps, to read them again for the next item. */
-async function subscriptionsChanged(ctx: Pick<Ctx, "env">, teamIds: string[]) {
+/**
+ * The workspace's hub drops the subscriptions it keeps, to read them again for
+ * the next item, and the pending retries of those `removed`.
+ */
+async function subscriptionsChanged(ctx: Pick<Ctx, "env">, teamIds: string[], removed: string[] = []) {
   await Promise.all(
-    [...new Set(teamIds)].map((t) => ctx.env.HUB.get(ctx.env.HUB.idFromName(t)).pushSubscriptionsChanged()),
+    [...new Set(teamIds)].map((t) => ctx.env.HUB.get(ctx.env.HUB.idFromName(t)).pushSubscriptionsChanged(removed)),
   )
 }
 
@@ -93,7 +96,7 @@ method("campflare.push.subscribe", "user", async (ctx) => {
   const user = ctx.auth.user.id
   const team = ctx.auth.team.id
   const db = ctx.env.DB
-  const [before, saved] = await db.batch([
+  const [before, saved, pruned] = await db.batch([
     stmt(db, "SELECT team_id FROM push_subscriptions WHERE endpoint = ?", endpoint),
     // One browser is one row: subscribing it again replaces it (keeping its id, and making it the newest),
     // for whoever is signed in there now.
@@ -114,13 +117,18 @@ method("campflare.push.subscribe", "user", async (ctx) => {
     stmt(
       db,
       `DELETE FROM push_subscriptions WHERE user_id = ?1 AND id NOT IN
-         (SELECT id FROM push_subscriptions WHERE user_id = ?1 ORDER BY created DESC, rowid DESC LIMIT ?2)`,
+         (SELECT id FROM push_subscriptions WHERE user_id = ?1 ORDER BY created DESC, rowid DESC LIMIT ?2)
+       RETURNING id`,
       user,
       MAX_SUBSCRIPTIONS,
     ),
   ])
   const previous = (before!.results as { team_id: string }[]).map((r) => r.team_id)
-  await subscriptionsChanged(ctx, [team, ...previous])
+  await subscriptionsChanged(
+    ctx,
+    [team, ...previous],
+    (pruned!.results as { id: string }[]).map((r) => r.id),
+  )
   return { subscription: subscriptionJson(saved!.results[0] as PushSubscriptionRow) }
 })
 
@@ -136,7 +144,11 @@ method("campflare.push.unsubscribe", "user", async (ctx) => {
     endpoint ?? null,
   )
   if (gone.length === 0) throw new CampflareError("subscription_not_found")
-  await subscriptionsChanged(ctx, [ctx.auth.team.id])
+  await subscriptionsChanged(
+    ctx,
+    [ctx.auth.team.id],
+    gone.map((r) => r.id),
+  )
   return { removed: gone.map((r) => r.id) }
 })
 
@@ -197,7 +209,7 @@ method("campflare.push.test", "user", async (ctx) => {
       : []),
   ]
   if (writes.length) await db.batch(writes)
-  if (removed.length) await subscriptionsChanged(ctx, [ctx.auth.team.id])
+  if (removed.length) await subscriptionsChanged(ctx, [ctx.auth.team.id], removed)
   return {
     sent: sent.length,
     failed: rows.length - sent.length - removed.length,

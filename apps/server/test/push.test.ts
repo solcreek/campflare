@@ -38,14 +38,14 @@ const hubOf = (teamId: string) => env.HUB.get(env.HUB.idFromName(teamId))
 /** Makes every pending push retry due and runs the hub's alarm. */
 async function retryNow(teamId: string) {
   await runInDurableObject(hubOf(teamId), async (_hub: TeamHub, state) => {
-    state.storage.sql.exec("UPDATE push_retries SET due = 0")
+    state.storage.sql.exec("UPDATE push_pending SET due = 0")
   })
   return runDurableObjectAlarm(hubOf(teamId))
 }
 
 const pendingRetries = (teamId: string) =>
   runInDurableObject(hubOf(teamId), async (_hub: TeamHub, state) =>
-    state.storage.sql.exec<{ attempts: number; due: number }>("SELECT attempts, due FROM push_retries").toArray(),
+    state.storage.sql.exec<{ attempts: number; due: number }>("SELECT attempts, due FROM push_pending").toArray(),
   )
 
 /** The pushes made: none, say, after a moment for the hub's after-response work. */
@@ -360,6 +360,52 @@ describe("push delivery", () => {
     await retryNow(w.teamId)
     await service.next()
     // Out of retries.
+    expect(await pendingRetries(w.teamId)).toEqual([])
+  })
+
+  it("cancels a pending retry when its subscription is removed, and skips it while the person is looking", async () => {
+    service = fakePushService()
+    service.answer = () => new Response(null, { status: 503 })
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const sub = await browserSubscription()
+    const { subscription } = await subscribe(bob.token, sub)
+    await post(w.owner.token, w.general, `<@${bob.id}> bientôt`)
+    await service.next()
+    await eventually(async () => (await pendingRetries(w.teamId)).length === 1)
+    await ok("campflare.push.unsubscribe", { id: subscription.id }, bob.token)
+    expect(await pendingRetries(w.teamId)).toEqual([])
+
+    // Subscribed again, a retry is dropped while bob has the app in front of him.
+    await subscribe(bob.token, sub)
+    await post(w.owner.token, w.general, `<@${bob.id}> 곧`)
+    await service.next()
+    await eventually(async () => (await pendingRetries(w.teamId)).length === 1)
+    const link = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await link.next((f) => f.type === "hello")
+    link.ws.send(JSON.stringify({ type: "campflare.active", active: true }))
+    await settle()
+    service.answer = () => new Response(null, { status: 201 })
+    await retryNow(w.teamId)
+    expect(await pushesAfterAMoment(service)).toEqual([])
+    expect(await pendingRetries(w.teamId)).toEqual([])
+    link.close()
+  })
+
+  it("counts a retry towards the cap", async () => {
+    service = fakePushService()
+    service.answer = () => new Response(null, { status: 503 })
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    await subscribe(bob.token, await browserSubscription())
+    await post(w.owner.token, w.general, `<@${bob.id}> límite`)
+    await service.next()
+    await eventually(async () => (await pendingRetries(w.teamId)).length === 1)
+    await runInDurableObject(hubOf(w.teamId), async (_hub: TeamHub, state) => {
+      state.storage.sql.exec("UPDATE push_counts SET count = ? WHERE user_id = ?", PUSH_PER_MINUTE, bob.id)
+    })
+    await retryNow(w.teamId)
+    expect(await pushesAfterAMoment(service)).toEqual([])
     expect(await pendingRetries(w.teamId)).toEqual([])
   })
 

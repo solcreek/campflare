@@ -616,8 +616,8 @@ export class TeamHub extends DurableObject<Env> {
       const ws = this.nextLink(row.app_id)
       if (ws) send(ws, envelope)
     }
-    await Promise.all(posts)
-    await this.push.retryDue(now)
+    // Request URL retries and push retries go out together.
+    await Promise.all([...posts, this.push.retryDue(now)])
     const unacked = this.ctx.storage.sql
       .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM unacked")
       .toArray()[0]?.due
@@ -625,9 +625,9 @@ export class TeamHub extends DurableObject<Env> {
     if (next !== Infinity) await this.ctx.storage.setAlarm(next)
   }
 
-  /** Someone's push subscriptions changed: read them again for the next activity item. */
-  async pushSubscriptionsChanged(): Promise<void> {
-    this.push.forget()
+  /** Someone's push subscriptions changed: read them again for the next activity item; removed ones' retries go. */
+  async pushSubscriptionsChanged(removed: string[] = []): Promise<void> {
+    this.push.forget(removed)
   }
 
   /** The last event number handed out (0 before the first). */
