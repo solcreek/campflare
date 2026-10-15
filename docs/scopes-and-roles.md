@@ -1,6 +1,6 @@
 # Scopes and roles
 
-Status: design, 2026-10-15. Implemented on the `scopes-and-roles` branch.
+Status: implemented, 2026-10-15 (the `scopes-and-roles` branch).
 
 Campflare is meant to be driven by agents as much as by people. An agent should
 get a token that can do exactly what its job needs, and a person should be able
@@ -45,8 +45,9 @@ The per-type check runs where every conversation is fetched
 (`findWithMembership()` in `src/db/conversations.ts`), and only for a
 conversation the caller can see: a private conversation they aren't in still
 answers `channel_not_found`, so a missing scope never reveals that it exists.
-`conversations.list` and `users.conversations` return only the types the token
-can read; asking for a type it can't (`types=im`) is `missing_scope`.
+`conversations.list` and `users.conversations` want the `:read` scope of each
+type asked for (`types`, by default `public_channel`), as Slack does:
+`types=public_channel,im` without `im:read` is `missing_scope`.
 
 ### The error
 
@@ -57,7 +58,9 @@ As Slack answers it, so the official SDKs surface it unchanged:
 ```
 
 Every answer to an authenticated call carries `x-oauth-scopes` (the token's)
-and `x-accepted-oauth-scopes` (the method's).
+and, when the method asks for any, `x-accepted-oauth-scopes`. The official
+`@slack/web-api` reads both into `response_metadata.scopes` and
+`.acceptedScopes`.
 
 ### Slack's scopes, as Slack documents them
 
@@ -99,6 +102,7 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `tokens:read` / `tokens:write` | `campflare.tokens.list` / `.create`, `.revoke`         | minting tokens is how a token would escalate              |
 | `users.password:write`         | `campflare.users.setPassword`                          | a password is the whole account                           |
 | `admin.users:write`            | `campflare.users.create`, `.deactivate`, `.setRole`    | plus the admin or owner role                              |
+| `calls:read` / `calls:write`   | `campflare.huddles.info`, `.ice_servers` / the rest    | Slack's names for calls                                   |
 
 The live feeds (`rtm:stream`, `events:read`) deliver every event the person
 could see, not only those their other scopes allow. Filtering events by scope
@@ -108,10 +112,11 @@ simply can't stream.
 ### No escalation
 
 `campflare.tokens.create` mints at most the caller's own scopes: asking for one
-the calling token lacks is `missing_scope`. Without `scopes` it copies the
-caller's. So an agent holding a read-only token can hand a sub-agent a
-read-only token, and never more. The same holds for an admin minting a token
-for someone else.
+the calling token lacks is `missing_scope`, with `needed` listing them. Without
+`scopes` or `preset` it copies the caller's. So an agent holding a read-only
+token can hand a sub-agent a read-only token, and never more. The same holds
+for an admin minting a token for someone else. An unknown scope or preset is
+`invalid_arguments`.
 
 ### Presets
 
@@ -126,24 +131,37 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
   conversation `:write` scopes, `views:write`. What a chat agent needs.
 - `full`: every user scope. What a person's own sign-in gets.
 
+A token stores presets by name (`tokens.scopes` holds `full`, or
+`read,chat:write`), and they are expanded on every call (`expandScopes()`), so
+a token made from a preset gains the scopes later features add to it without a
+migration; app bots store `bot`, which expands to `DEFAULT_BOT_SCOPES`. Slack's
+scopes always contain a colon, so a bare word is unambiguous. A preset can only
+grow, though, so a token is minted with presets by name only when the caller
+holds every user scope; a narrower caller's token stores the expanded list, and
+can't outgrow its maker.
+
 ### Expiry
 
 Tokens get an optional `expires` (migration 0018). `campflare.tokens.create`
-takes `expires_in` (seconds); an expired token answers `token_expired`, Slack's
-code. A token for a one-off agent run should expire with it. Tokens made
+takes `expires_in` (seconds, at least 60); an expired token answers
+`token_expired`, Slack's code. A token for a one-off agent run should expire with it. Tokens made
 without it never expire, as before.
 
 ### Which tokens get what
 
 - `campflare.bootstrap`, `campflare.users.create`, a password or token sign-in:
   `full`.
-- `campflare.apps.create`: the bot gets `DEFAULT_BOT_SCOPES` (now including
-  `assistant:write`), the app token `connections:write`.
+- `campflare.apps.create`: the bot gets `bot` (`DEFAULT_BOT_SCOPES`, now with
+  `assistant:write`, `mpim:write`, `channels:manage`, `rtm:stream` and
+  `events:read`), the app token `connections:write`.
 - `oauth.v2.access`: what the person consented to, out of the known user
-  scopes. The CLI, the web app and the desktop app ask for `full`
-  (`FULL_USER_SCOPES` in `@campflare/client`), since they expose everything.
-- MCP over an OAuth JWT: the JWT's `scope`, out of the known user scopes. MCP
-  over an `xoxp`/`xoxb`: the token's.
+  scopes and presets. The CLI, the web app and the desktop app ask for
+  `user_scope=full`, since they expose everything; the consent page says in
+  words what a preset grants.
+- MCP over an OAuth JWT: the JWT's `scope`, out of the known user scopes and
+  presets; a client that asked for none of ours (most ask for `openid` alone)
+  gets `write`, which is what the consent page describes. MCP over an
+  `xoxp`/`xoxb`: the token's.
 - The server acting as a bot itself (interactivity responses, Huddle Scribe,
   delivery notices) builds its own `Auth` and is not checked.
 
@@ -155,8 +173,8 @@ lives in one function both call.
 Nothing checked scopes before, so stored lists are whatever the code wrote. The
 migration rewrites them to what they would get now: user tokens without a
 `client_id`, and those of our own clients (`campflare-cli`, `-web`,
-`-desktop`), become `full`; bot tokens become the new bot defaults; other OAuth
-tokens keep what they were granted. Then it adds `tokens.expires`.
+`-desktop`), become `full`; bot tokens become `bot`; other OAuth tokens keep
+what they were granted. Then it adds `tokens.expires`.
 
 ## Roles
 
@@ -181,14 +199,21 @@ send `false` today, and adding them is a new role here plus a channel check.
 | deactivate an admin                                             |        |       | ✓     |
 | make someone member, admin or owner (`campflare.users.setRole`) |        |       | ✓     |
 
-An owner can't be deactivated, and the last owner can't be demoted: first make
-someone else owner. A non-admin gets `not_an_admin`, a non-owner
-`not_an_owner` (today's `not_allowed_token_type` there was the wrong code: the
-token type is right, the person isn't).
+Acting for someone else (deactivating them, minting a token for them) takes a
+role above theirs, so an admin can't become an owner by minting the owner's
+token. A non-admin gets `not_an_admin`, a non-owner `not_an_owner` (before,
+`not_allowed_token_type`, which was the wrong code: the token type is right,
+the person isn't), and anyone acting on an owner `cant_act_on_owner`: an owner
+can't be deactivated, nor given a token by someone else. Only owners add an
+admin (`campflare.users.create` with `is_admin`). The last owner can't be
+demoted (`last_owner`): first make someone else owner; the check and the change
+are one statement, so two owners demoting each other at once can't both
+succeed. A bot user has no role to set (`user_is_bot`), but an admin may
+deactivate one.
 
 `campflare.users.setRole` (`user`, `role`: `member` | `admin` | `owner`)
-publishes `user_change` with the new flags, so clients and agents learn it
-without polling.
+answers the user and publishes `user_change` to the workspace, as do
+deactivations, so clients and agents learn it without polling.
 
 ## Discovery: `campflare.methods.list`
 
@@ -205,18 +230,21 @@ it.
 
 ## CLI
 
-- `campflare whoami` adds the role and the token's scopes (and expiry).
-- `campflare token create [--preset read|write|full] [--scopes a,b] [--expires 1h|7d|<seconds>] [--label l] [--json]`
+- `campflare whoami` adds the role and the token's scopes (`client.scopes()`
+  in `@campflare/client` reads `x-oauth-scopes`).
+- `campflare token create [--preset read|write|full] [--scopes a,b] [--expires 30m|12h|7d|<seconds>] [--label l] [--json]`
+  prints the token alone on stdout (`TOKEN=$(campflare token create …)`) and
+  what it holds on stderr.
 - `campflare token list` shows each token's scopes, label and expiry.
-- `campflare admin role <user> member|admin|owner`.
+- `campflare admin role <@person> member|admin|owner`.
+- `campflare api --list [prefix]` prints `campflare.methods.list`.
+- A `missing_scope` error says which scopes would do and how to mint a token
+  with them; with `--json`, any API error goes to stderr as JSON.
 
-## Order of work
+## Later
 
-1. The table, the checks in `/api/:method` and `invoke()`, `missing_scope`,
-   headers; the per-type conversation check; `conversations.list` filtering.
-   Tests for each method family.
-2. Migration 0018, `FULL_USER_SCOPES`, first-party clients asking for it.
-3. Roles: `not_an_admin`/`not_an_owner`, the matrix, `campflare.users.setRole`.
-4. Token presets, subset rule, expiry; `campflare.methods.list`.
-5. CLI; a conformance test that `@slack/web-api` reports `missing_scope` with
-   `needed`; docs (README, CLAUDE.md).
+- Filtering the live feeds (`rtm:stream`, `events:read`) by the token's other
+  scopes, so a narrow token can stream what it may read.
+- Guests (`is_restricted`, `is_ultra_restricted`).
+- A primary owner, distinct from the other owners, with ownership transfer.
+- `last_used` on tokens, so stale agent tokens can be found and revoked.
