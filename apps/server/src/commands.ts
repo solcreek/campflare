@@ -30,15 +30,20 @@ export interface CommandRow {
   created: number
 }
 
-/** A command as campflare.commands.list and campflare.apps.setCommands answer it. */
-export const commandJson = (row: CommandRow & { app_name?: string }) => ({
+/**
+ * A command as everyone sees it (campflare.commands.list): no Request URL,
+ * which may be an internal endpoint or carry a secret in its query.
+ */
+export const commandJson = (row: Omit<CommandRow, "team_id" | "url" | "created"> & { app_name?: string }) => ({
   command: row.name,
   description: row.description,
   usage_hint: row.usage_hint,
   app_id: row.app_id,
   ...(row.app_name !== undefined ? { app_name: row.app_name } : {}),
-  url: row.url,
 })
+
+/** A command as its app's installer or an admin sees it (campflare.apps.info, .setCommands): with its URL. */
+export const commandSettings = (row: Omit<CommandRow, "team_id" | "created">) => ({ ...commandJson(row), url: row.url })
 
 /** What the app answered at once: a message for the person, or for the conversation (`in_channel`). */
 type Answer = Record<string, unknown>

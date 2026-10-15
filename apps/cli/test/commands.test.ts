@@ -62,6 +62,11 @@ describe("slash commands", () => {
       cli.clear()
       expect(await cli.run("commands", "--json")).toBe(0)
       expect(JSON.parse(cli.out)).toHaveLength(2)
+      // Everyone's list leaves the URLs out; the app's settings show them.
+      expect(cli.out).not.toContain(url)
+      cli.clear()
+      expect(await cli.run("admin", "app", app.app.id)).toBe(0)
+      expect(cli.out).toContain(`Slash commands:\n  /deploy [branch]  Deploy a branch  → ${url}\n`)
 
       cli.clear()
       expect(await cli.run("command", "#general", "/deploy", "staging", "now")).toBe(0)

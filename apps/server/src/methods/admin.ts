@@ -12,6 +12,7 @@ import { userChanged } from "../events"
 import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
 import { EVENT_TYPE } from "../app-events"
+import { commandSettings, type CommandRow } from "../commands"
 import { requestUrlProblem, verifyRequestUrl } from "../request-url"
 
 // campflare.* — what Slack does in its admin UI and OAuth flow, as API
@@ -367,8 +368,15 @@ export const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName
 /** appSettings and how its Request URL is doing (the team hub keeps the counts). */
 async function appOut(ctx: Ctx<Actor>, app: AppRow) {
   const settings = appSettings(app)
-  const delivery = await hubOf(ctx).deliveryHealth(app.id)
-  return { ...settings, event_subscriptions: { ...settings.event_subscriptions, delivery } }
+  const [delivery, commands] = await Promise.all([
+    hubOf(ctx).deliveryHealth(app.id),
+    all<CommandRow>(ctx.env.DB, "SELECT * FROM app_commands WHERE app_id = ? ORDER BY name", app.id),
+  ])
+  return {
+    ...settings,
+    event_subscriptions: { ...settings.event_subscriptions, delivery },
+    commands: commands.map(commandSettings),
+  }
 }
 
 /** An app of the caller's workspace that they installed, or any if they're an admin. */

@@ -157,6 +157,8 @@ type AppSettings = {
     signing_secret: string
     event_subscriptions: { request_url: string | null; events: string[] | null } & EventDelivery
     interactivity: { request_url: string | null }
+    /** With their Request URLs: only the installer or an admin sees them. */
+    commands?: CommandJson[]
   }
 }
 
@@ -166,7 +168,8 @@ type CommandJson = {
   usage_hint: string
   app_id: string
   app_name?: string
-  url: string | null
+  /** Only in an app's settings (admin app), never in campflare.commands.list. */
+  url?: string | null
 }
 
 type CommandRun = {
@@ -1821,6 +1824,7 @@ const commands: Record<string, Command> = {
           `Interactivity URL: ${res.app.interactivity.request_url ?? "none (Socket Mode only)"}\n`,
       )
       for (const line of deliveryLines(subs)) io.stdout(`${line}\n`)
+      appCommands ??= res.app.commands?.length ? res.app.commands : undefined
       if (appCommands) {
         io.stdout(appCommands.length ? "Slash commands:\n" : "Slash commands: none\n")
         for (const c of appCommands) io.stdout(`  ${commandLine(c)}${c.url ? `  → ${c.url}` : ""}\n`)

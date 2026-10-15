@@ -89,17 +89,28 @@ describe("campflare.apps.setCommands", () => {
         usage_hint: "[taille]",
         app_id: app.id,
         app_name: "Deployer",
-        url: null,
       },
-      { ...DEPLOY, app_id: app.id, app_name: "Deployer" },
+      {
+        command: "/deploy",
+        description: "Deploy a branch",
+        usage_hint: "[branch]",
+        app_id: app.id,
+        app_name: "Deployer",
+      },
       {
         command: "/部署",
         description: "デプロイする 배포",
         usage_hint: "",
         app_id: app.id,
         app_name: "Deployer",
-        url: null,
       },
+    ])
+    // Request URLs are the installer's to see (campflare.apps.info), not everyone's.
+    const info = await ok<{ app: { commands: Command[] } }>("campflare.apps.info", { app: app.id }, w.owner.token)
+    expect(info.app.commands.map((c) => [c.command, c.url])).toEqual([
+      ["/café", null],
+      ["/deploy", URL],
+      ["/部署", null],
     ])
     // Empty clears them.
     await ok("campflare.apps.setCommands", { app: app.id, commands: "[]" }, w.owner.token)

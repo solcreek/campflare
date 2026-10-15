@@ -5,7 +5,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { requireScope } from "../api/scopes"
-import { COMMAND_NAME, commandJson, invokeCommand, type CommandRow } from "../commands"
+import { COMMAND_NAME, commandJson, commandSettings, invokeCommand, type CommandRow } from "../commands"
 import { publish } from "../events"
 import { requestUrlProblem } from "../request-url"
 import { ownApp } from "./admin"
@@ -126,7 +126,7 @@ method("campflare.apps.setCommands", "actor", async (ctx) => {
   })
   return {
     app_id: app.id,
-    commands: commands.map((c) => commandJson({ ...c, team_id: app.team_id, app_id: app.id, created: now })),
+    commands: commands.map((c) => commandSettings({ ...c, app_id: app.id })),
   }
 })
 
