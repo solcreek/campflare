@@ -5,7 +5,7 @@ import { EMOJI_MAX_BYTES, newName, setEmojiFetch, STANDARD_EMOJI } from "../src/
 import { imageSize } from "../src/api/media"
 import { setImagesOverride } from "../src/api/thumbs"
 import { createMetadataFetch } from "../src/auth/cimd-fetch"
-import { ORIGIN, call, connect, expectError, ok, workspace, type Body } from "./helpers"
+import { ORIGIN, call, connect, eventually, expectError, ok, workspace, type Body } from "./helpers"
 import { convert, makeGif, makePng } from "./images"
 
 // Custom emoji: emoji.list, admin.emoji.*, campflare.emoji.add, the images at
@@ -139,7 +139,10 @@ describe("campflare.emoji.add", () => {
     }
     expect((await upload(w.owner.token, "x".repeat(100), png)).ok).toBe(true)
     await added(w.owner.token, "ship_it-2", png)
+    const stored = (await env.FILES.list({ prefix: `${w.teamId}/emoji/` })).objects.length
     expect((await upload(w.owner.token, "ship_it-2", png)).error).toBe("error_name_taken")
+    // Refused before the image was stored.
+    expect((await env.FILES.list({ prefix: `${w.teamId}/emoji/` })).objects).toHaveLength(stored)
   })
 
   it("takes PNG, GIF, JPEG and WebP up to 128 KB", async () => {
@@ -250,6 +253,31 @@ describe("admin.emoji.add", () => {
     expect(asked).toEqual(["https://images.example.com/shipit.png"])
     expect(await bytesOf(await SELF.fetch(r.emoji.url))).toEqual(png)
     expect((await list(w.owner.token)).emoji.shipit).toBe(r.emoji.url)
+    // A taken name is refused before anything is fetched.
+    await expectError(
+      "admin.emoji.add",
+      { name: "shipit", url: "https://images.example.com/b.png" },
+      w.owner.token,
+      "error_name_taken",
+    )
+    expect(asked).toHaveLength(1)
+
+    // Taken while the image was being fetched: the INSERT refuses it, and the stored image goes.
+    setEmojiFetch(async () => {
+      await env.DB.prepare(
+        "INSERT INTO emoji (team_id, name, alias_for, created_by, created) VALUES (?, 'raced', 'shipit', ?, 0)",
+      )
+        .bind(w.teamId, w.owner.id)
+        .run()
+      return new Response(png)
+    })
+    await expectError(
+      "admin.emoji.add",
+      { name: "raced", url: "https://x.example.com/a" },
+      w.owner.token,
+      "error_name_taken",
+    )
+    await eventually(async () => (await env.FILES.list({ prefix: `${w.teamId}/emoji/` })).objects.length === 1)
   })
 
   it("refuses what the SSRF guard refuses, failed fetches, and too much", async () => {

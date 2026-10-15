@@ -14,7 +14,7 @@ import {
 } from "../api/emoji"
 import { CampflareError } from "../api/errors"
 import { nowSeconds, randomSecret } from "../api/ids"
-import { all, isUniqueViolation, stmt } from "../db/query"
+import { all, first, isUniqueViolation, stmt } from "../db/query"
 import type { EmojiRow } from "../db/rows"
 import { publish } from "../events"
 
@@ -81,7 +81,16 @@ method("admin.emoji.list", "user", async (ctx) => {
   }
 })
 
-/** Stores an image under a new name; a name taken by a custom emoji is error_name_taken. */
+/**
+ * error_name_taken when a custom emoji has the name already: checked before an image is
+ * fetched or stored, so a clash costs neither. The INSERT still catches a race.
+ */
+async function requireFree(ctx: Ctx<Actor>, name: string) {
+  const taken = await first(ctx.env.DB, "SELECT 1 FROM emoji WHERE team_id = ? AND name = ?", ctx.auth.team.id, name)
+  if (taken) throw new CampflareError("error_name_taken")
+}
+
+/** Stores an image under a new name; a name taken by a custom emoji meanwhile is error_name_taken. */
 async function addImage(ctx: Ctx<Actor>, name: string, img: EmojiImage) {
   const image = randomSecret(8)
   const key = emojiKey(ctx.auth.team.id, image)
@@ -125,6 +134,7 @@ method("admin.emoji.add", "user", async (ctx) => {
   const name = newName(ctx.args.str("name"))
   const url = ctx.args.str("url")
   if (!url) throw new CampflareError("error_no_image")
+  await requireFree(ctx, name)
   const added = await addImage(ctx, name, await emojiImage(ctx.env, await fetchEmojiImage(url)))
   return { emoji: added }
 })
@@ -136,6 +146,7 @@ method("campflare.emoji.add", "user", async (ctx) => {
   if (!file) throw new CampflareError("error_no_image")
   // Checked before reading: a client could send any size.
   if (file.size > EMOJI_MAX_BYTES) throw new CampflareError("error_too_big")
+  await requireFree(ctx, name)
   const bytes = new Uint8Array(await file.arrayBuffer())
   return { emoji: await addImage(ctx, name, await emojiImage(ctx.env, bytes)) }
 })
