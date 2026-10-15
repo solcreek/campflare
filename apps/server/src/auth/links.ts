@@ -1,4 +1,4 @@
-import type { Context, Hono } from "hono"
+import type { Context, Hono, MiddlewareHandler } from "hono"
 import { CampflareError } from "../api/errors"
 import { publicOrigin } from "../api/origin"
 import { emailSender } from "../email"
@@ -193,6 +193,34 @@ async function formOf(c: C) {
   return (name: string) => String(form.get(name) ?? "")
 }
 
+/**
+ * Whether a form POST came from another site. These forms sign a person in or
+ * change a password, so a page elsewhere posting them would be login CSRF (its
+ * own account's session in the victim's browser). As Better Auth's origin
+ * check: an Origin must be this server's; without one, Sec-Fetch-Site must be
+ * same-origin. Browsers send at least one on every form POST; a request with
+ * neither isn't a browser's, and carries no one's cookies to abuse.
+ */
+export function crossSite(request: Request): boolean {
+  const origin = request.headers.get("origin")
+  if (origin !== null) return origin !== publicOrigin(request) && origin !== new URL(request.url).origin
+  const site = request.headers.get("sec-fetch-site")
+  return site !== null && site !== "same-origin"
+}
+
+const sameSite: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  if (crossSite(c.req.raw)) {
+    return page(
+      "Not allowed",
+      `<h1>This form can only be sent from this site</h1>
+<p>Open the link again and fill in the form here.</p>`,
+      new URL(c.req.url),
+      { status: 403 },
+    )
+  }
+  await next()
+}
+
 export function mountLinks(app: Hono<{ Bindings: Env }>) {
   app.get("/join/:code", async (c) => {
     const url = new URL(c.req.url)
@@ -203,7 +231,7 @@ export function mountLinks(app: Hono<{ Bindings: Env }>) {
     return joinPage(url, invite, c.env.APP_URL)
   })
 
-  app.post("/join/:code", async (c) => {
+  app.post("/join/:code", sameSite, async (c) => {
     const url = new URL(c.req.url)
     const code = c.req.param("code")
     const field = await formOf(c)
@@ -259,7 +287,7 @@ export function mountLinks(app: Hono<{ Bindings: Env }>) {
     return person ? resetPage(url, person) : deadReset(url)
   })
 
-  app.post("/reset/:code", async (c) => {
+  app.post("/reset/:code", sameSite, async (c) => {
     const url = new URL(c.req.url)
     const code = c.req.param("code")
     const field = await formOf(c)
@@ -286,7 +314,7 @@ ${appUrl ? `<div class="row"><a class="button primary" href="${escape(appUrl)}">
 
   app.get("/reset", (c) => requestPage(new URL(c.req.url), emailSender(c.env) !== undefined))
 
-  app.post("/reset", async (c) => {
+  app.post("/reset", sameSite, async (c) => {
     const url = new URL(c.req.url)
     if (!emailSender(c.env)) return requestPage(url, false)
     const field = await formOf(c)

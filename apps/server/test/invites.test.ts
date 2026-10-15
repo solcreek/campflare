@@ -620,3 +620,54 @@ describe("asking for your own reset", () => {
     await ok("campflare.users.requestPasswordReset", { email })
   })
 })
+
+describe("the link pages refuse cross-site posts (login CSRF)", () => {
+  /** A form POST as another site's page would send it. */
+  const crossPost = (path: string, form: Record<string, string>, headers: Record<string, string>) =>
+    SELF.fetch(`${ORIGIN}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": freshIp(), ...headers },
+      body: new URLSearchParams(form),
+      redirect: "manual",
+    })
+
+  it("on /join: no account, no session", async () => {
+    const w = await workspace()
+    const { url, invite: created } = await invite(w.owner.token)
+    const form = {
+      name: "mallory",
+      email: uniqueEmail("mallory"),
+      password: "a long enough password",
+      password_again: "a long enough password",
+    }
+    const path = new URL(url).pathname
+    for (const headers of [
+      { origin: "https://evil.test" },
+      { origin: "null" },
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site" },
+    ]) {
+      const res = await crossPost(path, form, headers)
+      expect(res.status).toBe(403)
+      expect(res.headers.getSetCookie()).toEqual([])
+      expect(await res.text()).toContain("only be sent from this site")
+    }
+    expect(await listed(w.owner.token, created.id)).toMatchObject({ uses: 0 })
+    const same = await crossPost(path, form, { origin: ORIGIN, "sec-fetch-site": "same-origin" })
+    expect(same.status).toBe(302)
+  })
+
+  it("on /reset/<code> and /reset", async () => {
+    const w = await workspace()
+    const email = uniqueEmail("rosa")
+    const rosa = await w.addUser("rosa", { email, password: "the old password" })
+    const reset = await ok<Reset>("campflare.users.createPasswordReset", { user: rosa.id }, w.owner.token)
+    const form = { password: "Rosa's new one!", password_again: "Rosa's new one!" }
+    const evil = { origin: "https://evil.test" }
+    expect((await crossPost(new URL(reset.url).pathname, form, evil)).status).toBe(403)
+    expect((await signIn(email, "the old password")).status).toBe(200)
+    expect((await crossPost("/reset", { email }, { "sec-fetch-site": "cross-site" })).status).toBe(403)
+    // No Origin and no Sec-Fetch-Site: not a browser, so no one's cookies; allowed.
+    expect((await crossPost(new URL(reset.url).pathname, form, {})).status).toBe(200)
+  })
+})
