@@ -94,6 +94,14 @@ export const NEEDS: Record<string, Need> = {
   "users.setPhoto": ["users.profile:write"],
   "users.deletePhoto": ["users.profile:write"],
 
+  "usergroups.list": ["usergroups:read"],
+  "usergroups.users.list": ["usergroups:read"],
+  "usergroups.create": ["usergroups:write"],
+  "usergroups.update": ["usergroups:write"],
+  "usergroups.disable": ["usergroups:write"],
+  "usergroups.enable": ["usergroups:write"],
+  "usergroups.users.update": ["usergroups:write"],
+
   "team.info": ["team:read"],
   "emoji.list": ["emoji:read"],
 
@@ -193,6 +201,7 @@ const READ = [
   "team:read",
   "users:read",
   "users.profile:read",
+  "usergroups:read",
   "rtm:stream",
   "events:read",
   "views:read",
@@ -217,6 +226,7 @@ export const FULL_USER_SCOPES = [
   "users:read.email",
   "users:write",
   "users.profile:write",
+  "usergroups:write",
   "apps:read",
   "apps:write",
   "tokens:read",
@@ -249,6 +259,7 @@ export const DEFAULT_BOT_SCOPES = [
   "team:read",
   "users:read",
   "users.profile:read",
+  "usergroups:read",
   "rtm:stream",
   "events:read",
 ]

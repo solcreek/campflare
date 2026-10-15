@@ -36,6 +36,22 @@ export interface UserRow {
   created: number
 }
 
+export interface UsergroupRow {
+  id: string
+  team_id: string
+  handle: string
+  name: string
+  description: string
+  /** JSON array of channel ids: prefs.channels. */
+  channels: string
+  created_by: string
+  updated_by: string
+  deleted_by: string | null
+  date_create: number
+  date_update: number
+  date_delete: number
+}
+
 export interface AppRow {
   id: string
   team_id: string

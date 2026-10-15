@@ -1,5 +1,14 @@
 import { all } from "../db/query"
-import type { AppRow, ConversationRow, FileRow, MessageRow, ReactionRow, TeamRow, UserRow } from "../db/rows"
+import type {
+  AppRow,
+  ConversationRow,
+  FileRow,
+  MessageRow,
+  ReactionRow,
+  TeamRow,
+  UsergroupRow,
+  UserRow,
+} from "../db/rows"
 import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
 import { PHOTO_SIZES, photoJson } from "./photos"
@@ -90,6 +99,35 @@ export function userJson(user: UserRow, origin: string) {
     is_email_confirmed: Boolean(user.email),
     has_2fa: false,
     who_can_share_contact_card: "EVERYONE",
+  }
+}
+
+/**
+ * A user group, as Slack's usergroups.* answer it. `users` is sent when asked
+ * for (usergroups.list's include_users; always for one group); user_count always.
+ */
+export function usergroupJson(g: UsergroupRow, members: string[], { users = true } = {}) {
+  return {
+    id: g.id,
+    team_id: g.team_id,
+    is_usergroup: true,
+    is_subteam: true,
+    name: g.name,
+    description: g.description,
+    handle: g.handle,
+    is_external: false,
+    date_create: g.date_create,
+    date_update: g.date_update,
+    date_delete: g.date_delete,
+    auto_type: null,
+    auto_provision: false,
+    enterprise_subteam_id: "",
+    created_by: g.created_by,
+    updated_by: g.updated_by,
+    deleted_by: g.deleted_by,
+    prefs: { channels: JSON.parse(g.channels) as string[], groups: [] },
+    ...(users ? { users: members } : {}),
+    user_count: members.length,
   }
 }
 
