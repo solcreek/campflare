@@ -25,7 +25,7 @@ import {
   ttlArg,
   type InviteRow,
 } from "../invites"
-import { activePerson, requireAdmin, requireOutranks, requireOwner } from "./admin"
+import { activePerson, requireAdmin, requireOutranks, requireOwner } from "../api/roles"
 
 // Invitations and password resets as links (docs/invites.md). Making them is
 // an admin's (admin.invites:*, admin.users:write, plus the role); using them

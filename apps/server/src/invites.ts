@@ -9,7 +9,7 @@ import type { UserRow } from "./db/rows"
 import { emailSender } from "./email"
 import type { Env } from "./env"
 import { channelType, publish } from "./events"
-import { HANDLE } from "./methods/admin"
+import { HANDLE } from "./api/roles"
 
 // Invitations and password resets: links whose code is shown once and stored
 // as a SHA-256 (migration 0020, docs/invites.md). The API methods
