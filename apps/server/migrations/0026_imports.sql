@@ -38,7 +38,8 @@ CREATE TABLE import_conversations (
   job_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
-  -- 'created', 'renamed' (created under another name) or 'merged' (an existing one).
+  -- 'created', 'renamed' (created under another name), 'merged' (an existing one) or
+  -- 'skipped' (no one to give it to: conversation_id is '').
   action TEXT NOT NULL,
   -- The last day file whose messages are all in (the CLI's resume point).
   cursor TEXT,
@@ -61,6 +62,15 @@ CREATE TABLE import_files (
   PRIMARY KEY (job_id, source_id)
 ) WITHOUT ROWID;
 CREATE INDEX import_files_message ON import_files (job_id, channel_id, ts);
+
+-- Messages of the export that weren't written because one was already at their
+-- ts (merging): kept so that sending the chunk again doesn't count them again.
+CREATE TABLE import_skipped (
+  job_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  PRIMARY KEY (job_id, channel_id, ts)
+) WITHOUT ROWID;
 
 -- Every row an import writes carries its job, for campflare.import.undo.
 ALTER TABLE messages ADD COLUMN import_job TEXT;

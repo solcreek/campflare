@@ -104,8 +104,10 @@ export function jobJson(job: ImportJobRow) {
 
 /**
  * Adds to a job's counts. A count given as SQL (`changes()`) is evaluated in
- * the statement: placed right after an INSERT in a batch, it counts the rows
- * that INSERT wrote, so a re-sent chunk adds nothing.
+ * the statement: placed right after an `INSERT OR IGNORE` in a batch, it counts
+ * the rows that INSERT wrote, so a re-sent chunk adds nothing. Skipped rows are
+ * counted the same way, from the import tables that note them (import_skipped,
+ * import_conversations); a number counts what the call is the first to map.
  */
 export function bump(db: D1Database, jobId: string, add: Record<string, number | { sql: string; params: unknown[] }>) {
   let expr = "counts"

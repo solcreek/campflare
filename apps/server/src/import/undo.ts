@@ -101,9 +101,12 @@ export async function undoImport(ctx: Ctx<Actor>) {
   }
 
   const now = nowSeconds()
-  const results = await db.batch([
+  const memberships = stmt(db, "DELETE FROM members WHERE import_job = ?", job.id)
+  const conversations = stmt(db, "DELETE FROM conversations WHERE import_job = ?", job.id)
+  const users = stmt(db, "DELETE FROM users WHERE import_job = ?", job.id)
+  const statements = [
     stmt(db, "DELETE FROM reactions WHERE import_job = ?", job.id),
-    stmt(db, "DELETE FROM members WHERE import_job = ?", job.id),
+    memberships,
     // What hangs off the conversations it made: nothing of anyone else's (import_in_use above).
     ...["members WHERE conversation_id", "bookmarks WHERE channel_id", "stars WHERE channel_id"].map((t) =>
       stmt(db, `DELETE FROM ${t} IN ${CREATED}`, job.id),
@@ -112,18 +115,21 @@ export async function undoImport(ctx: Ctx<Actor>) {
       stmt(db, `DELETE FROM ${t} WHERE channel_id IN ${CREATED}`, job.id),
     ),
     stmt(db, `DELETE FROM notification_prefs WHERE conversation_id IN ${CREATED}`, job.id),
-    stmt(db, "DELETE FROM conversations WHERE import_job = ?", job.id),
+    conversations,
     stmt(db, `DELETE FROM usergroup_members WHERE user_id IN ${PLACEHOLDERS}`, job.id),
     stmt(db, `DELETE FROM members WHERE user_id IN ${PLACEHOLDERS}`, job.id),
-    stmt(db, "DELETE FROM users WHERE import_job = ?", job.id),
+    users,
     stmt(db, "DELETE FROM import_users WHERE job_id = ?", job.id),
     stmt(db, "DELETE FROM import_conversations WHERE job_id = ?", job.id),
     stmt(db, "DELETE FROM import_files WHERE job_id = ?", job.id),
+    stmt(db, "DELETE FROM import_skipped WHERE job_id = ?", job.id),
     stmt(db, "UPDATE import_jobs SET state = 'undone', updated = ? WHERE id = ?", now, job.id),
-  ])
-  removed.memberships = results[1]!.meta.changes
-  removed.conversations = results.at(-8)!.meta.changes
-  removed.users = results.at(-5)!.meta.changes
+  ]
+  const results = await db.batch(statements)
+  const changes = (s: D1PreparedStatement) => results[statements.indexOf(s)]!.meta.changes
+  removed.memberships = changes(memberships)
+  removed.conversations = changes(conversations)
+  removed.users = changes(users)
   return { done: true, removed, job: jobJson(await reread(db, job)) }
 }
 

@@ -498,6 +498,14 @@ describe("campflare.import", () => {
     expect(list.find((m) => m.ts === existing.ts)!.text).toBe("Ours")
     expect(list.map((m) => m.text)).toContain("Mise à jour du design · デザイン更新")
     expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 3, messages_skipped: 1 })
+    // Sent again, nothing more is counted: skipped ones included.
+    await messages(w.owner.token, job.id, "C02", [{ ts: existing.ts, user: "U03", text: "Would overwrite" }])
+    await ok("campflare.import.conversations", { job: job.id, conversations: exportConversations }, w.owner.token)
+    expect((await status(w.owner.token, job.id)).counts).toMatchObject({
+      messages: 3,
+      messages_skipped: 1,
+      conversations_skipped: 2,
+    })
     // Finishing marks history read for the people the import added, never past what was here; the rest keep theirs.
     const lastRead = () =>
       env.DB.prepare("SELECT user_id, last_read FROM members WHERE conversation_id = ? ORDER BY user_id")

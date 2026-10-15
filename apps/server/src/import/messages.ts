@@ -131,10 +131,10 @@ export async function importMessages(ctx: Ctx<Actor>) {
   )
   userOf.set(SYSTEM_USER_ID, SYSTEM_USER_ID)
   const conversationOf = new Map(
-    (conversations!.results as { source_id: string; conversation_id: string }[]).map((r) => [
-      r.source_id,
-      r.conversation_id,
-    ]),
+    (conversations!.results as { source_id: string; conversation_id: string }[])
+      // A skipped conversation is noted with no id: its links stay as they are.
+      .filter((r) => r.conversation_id)
+      .map((r) => [r.source_id, r.conversation_id]),
   )
   const unmapped = new Set<string>()
   const mapUser = (id: string | undefined) => {
@@ -202,13 +202,17 @@ export async function importMessages(ctx: Ctx<Actor>) {
   const added = [...unmapped].filter((id) => !known.has(id))
   const ours = "EXISTS (SELECT 1 FROM messages WHERE channel_id = ?1 AND ts = value ->> 0 AND import_job = ?2)"
   const results = await db.batch([
-    // Messages already here that the job didn't write (merging): never touched, counted.
-    bump(db, job.id, {
-      messages_skipped: {
-        sql: "SELECT count(*) FROM json_each(?) j JOIN messages m ON m.channel_id = ? AND m.ts = j.value WHERE m.import_job IS NOT ?",
-        params: [keys, c.id, job.id],
-      },
-    }),
+    // Messages already here that the job didn't write (merging): never touched, noted once, counted once.
+    stmt(
+      db,
+      `INSERT OR IGNORE INTO import_skipped (job_id, channel_id, ts)
+       SELECT ?1, ?2, j.value FROM json_each(?3) j JOIN messages m ON m.channel_id = ?2 AND m.ts = j.value
+       WHERE m.import_job IS NOT ?1`,
+      job.id,
+      c.id,
+      keys,
+    ),
+    bump(db, job.id, { messages_skipped: CHANGES }),
     // Pinned and unpinned apart, so each insert's count says which it was.
     ...[all.filter((r) => r.pinned_at), all.filter((r) => !r.pinned_at)].flatMap((set, pinned) =>
       groups(set).flatMap((group) => [

@@ -126,8 +126,9 @@ export async function importConversations(ctx: Ctx<Actor>) {
   const counts = { created: 0, renamed: 0, merged: 0, skipped: 0 }
   for (const c of list) {
     const already = done.get(c.id)
-    if (already) {
-      out.push({ source_id: c.id, conversation_id: already, action: "known" })
+    if (already !== undefined) {
+      // Skipped before: noted with no id, and counted then.
+      out.push({ source_id: c.id, conversation_id: already || null, action: already ? "known" : "skipped" })
       continue
     }
     // The system user is never a member or a creator: it has no row in users.
@@ -144,6 +145,7 @@ export async function importConversations(ctx: Ctx<Actor>) {
       if (!key) {
         // Someone in it isn't anyone here: there's no one to give it to.
         counts.skipped++
+        mappings.push([c.id, "", "skipped"])
         out.push({ source_id: c.id, conversation_id: null, action: "skipped" })
         continue
       }
@@ -212,8 +214,8 @@ export async function importConversations(ctx: Ctx<Actor>) {
       ),
       stmt(
         db,
-        `INSERT OR IGNORE INTO import_conversations (job_id, source_id, conversation_id, action)
-         SELECT ?, value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)`,
+        `INSERT OR IGNORE INTO import_conversations (job_id, source_id, conversation_id, action, finished)
+         SELECT ?, value ->> 0, value ->> 1, value ->> 2, value ->> 2 = 'skipped' FROM json_each(?)`,
         job.id,
         JSON.stringify(mappings),
       ),
@@ -224,8 +226,6 @@ export async function importConversations(ctx: Ctx<Actor>) {
         conversations_skipped: counts.skipped,
       }),
     ])
-  } else if (counts.skipped) {
-    await bump(db, job.id, { conversations_skipped: counts.skipped }).run()
   }
   return { conversations: out }
 
