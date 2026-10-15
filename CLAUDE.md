@@ -491,6 +491,36 @@ each reconnect), with `submitView`/`closeView`/`clickInView` and `formField()`
 describing inputs; the app's `ViewDialog` (`components/view-dialog.tsx`) shows
 the top one as a Dialog. CLI: `campflare view list|submit|close|click`.
 
+**Pins, bookmarks, saved items** (migration 0022). A pin is two columns on the
+message, `pinned_by`/`pinned_at`: a message is pinned only to its own
+conversation, so `messageJson` sends `pinned_to` with no query, and
+`conversations.history` counts `pin_count` in its page's batch. `pins.add`/`remove`
+(`src/methods/pins.ts`; members, not archived; messages only: `file` is
+`not_pinnable`, as is a tombstone; 100 per conversation, `too_many_pins`) are one
+batch: the row before, the guarded UPDATE, the row after, the audience, the
+reactions and the count, which say which error it was. `pin_added`/`pin_removed`
+(`src/db/pins.ts`, Slack's shape with `item`, `pin_count` as a string,
+`pinned_info`, `has_pins`) go to the members; `chat.delete` clears the pin in its
+own batch and sends `pin_removed` too. Bookmarks (`src/methods/bookmarks.ts`,
+table `bookmarks`): `type` `link` only, http(s) only (`invalid_link`), `emoji`
+stored as `:name:`, a fixed-width `rank` (next after the highest, computed in the
+INSERT, which also caps the bar at 100: `too_many_bookmarks`); `not_found` for
+an unknown id; members change them, readers list them; `bookmark_added`/
+`_changed`/`_removed` (`{ channel_id, bookmark }`) to the members. Saved items
+are Slack's stars (`src/methods/stars.ts`, user tokens only, table `stars` keyed
+`message:<channel>/<ts>`, `file:<id>` or `channel:<id>`): `stars.list` pages by
+cursor and by `count`/`page`, newest first, and its query leaves out what the
+person can no longer read (`VISIBLE`, the files' `readsOneOf()`); deleting a
+message or file deletes its stars in the same batch; `star_added`/`star_removed`
+go to the person alone. `conversations.history` and `.replies` mark the caller's
+saved messages `is_starred` with `starredOfQuery()` (shapes.ts) in the page's
+batch, as `reactionsOfQuery()` does; other serialisations don't. Scopes
+`pins:*`, `bookmarks:*` (read/write presets and the bot defaults) and `stars:*`
+(presets only). Core keeps `state.pins` and `state.bookmarks` per conversation
+once loaded, and `pinned_to`/`is_starred` on messages. CLI: `pin`, `unpin`,
+`pins`, `bookmarks`, `bookmark add|edit|remove`, `save`, `unsave`, `saved`. MCP:
+`list_pins`, `list_saved`.
+
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
 workspace, its owner and #general; others add people, set roles

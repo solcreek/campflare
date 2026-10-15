@@ -118,6 +118,7 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | chat                  | `postMessage`, `update`, `delete`, `getPermalink`, `meMessage`, `postEphemeral`                                                                                                                                                                  |
 | streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                                |
 | reactions             | `add`, `remove`, `get`                                                                                                                                                                                                                           |
+| pins/bookmarks/stars  | `pins.add`, `remove`, `list` (messages; `pinned_to` in history, `pin_count`); `bookmarks.add`, `edit`, `remove`, `list` (http(s) links); `stars.add`, `remove`, `list` (saved messages, files and conversations; `is_starred` in history)        |
 | files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
 | search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
 | users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set`                                                                                                                                                      |
@@ -343,6 +344,7 @@ or a bot:
 | `read_messages`, `read_thread`                | a conversation's recent messages, or a whole thread          |
 | `search_messages`                             | search, with the same syntax as `search.messages`            |
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
+| `list_pins`, `list_saved`                     | what's pinned in a conversation; what you saved for later    |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
 | `wait_for_reply`                              | block until someone else answers in a conversation or thread |
@@ -397,6 +399,9 @@ campflare search 'deploy in:#dev from:@bob after:2026-10-01'
 llm "summarise" | CAMPFLARE_TOKEN=xoxb-… campflare stream '#dev' --thread 1791990000.000100 --status "is thinking…"
                                                               # as a bot: one message that grows as stdin arrives
 campflare stop '#dev' 1791990000.000200                       # as a person: stop an app's reply mid-stream
+campflare pin '#dev' 1791990000.000300                        # pins '#dev' lists them; unpin takes it back
+campflare bookmark add '#dev' https://ci.example.com --title CI --emoji :rocket:   # bookmarks '#dev'
+campflare save '#dev' 1791990000.000300                       # saved lists them, newest first; unsave
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
@@ -449,8 +454,9 @@ client and CLI bundles. The Worker is bundled by wrangler.
   when one person is in several.
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Pins, bookmarks, stars, reminders, scheduled messages, user groups, custom
-  emoji, scheduled DND hours, time zones.
+- Reminders, scheduled messages, user groups, custom emoji, scheduled DND
+  hours, time zones. Pinning files (pin the message that shares one), file
+  comments, bookmark folders and message or file bookmarks.
 - Sharding a very large workspace's hub across several Durable Objects.
 - Huddles: expiring the seat of a browser that died without leaving, and
   Slack's `calls.*` API (see [docs/huddles.md](docs/huddles.md)).

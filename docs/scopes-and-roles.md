@@ -78,6 +78,9 @@ and, when the method asks for any, `x-accepted-oauth-scopes`. The official
 | `users.lookupByEmail`                                                                                                                             | `users:read.email`                           |
 | `users.setPresence`                                                                                                                               | `users:write`                                |
 | `users.profile.get` / `.set`                                                                                                                      | `users.profile:read` / `users.profile:write` |
+| `pins.add`, `.remove` / `pins.list`                                                                                                               | `pins:write` / `pins:read`                   |
+| `bookmarks.add`, `.edit`, `.remove` / `bookmarks.list`                                                                                            | `bookmarks:write` / `bookmarks:read`         |
+| `stars.add`, `.remove` / `stars.list` (user tokens)                                                                                               | `stars:write` / `stars:read`                 |
 | `team.info`                                                                                                                                       | `team:read`                                  |
 | `emoji.list`                                                                                                                                      | `emoji:read`                                 |
 | `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`                                                                                | `dnd:read` / `dnd:write`                     |
@@ -127,9 +130,10 @@ Scope lists are long, so `campflare.tokens.create` also takes `preset`
 `scopes.ts`, so the CLI, MCP and anyone calling the API share one meaning:
 
 - `read`: every `:read` and `:history`, `search:read`, `files:read`,
-  `reactions:read`, `emoji:read`, `dnd:read`, `team:read`, `users:read`,
-  `rtm:stream`, `events:read`, `views:read`.
-- `write`: `read` plus `chat:write`, `reactions:write`, `files:write`, the
+  `reactions:read`, `pins:read`, `bookmarks:read`, `stars:read`, `emoji:read`,
+  `dnd:read`, `team:read`, `users:read`, `rtm:stream`, `events:read`, `views:read`.
+- `write`: `read` plus `chat:write`, `reactions:write`, `pins:write`,
+  `bookmarks:write`, `stars:write`, `files:write`, the
   conversation `:write` scopes, `views:write`. What a chat agent needs.
 - `full`: every user scope. What a person's own sign-in gets.
 
