@@ -69,7 +69,7 @@ method("conversations.list", "actor", async (ctx) => {
     ctx.env.DB,
     `SELECT c.*, m.last_read FROM conversations c
      LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?
-     WHERE c.team_id = ? AND c.id > ? AND ${typesFilter(ctx.args.list("types"))} ${archived}
+     WHERE c.team_id = ? AND c.id > ? AND ${typesFilter(ctx, ctx.args.list("types"))} ${archived}
        AND ((c.kind = 'channel' AND c.is_private = 0) OR m.user_id IS NOT NULL)
      ORDER BY c.id LIMIT ?`,
     ctx.auth.user.id,

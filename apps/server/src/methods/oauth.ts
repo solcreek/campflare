@@ -1,4 +1,4 @@
-import { DEFAULT_USER_SCOPES, prepareToken } from "../api/auth"
+import { FULL_USER_SCOPES, prepareToken } from "../api/auth"
 import { method } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { AUTH_BASE_PATH } from "../auth"
@@ -112,7 +112,7 @@ method("oauth.v2.access", "none", async (ctx) => {
   if (!user || user.deleted || user.is_bot || !team) throw new CampflareError("account_inactive")
   const clientName = (clients!.results[0] as { name: string | null } | undefined)?.name || clientId
 
-  const known = new Set(DEFAULT_USER_SCOPES)
+  const known = new Set(FULL_USER_SCOPES)
   const scopes = splitScopes(answer.scope).filter((s) => known.has(s))
   const { token, insert } = await prepareToken(ctx.env, {
     teamId: team.id,

@@ -4,6 +4,7 @@ import type { ConversationRow, MemberRow, UserRow } from "../db/rows"
 import { conversationJson, presenceOf, userJson } from "../api/shapes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
+import { requireScope } from "../api/scopes"
 import { imPeer } from "../db/conversations"
 import { nowSeconds } from "../api/ids"
 
@@ -110,19 +111,23 @@ method("users.profile.set", "user", async (ctx) => {
   return { profile: userJson(user, ctx.origin).profile }
 })
 
-const TYPE_FILTERS: Record<string, string> = {
-  public_channel: "(c.kind = 'channel' AND c.is_private = 0)",
-  private_channel: "(c.kind = 'channel' AND c.is_private = 1)",
-  mpim: "c.kind = 'mpim'",
-  im: "c.kind = 'im'",
+const TYPE_FILTERS: Record<string, { sql: string; scope: string }> = {
+  public_channel: { sql: "(c.kind = 'channel' AND c.is_private = 0)", scope: "channels:read" },
+  private_channel: { sql: "(c.kind = 'channel' AND c.is_private = 1)", scope: "groups:read" },
+  mpim: { sql: "c.kind = 'mpim'", scope: "mpim:read" },
+  im: { sql: "c.kind = 'im'", scope: "im:read" },
 }
 
-/** The SQL filter for a `types` argument (default: public channels, as Slack). */
-export function typesFilter(types: string[]): string {
+/**
+ * The SQL filter for a `types` argument (default: public channels, as Slack).
+ * Each type asked for needs its :read scope, as on Slack.
+ */
+export function typesFilter(ctx: Ctx<Actor>, types: string[]): string {
   const filters = (types.length ? types : ["public_channel"]).map((t) => {
     const f = TYPE_FILTERS[t]
     if (!f) throw new CampflareError("invalid_types")
-    return f
+    requireScope(ctx.auth, [f.scope])
+    return f.sql
   })
   return `(${filters.join(" OR ")})`
 }
@@ -135,7 +140,7 @@ method("users.conversations", "actor", async (ctx) => {
   const rows = await all<ConversationRow & Pick<MemberRow, "last_read">>(
     ctx.env.DB,
     `SELECT c.*, m.last_read FROM members m JOIN conversations c ON c.id = m.conversation_id
-     WHERE m.user_id = ? AND c.team_id = ? AND c.id > ? AND ${typesFilter(ctx.args.list("types"))} ${archived}
+     WHERE m.user_id = ? AND c.team_id = ? AND c.id > ? AND ${typesFilter(ctx, ctx.args.list("types"))} ${archived}
      ORDER BY c.id LIMIT ?`,
     user.id,
     ctx.auth.team.id,

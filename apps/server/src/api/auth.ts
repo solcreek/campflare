@@ -4,59 +4,9 @@ import type { Env } from "../env"
 import { sha256Hex } from "./crypto"
 import type { Auth } from "./context"
 import { CampflareError } from "./errors"
+import { FULL_USER_SCOPES } from "./scopes"
 
-export const DEFAULT_USER_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "channels:write",
-  "chat:write",
-  "dnd:read",
-  "dnd:write",
-  "emoji:read",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "groups:write",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "mpim:write",
-  "reactions:read",
-  "reactions:write",
-  "search:read",
-  "team:read",
-  "users:read",
-  "users:read.email",
-  "users:write",
-  "users.profile:read",
-  "users.profile:write",
-]
-
-export const DEFAULT_BOT_SCOPES = [
-  "channels:history",
-  "channels:join",
-  "channels:read",
-  "chat:write",
-  "chat:write.public",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "reactions:read",
-  "reactions:write",
-  "team:read",
-  "users:read",
-]
-
-export const APP_SCOPES = ["connections:write"]
+export { APP_SCOPES, DEFAULT_BOT_SCOPES, FULL_USER_SCOPES } from "./scopes"
 
 const PREFIX = { user: "xoxp-", bot: "xoxb-", app: "xapp-" } as const
 
@@ -99,7 +49,7 @@ export async function actorFor(env: Env, userId: string): Promise<Auth> {
   if (!user || user.deleted) throw new CampflareError("account_inactive")
   const team = teams!.results[0] as TeamRow | undefined
   if (!team) throw new CampflareError("invalid_auth")
-  return { kind: user.is_bot ? "bot" : "user", team, user, scopes: DEFAULT_USER_SCOPES }
+  return { kind: user.is_bot ? "bot" : "user", team, user, scopes: FULL_USER_SCOPES }
 }
 
 type TokenOptions = {
