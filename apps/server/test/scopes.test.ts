@@ -235,3 +235,55 @@ describe("migration 0018", () => {
     expect(await stored(bot)).toBe("bot")
   })
 })
+
+describe("campflare.tokens.create", () => {
+  type Created = { token: string; scopes: string[]; expires: number | null }
+  type Listed = { tokens: { label: string; scopes: string[]; expires: number | null }[] }
+
+  it("mints a token for an agent from a preset and scopes, which hold", async () => {
+    const w = await workspace()
+    const made = await ok<Created>(
+      "campflare.tokens.create",
+      { preset: "read", scopes: "chat:write", label: "agente" },
+      w.owner.token,
+    )
+    expect(made.scopes).toEqual([...PRESETS.read!, "chat:write"])
+    await ok("chat.postMessage", { channel: w.general, text: "Hallo, こんにちは" }, made.token)
+    await expectError("reactions.add", { channel: w.general, name: "eyes", timestamp: "1.000001" }, made.token, "missing_scope")
+    const listed = await ok<Listed>("campflare.tokens.list", {}, w.owner.token)
+    expect(listed.tokens.find((t) => t.label === "agente")).toMatchObject({ scopes: ["read", "chat:write"], expires: null })
+  })
+
+  it("copies the caller's scopes when asked for none, and never grants more than the caller holds", async () => {
+    const w = await workspace()
+    expect((await ok<Created>("campflare.tokens.create", {}, w.owner.token)).scopes).toEqual(FULL_USER_SCOPES)
+    const reader = (await ok<Created>("campflare.tokens.create", { preset: "read,tokens:write" }, w.owner.token)).token
+    // A narrow token hands on what it has, as a list: its own presets can't grow past it.
+    const sub = await ok<Created>("campflare.tokens.create", { scopes: "search:read" }, reader)
+    expect(sub.scopes).toEqual(["search:read"])
+    const copy = await ok<Created>("campflare.tokens.create", {}, reader)
+    expect(copy.scopes).toEqual([...PRESETS.read!, "tokens:write"])
+    expect(await call("campflare.tokens.create", { preset: "write" }, reader)).toMatchObject({
+      error: "missing_scope",
+      needed: expect.stringContaining("chat:write"),
+    })
+  })
+
+  it("refuses a scope or preset it doesn't know", async () => {
+    const w = await workspace()
+    expect(await call("campflare.tokens.create", { scopes: "chat:write,admin:everything" }, w.owner.token)).toMatchObject({
+      error: "invalid_arguments",
+      response_metadata: { messages: ["[ERROR] unknown scopes or presets: admin:everything"] },
+    })
+    await expectError("campflare.tokens.create", { preset: "bot" }, w.owner.token, "invalid_arguments")
+  })
+
+  it("makes a token that expires", async () => {
+    const w = await workspace()
+    const before = Math.floor(Date.now() / 1000)
+    const made = await ok<Created>("campflare.tokens.create", { preset: "read", expires_in: 3600 }, w.owner.token)
+    expect(made.expires).toBeGreaterThanOrEqual(before + 3600)
+    await ok("auth.test", {}, made.token)
+    await expectError("campflare.tokens.create", { expires_in: 5 }, w.owner.token, "invalid_arguments")
+  })
+})

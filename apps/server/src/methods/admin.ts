@@ -1,6 +1,7 @@
 import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { AppRow, TokenRow, UserRow } from "../db/rows"
 import { APP_SCOPES, issueToken } from "../api/auth"
+import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES } from "../api/scopes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
@@ -247,22 +248,47 @@ method("campflare.users.setRole", "user", async (ctx) => {
   return { user: userJson(user, ctx.origin) }
 })
 
-/** Another user token for yourself (one per device or script), or for anyone if you're an admin. */
+/**
+ * Another user token for yourself (one per device, script or agent), or for
+ * someone you outrank. `preset` (read, write, full) and `scopes` (a list)
+ * say what it may do, together; neither copies the calling token's. It never
+ * gets a scope the calling token lacks. `expires_in` (seconds) makes it stop
+ * working after that long.
+ */
 method("campflare.tokens.create", "user", async (ctx) => {
   const userId = ctx.args.str("user") ?? ctx.auth.user.id
   if (userId !== ctx.auth.user.id) {
     // A token for someone is acting as them: only for someone you outrank, or an admin could become an owner.
     requireOutranks(ctx, await activePerson(ctx, userId))
   }
+  const scopes = grantedScopes(ctx)
+  const expiresIn = ctx.args.has("expires_in") ? ctx.args.int("expires_in", 0) : undefined
+  if (expiresIn !== undefined && expiresIn < 60) throw invalidArguments("expires_in is at least 60 seconds")
+  const expires = expiresIn === undefined ? undefined : nowSeconds() + expiresIn
   const token = await issueToken(ctx.env, {
     teamId: ctx.auth.team.id,
     kind: "user",
     userId,
-    scopes: ["full"],
+    scopes,
+    expires,
     label: ctx.args.str("label") ?? "",
   })
-  return { token, user_id: userId }
+  return { token, user_id: userId, scopes: expandScopes(scopes.join(",")), expires: expires ?? null }
 })
+
+/** What a new token is to hold, as stored: presets by name while the caller holds every scope, else a list. */
+function grantedScopes(ctx: Ctx<Actor>): string[] {
+  const held = new Set(ctx.auth.scopes)
+  const full = FULL_USER_SCOPES.every((s) => held.has(s))
+  const asked = [...ctx.args.list("preset"), ...ctx.args.list("scopes")]
+  if (!asked.length) return full ? ["full"] : ctx.auth.scopes
+  const unknown = asked.filter((s) => !GRANTABLE_USER_SCOPES.has(s))
+  if (unknown.length) throw invalidArguments(`unknown scopes or presets: ${unknown.join(", ")}`)
+  const missing = expandScopes(asked.join(",")).filter((s) => !held.has(s))
+  if (missing.length) throw new CampflareError("missing_scope", { needed: missing.join(","), provided: ctx.auth.scopes.join(",") })
+  // A preset grows as features add scopes; stored by name only when the caller holds everything it can grow into.
+  return full ? [...new Set(asked)] : expandScopes(asked.join(","))
+}
 
 method("campflare.tokens.list", "user", async (ctx) => {
   const rows = await all<TokenRow>(
@@ -272,7 +298,17 @@ method("campflare.tokens.list", "user", async (ctx) => {
     ctx.auth.user.id,
   )
   // The hash's prefix identifies a token for revoking without revealing it.
-  return { tokens: rows.map((t) => ({ id: t.hash.slice(0, 16), kind: t.kind, label: t.label, created: t.created })) }
+  return {
+    tokens: rows.map((t) => ({
+      id: t.hash.slice(0, 16),
+      kind: t.kind,
+      label: t.label,
+      created: t.created,
+      /** As stored: presets by name (campflare.methods.list says what they hold). */
+      scopes: t.scopes ? t.scopes.split(",") : [],
+      expires: t.expires,
+    })),
+  }
 })
 
 method("campflare.tokens.revoke", "user", async (ctx) => {
