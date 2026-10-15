@@ -11,6 +11,7 @@ import "./methods/chat"
 import "./methods/chat-stream"
 import "./methods/conversations"
 import "./methods/dnd"
+import "./methods/emoji"
 import "./methods/events"
 import "./methods/invites"
 import "./methods/oauth"
@@ -36,12 +37,13 @@ import { handleResponseUrl } from "./interactivity"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
-import { authorize, methods, type Auth, type Ctx } from "./api/context"
+import { authorize, bodyLimits, methods, type Auth, type Ctx } from "./api/context"
 import { acceptedScopes, NEEDS, type Verb } from "./api/scopes"
 import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
 import { avatarSvg } from "./api/avatar"
 import { handlePhoto } from "./api/photos"
+import { handleEmoji } from "./api/emoji"
 import { first } from "./db/query"
 import type { UserRow } from "./db/rows"
 
@@ -91,6 +93,10 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
   if (accepted.length) scopeHeaders["x-accepted-oauth-scopes"] = accepted.join(",")
 
   try {
+    const limit = bodyLimits.get(name)
+    if (limit !== undefined && Number(c.req.header("content-length") ?? 0) > limit) {
+      throw new CampflareError("error_too_big")
+    }
     const args = await Args.from(c.req.raw)
     let auth: Auth | undefined
     let verb: Verb | undefined
@@ -195,5 +201,8 @@ app.get("/avatars/:id", async (c) => {
 
 /** Profile photos (users.setPhoto): /avatars/<user>/<photo>_<size>.<ext>, no token, as the initials. */
 app.get("/avatars/:id/:name", (c) => handlePhoto(c.env, c.req.param("id"), c.req.param("name")))
+
+/** Custom emoji images (emoji.list's URLs): /emoji/<team>/<image>.<ext>, no token, as Slack's. */
+app.get("/emoji/:team/:file", (c) => handleEmoji(c.env, c.req.param("team"), c.req.param("file")))
 
 export default app

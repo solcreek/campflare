@@ -1,7 +1,16 @@
 import { ApiError, listen, type ApiResult, type Client, type Listener, type RealtimeEvent } from "@campflare/client"
 import type { Click } from "./blocks"
 import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
-import { type Action, initialState, isReply, keyOf, type PinItem, reduce, type WorkspaceState } from "./state"
+import {
+  type Action,
+  applyEvent,
+  initialState,
+  isReply,
+  keyOf,
+  type PinItem,
+  reduce,
+  type WorkspaceState,
+} from "./state"
 import type { Bookmark, Conversation, Message, User } from "./types"
 import type { FormValues, View } from "./views"
 
@@ -163,6 +172,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       ...Object.keys(state.pins).map((c) => loadPins(c).catch(() => {})),
       ...Object.keys(state.bookmarks).map((c) => loadBookmarks(c).catch(() => {})),
       loadViews(),
+      loadEmoji(),
     ])
   }
 
@@ -175,6 +185,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       minDelayMs: options.minDelayMs,
       maxDelayMs: options.maxDelayMs,
       onEvent(event) {
+        if (event.type === "emoji_changed") for (const pending of emojiLoads) pending.push(event)
         dispatch({ type: "event", event })
         fillIn(event)
       },
@@ -219,11 +230,33 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
         conversations,
       })
       void loadViews()
+      void loadEmoji()
     } catch (error) {
       dispatch({ type: "failed", error: error instanceof ApiError ? error.code : String(error) })
       return false
     }
     return true
+  }
+
+  /** The emoji_changed events seen while each emoji.list is in flight. */
+  const emojiLoads = new Set<RealtimeEvent[]>()
+
+  /** Custom emoji, for drawing :name: as images; emoji_changed keeps them current. Text stands in without them. */
+  async function loadEmoji() {
+    const during: RealtimeEvent[] = []
+    emojiLoads.add(during)
+    try {
+      const r = await client.call<ApiResult & { emoji: Record<string, string> }>("emoji.list")
+      // A change that arrived while the list was in flight may be newer than the list: it goes
+      // on top. One the list already has changes nothing when applied again.
+      let loaded: WorkspaceState = { ...state, emoji: r.emoji }
+      for (const event of during) loaded = applyEvent(loaded, event)
+      dispatch({ type: "emoji", emoji: loaded.emoji })
+    } catch {
+      // A token without emoji:read, or an older server: names show as :name:.
+    } finally {
+      emojiLoads.delete(during)
+    }
   }
 
   async function loadHistory(channel: string, opts: { older?: boolean } = {}) {

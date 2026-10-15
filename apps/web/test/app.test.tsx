@@ -322,6 +322,48 @@ describe("App", () => {
     expect(within(article).getByRole("button", { name: "tada, 1" })).toBeTruthy()
   })
 
+  it("draws custom emoji as images in messages and reactions, kept current by emoji_changed", async () => {
+    const fiesta = "https://x.test/emoji/T1/aa.png"
+    const server = fakeServer({ "emoji.list": () => ({ emoji: { fiesta, party: "alias:fiesta" } }) })
+    await signedIn(server)
+    act(() =>
+      server.push({
+        type: "message",
+        channel: "CGEN",
+        ts: "1700000400.000000",
+        user: VINCENT,
+        text: "Olé :party: :matsuri: :nope:",
+      }),
+    )
+    const message = (await within(log()).findByText("Olé", { exact: false })).closest("article")!
+    expect((await within(message).findByRole("img", { name: "party" })).getAttribute("src")).toBe(fiesta)
+    expect(within(message).getByText(":matsuri:")).toBeTruthy()
+    expect(within(message).getByText(":nope:")).toBeTruthy()
+
+    act(() =>
+      server.push({
+        type: "reaction_added",
+        user: VINCENT,
+        reaction: "fiesta",
+        item: { type: "message", channel: "CGEN", ts: "1700000400.000000" },
+      }),
+    )
+    const reaction = within(message).getByRole("button", { name: "fiesta, 1" })
+    expect(within(reaction).getByRole("img", { name: "fiesta" }).getAttribute("src")).toBe(fiesta)
+
+    // Added: drawn at once. Removed: back to its name.
+    act(() => server.push({ type: "emoji_changed", subtype: "add", name: "matsuri", value: "https://x.test/b.gif" }))
+    expect(within(message).getByRole("img", { name: "matsuri" }).getAttribute("src")).toBe("https://x.test/b.gif")
+    act(() => server.push({ type: "emoji_changed", subtype: "remove", names: ["fiesta", "party"] }))
+    expect(within(message).queryByRole("img", { name: "party" })).toBeNull()
+    expect(within(reaction).getByText(":fiesta:")).toBeTruthy()
+
+    // An image that fails to load shows the name instead.
+    fireEvent.error(within(message).getByRole("img", { name: "matsuri" }))
+    expect(within(message).getByText(":matsuri:")).toBeTruthy()
+    expect(within(message).queryByRole("img", { name: "matsuri" })).toBeNull()
+  })
+
   it("reports a reaction the server refused", async () => {
     const server = fakeServer({ "reactions.add": () => new Error("too_many_reactions") })
     const { user } = await signedIn(server)

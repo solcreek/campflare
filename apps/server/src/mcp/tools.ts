@@ -319,6 +319,25 @@ export function buildServer(caller: Caller): McpServer {
   )
 
   server.registerTool(
+    "list_emoji",
+    {
+      title: "List custom emoji",
+      description:
+        "The workspace's own emoji, beside the standard ones, for messages (:name:) and reactions: " +
+        "each name with its image URL, or the emoji it is another name for.",
+      annotations: READ,
+    },
+    tool(async () => {
+      const res = await invoke<{ emoji: Record<string, string> }>(caller, "emoji.list")
+      return {
+        emoji: Object.entries(res.emoji).map(([name, value]) =>
+          value.startsWith("alias:") ? { name, alias_for: value.slice(6) } : { name, url: value },
+        ),
+      }
+    }),
+  )
+
+  server.registerTool(
     "send_message",
     {
       title: "Send a message",

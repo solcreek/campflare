@@ -349,6 +349,35 @@ describe("@slack/web-api", () => {
     expect((await bob.client.users.profile.get({})).profile?.image_72).toBe(`${base}/avatars/${bob.id}?s=72`)
   })
 
+  it("emoji.list and admin.emoji.*: custom emoji, aliases, rename and remove", async () => {
+    const png = await sunsetPng(48, 48)
+    // admin.emoji.add takes a URL; an upload is campflare.emoji.add, multipart like users.setPhoto.
+    const added = (await bob.client.apiCall("campflare.emoji.add", {
+      name: "sdk-sunset",
+      image: Buffer.from(png),
+    })) as unknown as { emoji: { url: string } }
+    expect(new Uint8Array(await (await fetch(added.emoji.url)).arrayBuffer())).toEqual(png)
+    await owner.admin.emoji.addAlias({ name: "sdk-sun", alias_for: "sdk-sunset" })
+    const listed = await owner.emoji.list({ include_categories: true })
+    expect(listed.emoji).toMatchObject({ "sdk-sunset": added.emoji.url, "sdk-sun": "alias:sdk-sunset" })
+    expect(listed.categories?.[0]?.name).toBe("smileys_people")
+    const admin = await bob.client.admin.emoji.list({})
+    expect(admin.emoji?.["sdk-sunset"]).toMatchObject({ url: added.emoji.url, uploaded_by: bob.id })
+    await bob.client.admin.emoji.rename({ name: "sdk-sunset", new_name: "sdk-dusk" })
+    expect((await owner.emoji.list()).emoji).toMatchObject({ "sdk-dusk": added.emoji.url, "sdk-sun": "alias:sdk-dusk" })
+    // The URL fetch is refused by the SSRF guard before any network: a local name.
+    await expect(owner.admin.emoji.add({ name: "sdk-local", url: "https://localhost/e.png" })).rejects.toMatchObject({
+      data: { error: "error_bad_upload" },
+    })
+    await expect(owner.admin.emoji.add({ name: "thumbsup", url: "https://example.com/e.png" })).rejects.toMatchObject({
+      data: { error: "error_name_taken_i18n" },
+    })
+    await owner.admin.emoji.remove({ name: "sdk-dusk" })
+    const after = (await owner.emoji.list()).emoji ?? {}
+    expect(Object.keys(after).filter((n) => n.startsWith("sdk-"))).toEqual([])
+    expect((await fetch(added.emoji.url)).status).toBe(404)
+  })
+
   it("usergroups: create, members, list, update, disable and enable", async () => {
     const created = await owner.usergroups.create({ name: "Soporte · サポート", handle: "soporte", channels: general })
     const id = created.usergroup!.id!

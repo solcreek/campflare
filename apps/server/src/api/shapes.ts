@@ -42,7 +42,7 @@ function status(user: UserRow) {
     : { status_text: user.status_text, status_emoji: user.status_emoji, status_expiration: user.status_expiration }
 }
 
-export function teamJson(team: TeamRow, origin: string) {
+export function teamJson(team: Pick<TeamRow, "id" | "name" | "domain">, origin: string) {
   return {
     id: team.id,
     name: team.name,

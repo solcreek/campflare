@@ -5,6 +5,8 @@
 // Bold, italic and strike need a boundary on each side that isn't a letter or
 // digit, as in Slack, so snake_case_names stay as they are.
 
+import { EMOJI_CHARS } from "./emoji-chars"
+
 export type Inline =
   | { type: "text"; text: string }
   | { type: "bold" | "italic" | "strike"; children: Inline[] }
@@ -162,81 +164,51 @@ export function plainText(
     .join("\n")
 }
 
-// The shortcodes people type most, and every reaction the seed data uses.
-// Anything else renders as its :name: until a full table is worth its weight.
-const EMOJI: Record<string, string> = {
-  "+1": "👍",
-  thumbsup: "👍",
-  "-1": "👎",
-  thumbsdown: "👎",
-  smile: "😄",
-  smiley: "😃",
-  grinning: "😀",
-  joy: "😂",
-  laughing: "😆",
-  wink: "😉",
-  blush: "😊",
-  heart_eyes: "😍",
-  thinking_face: "🤔",
-  sweat_smile: "😅",
-  cry: "😢",
-  sob: "😭",
-  scream: "😱",
-  rage: "😡",
-  sunglasses: "😎",
-  slightly_smiling_face: "🙂",
-  upside_down_face: "🙃",
-  wave: "👋",
-  clap: "👏",
-  pray: "🙏",
-  muscle: "💪",
-  ok_hand: "👌",
-  raised_hands: "🙌",
-  point_up: "☝️",
-  eyes: "👀",
-  heart: "❤️",
-  broken_heart: "💔",
-  fire: "🔥",
-  tada: "🎉",
-  rocket: "🚀",
-  sparkles: "✨",
-  star: "⭐",
-  zap: "⚡",
-  boom: "💥",
-  "100": "💯",
-  white_check_mark: "✅",
-  heavy_check_mark: "✔️",
-  x: "❌",
-  warning: "⚠️",
-  question: "❓",
-  exclamation: "❗",
-  bulb: "💡",
-  memo: "📝",
-  calendar: "📆",
-  coffee: "☕",
-  ramen: "🍜",
-  pizza: "🍕",
-  beers: "🍻",
-  bug: "🐛",
-  wrench: "🔧",
-  hammer: "🔨",
-  lock: "🔒",
-  key: "🔑",
-  bell: "🔔",
-  mag: "🔍",
-  link: "🔗",
-  pushpin: "📌",
-  speech_balloon: "💬",
-  see_no_evil: "🙈",
-  shrug: "🤷",
-  facepalm: "🤦",
-  saluting_face: "🫡",
-  melting_face: "🫠",
-  campfire: "🏕️",
+let chars: Map<string, string> | undefined
+
+/** Every standard short name's character (emoji-chars.ts), read into a Map on first use. */
+function standardChars(): Map<string, string> {
+  if (!chars) {
+    chars = new Map()
+    const parts = EMOJI_CHARS.split(" ")
+    for (let i = 0; i + 1 < parts.length; i += 2) chars.set(parts[i]!, parts[i + 1]!)
+  }
+  return chars
 }
 
+/**
+ * A map's own string value for a key, never one inherited from Object.prototype: names
+ * come from message text, so `:constructor:` or `:__proto__:` must find nothing.
+ */
+export function ownValue(map: Record<string, string>, key: string): string | undefined {
+  const value = Object.hasOwn(map, key) ? map[key] : undefined
+  return typeof value === "string" ? value : undefined
+}
+
+/** A standard emoji's character by its short name (any of Slack's names for it), else undefined. */
 export function emojiChar(name: string): string | undefined {
-  return EMOJI[name]
+  return standardChars().get(name)
+}
+
+/** How to draw an emoji: a standard one's character, or a custom one's image. */
+export type EmojiLook = { char: string } | { url: string }
+
+/**
+ * An emoji by name: standard first (custom names can't take a standard one's), then the
+ * workspace's own (emoji.list's map), following aliases to an image or a standard emoji.
+ * Undefined when unknown: show the :name: people typed.
+ */
+export function emojiLook(custom: Record<string, string>, name: string): EmojiLook | undefined {
+  // Aliases of aliases are made to name the original, but a few hops cost nothing.
+  for (let hops = 0; hops < 4; hops++) {
+    const char = emojiChar(name)
+    if (char) return { char }
+    const value = ownValue(custom, name)
+    if (!value) return undefined
+    if (!value.startsWith("alias:")) return /^https?:\/\//i.test(value) ? { url: value } : undefined
+    name = value.slice("alias:".length)
+  }
+  return undefined
 }
 
 /** Common shortcodes, for a reaction picker. */

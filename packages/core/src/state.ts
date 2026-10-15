@@ -1,5 +1,6 @@
 import type { RealtimeEvent } from "@campflare/client"
 import type { Bookmark, Conversation, Message, Pin, Reaction, Self, User } from "./types"
+import { ownValue } from "./mrkdwn"
 import type { View } from "./views"
 
 // The workspace as an app sees it, and one pure function that moves it on.
@@ -36,6 +37,8 @@ export interface WorkspaceState {
   pins: Record<string, Pin[]>
   /** A conversation's bookmarks bar, in rank order, by channel id, once loaded (bookmarks.list). */
   bookmarks: Record<string, Bookmark[]>
+  /** The workspace's custom emoji, as emoji.list answers: name → image URL, or "alias:<name>". */
+  emoji: Record<string, string>
 }
 
 /**
@@ -76,6 +79,8 @@ export type Action =
   | { type: "pins"; channel: string; items: PinItem[] }
   /** bookmarks.list for a conversation. */
   | { type: "bookmarks"; channel: string; bookmarks: Bookmark[] }
+  /** emoji.list: every custom emoji, replacing what was held. */
+  | { type: "emoji"; emoji: Record<string, string> }
 
 /** A pinned message as the API sends it (pins.list's items, pin_added's item). */
 export interface PinItem {
@@ -99,6 +104,7 @@ export const initialState: WorkspaceState = {
   views: [],
   pins: {},
   bookmarks: {},
+  emoji: {},
 }
 
 export const keyOf = (channel: string, ts: string) => `${channel}/${ts}`
@@ -174,6 +180,8 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
       return { ...state, pins: { ...state.pins, [action.channel]: action.items.map(pinOf) } }
     case "bookmarks":
       return { ...state, bookmarks: { ...state.bookmarks, [action.channel]: byRank(action.bookmarks) } }
+    case "emoji":
+      return { ...state, emoji: action.emoji }
     case "event":
       return applyEvent(state, action.event)
   }
@@ -473,6 +481,27 @@ function unpinDeleted(state: WorkspaceState, channel: string, ts: string): Works
   return { ...state, pins: { ...state.pins, [channel]: pins.filter((p) => p.ts !== ts) } }
 }
 
+/** emoji_changed: an emoji (or alias) added, emoji removed with their aliases, or one renamed. */
+function onEmoji(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
+  const emoji = { ...state.emoji }
+  if (event.subtype === "add" && typeof event.name === "string" && typeof event.value === "string") {
+    emoji[event.name] = event.value
+  } else if (event.subtype === "remove" && Array.isArray(event.names)) {
+    for (const name of event.names as string[]) delete emoji[name]
+  } else if (event.subtype === "rename" && typeof event.old_name === "string" && typeof event.new_name === "string") {
+    const value = typeof event.value === "string" ? event.value : ownValue(emoji, event.old_name)
+    delete emoji[event.old_name]
+    if (value !== undefined) emoji[event.new_name] = value
+    // Its aliases follow it, as the server's do.
+    for (const [name, v] of Object.entries(emoji)) {
+      if (v === `alias:${event.old_name}`) emoji[name] = `alias:${event.new_name}`
+    }
+  } else {
+    return state
+  }
+  return { ...state, emoji }
+}
+
 /** One RTM event. Events the store has no use for leave it as it was. */
 export function applyEvent(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
   switch (event.type) {
@@ -498,6 +527,8 @@ export function applyEvent(state: WorkspaceState, event: RealtimeEvent): Workspa
       return onStar(state, event, true)
     case "star_removed":
       return onStar(state, event, false)
+    case "emoji_changed":
+      return onEmoji(state, event)
     case "channel_marked":
     case "group_marked":
     case "im_marked":

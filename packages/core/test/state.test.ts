@@ -534,3 +534,41 @@ describe("streamed messages and thread statuses", () => {
     expect(s.statuses[threadKey]?.status).toBe("is still working")
   })
 })
+
+describe("custom emoji", () => {
+  const emoji = (change: Record<string, unknown>): Action => ({
+    type: "event",
+    event: { type: "emoji_changed", ...change },
+  })
+  const loaded: Action = {
+    type: "emoji",
+    emoji: { fiesta: "https://x.test/a.png", matsuri: "alias:fiesta", yay: "alias:+1" },
+  }
+
+  it("holds emoji.list and follows additions, removals and renames", () => {
+    let s = run(loaded)
+    expect(s.emoji).toEqual(loaded.type === "emoji" ? loaded.emoji : {})
+    s = reduce(s, emoji({ subtype: "add", name: "fete", value: "https://x.test/b.gif" }))
+    expect(s.emoji.fete).toBe("https://x.test/b.gif")
+    s = reduce(s, emoji({ subtype: "rename", old_name: "fiesta", new_name: "festival", value: "https://x.test/a.png" }))
+    expect(s.emoji).toMatchObject({ festival: "https://x.test/a.png", matsuri: "alias:festival", yay: "alias:+1" })
+    expect(s.emoji.fiesta).toBeUndefined()
+    s = reduce(s, emoji({ subtype: "remove", names: ["festival", "matsuri"] }))
+    expect(Object.keys(s.emoji).toSorted()).toEqual(["fete", "yay"])
+    // A rename without a value keeps the one held.
+    s = reduce(s, emoji({ subtype: "rename", old_name: "fete", new_name: "fete-2" }))
+    expect(s.emoji["fete-2"]).toBe("https://x.test/b.gif")
+  })
+
+  it("ignores emoji_changed it can't read", () => {
+    const s = run(loaded)
+    expect(reduce(s, emoji({ subtype: "other" }))).toBe(s)
+    expect(reduce(s, emoji({ subtype: "add", name: "x" }))).toBe(s)
+  })
+
+  it("never takes a value from Object.prototype on a rename", () => {
+    const s = reduce(run(loaded), emoji({ subtype: "rename", old_name: "constructor", new_name: "kept" }))
+    expect(s.emoji.kept).toBeUndefined()
+    expect(Object.keys(s.emoji).toSorted()).toEqual(["fiesta", "matsuri", "yay"])
+  })
+})

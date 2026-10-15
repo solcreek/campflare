@@ -2,12 +2,12 @@ import {
   type Block,
   conversationTitle,
   displayName,
-  emojiChar,
+  emojiLook,
   type Inline,
   parseMarkdown,
   parseMrkdwn,
 } from "@campflare/core"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { cn } from "@/lib/utils"
 import { useWorkspaceState } from "@/workspace"
 
@@ -34,16 +34,35 @@ function ChannelMention({ id, label }: { id: string; label?: string }) {
   return <Mention>{`#${label ?? title ?? id}`}</Mention>
 }
 
-/** An emoji by shortcode: the character when known, else the :name: people typed. */
+/**
+ * An emoji by shortcode: a standard one's character, the workspace's own as its image (in
+ * messages and reactions alike), else the :name: people typed, which also stands in for an
+ * image that fails to load.
+ */
 export function Emoji({ name }: { name: string }) {
-  const char = emojiChar(name)
-  return char ? (
-    <span role="img" aria-label={name} title={`:${name}:`}>
-      {char}
-    </span>
-  ) : (
-    <span>{`:${name}:`}</span>
-  )
+  const custom = useWorkspaceState((s) => s.emoji)
+  const look = emojiLook(custom, name)
+  const [broken, setBroken] = useState<string>()
+  if (look && "char" in look) {
+    return (
+      <span role="img" aria-label={name} title={`:${name}:`}>
+        {look.char}
+      </span>
+    )
+  }
+  if (look && look.url !== broken) {
+    return (
+      <img
+        src={look.url}
+        alt={name}
+        title={`:${name}:`}
+        loading="lazy"
+        onError={() => setBroken(look.url)}
+        className="inline-block size-[1.375em] object-contain align-text-bottom"
+      />
+    )
+  }
+  return <span>{`:${name}:`}</span>
 }
 
 function InlineNode({ node }: { node: Inline }) {
