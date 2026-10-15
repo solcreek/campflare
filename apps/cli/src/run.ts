@@ -1795,19 +1795,19 @@ const commands: Record<string, Command> = {
         res = await s.client.call<AppSettings>("campflare.apps.setInteractivity", { app, request_url: interactivity })
       }
       const specs = (values.command as string[] | undefined) ?? []
-      let commands: CommandJson[] | undefined
+      let appCommands: CommandJson[] | undefined
       if (specs.length || values["clear-commands"]) {
         const given = specs.map((spec) => commandSpec(spec, str(values["command-url"])))
         const set = await s.client.call<{ ok: boolean; commands: CommandJson[] }>("campflare.apps.setCommands", {
           app,
           commands: JSON.stringify(given),
         })
-        commands = set.commands
+        appCommands = set.commands
       } else if (values["command-url"] !== undefined) {
         throw new UsageError("--command-url goes with the --command it applies to")
       }
       res ??= await s.client.call<AppSettings>("campflare.apps.info", { app })
-      if (values.json) return s.print(commands ? { ...res, commands } : res)
+      if (values.json) return s.print(appCommands ? { ...res, commands: appCommands } : res)
       const { id, name, bot_user_id, signing_secret, event_subscriptions: subs } = res.app
       io.stdout(
         `App ${id} (${name}), bot user ${bot_user_id}\nSigning secret: ${signing_secret}\n` +
@@ -1815,9 +1815,9 @@ const commands: Record<string, Command> = {
           `Interactivity URL: ${res.app.interactivity.request_url ?? "none (Socket Mode only)"}\n`,
       )
       for (const line of deliveryLines(subs)) io.stdout(`${line}\n`)
-      if (commands) {
-        io.stdout(commands.length ? "Slash commands:\n" : "Slash commands: none\n")
-        for (const c of commands) io.stdout(`  ${commandLine(c)}${c.url ? `  → ${c.url}` : ""}\n`)
+      if (appCommands) {
+        io.stdout(appCommands.length ? "Slash commands:\n" : "Slash commands: none\n")
+        for (const c of appCommands) io.stdout(`  ${commandLine(c)}${c.url ? `  → ${c.url}` : ""}\n`)
       }
       if (values["rotate-secret"]) {
         io.stdout("The old signing secret no longer signs anything: update the app's secret now.\n")
