@@ -250,14 +250,14 @@ describe("@slack/web-api", () => {
     const png = await sunsetPng(300, 200)
     const set = await bob.client.users.setPhoto({ image: Buffer.from(png), crop_x: 50, crop_y: 0, crop_w: 200 })
     expect(set.ok).toBe(true)
-    const profile = (await bob.client.users.profile.get()).profile!
+    const profile = (await bob.client.users.profile.get({})).profile!
     expect(profile.is_custom_image).toBe(true)
     const small = await fetch(profile.image_72!)
     expect(small.status).toBe(200)
     expect(small.headers.get("content-type")).toBe("image/png")
     expect(new Uint8Array(await (await fetch(profile.image_original!)).arrayBuffer())).toEqual(png)
-    await bob.client.users.deletePhoto()
-    expect((await bob.client.users.profile.get()).profile?.image_72).toBe(`${base}/avatars/${bob.id}?s=72`)
+    await bob.client.users.deletePhoto({})
+    expect((await bob.client.users.profile.get({})).profile?.image_72).toBe(`${base}/avatars/${bob.id}?s=72`)
   })
 
   it("usergroups: create, members, list, update, disable and enable", async () => {

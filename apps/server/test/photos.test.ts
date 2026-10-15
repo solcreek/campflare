@@ -137,7 +137,7 @@ describe("users.setPhoto", () => {
       body: new FormData(),
     })
     expect(await res.json()).toMatchObject({ ok: false, error: "bad_image" })
-    const text = new TextEncoder().encode("¿Qué? 你好 — not an image")
+    const text = new Uint8Array(new TextEncoder().encode("¿Qué? 你好 — not an image"))
     expect((await setPhoto(w.owner.token, text)).error).toBe("bad_image")
     expect((await setPhoto(w.owner.token, makeGif(64, 64, 3))).error).toBe("too_many_frames")
     // A still GIF is fine; its sizes are PNG.
