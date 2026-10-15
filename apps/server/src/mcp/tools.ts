@@ -208,6 +208,35 @@ export function buildServer(caller: Caller): McpServer {
   )
 
   server.registerTool(
+    "list_groups",
+    {
+      title: "List user groups",
+      description:
+        "User groups (@handle mentions that reach everyone in them) with their members. " +
+        "To mention one in a message, write its `mention` text.",
+      annotations: READ,
+    },
+    tool(async () => {
+      const [res, dir] = await Promise.all([
+        invoke<{
+          usergroups: { id: string; handle: string; name: string; description: string; users: string[] }[]
+        }>(caller, "usergroups.list", { include_users: true }),
+        directory(caller),
+      ])
+      return {
+        groups: res.usergroups.map((g) => ({
+          id: g.id,
+          handle: `@${g.handle}`,
+          name: g.name,
+          ...(g.description ? { description: g.description } : {}),
+          mention: `<!subteam^${g.id}|@${g.handle}>`,
+          members: g.users.map((u) => dir.name(u)),
+        })),
+      }
+    }),
+  )
+
+  server.registerTool(
     "send_message",
     {
       title: "Send a message",
