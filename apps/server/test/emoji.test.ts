@@ -109,7 +109,24 @@ describe("campflare.emoji.add", () => {
   it("follows Slack's name rules", async () => {
     const w = await workspace()
     const png = await makePng(32, 32)
-    for (const bad of ["fête", "café", "über", "表情", "絵文字", "이모지", "a b", "a.b", "a+b", "x".repeat(101)]) {
+    for (const bad of [
+      "fête",
+      "café",
+      "über",
+      "表情",
+      "絵文字",
+      "이모지",
+      "a b",
+      "a.b",
+      "a+b",
+      "x".repeat(101),
+      "__proto__",
+      "constructor",
+      ":Constructor:",
+      "toString",
+      "hasOwnProperty",
+      "__defineGetter__",
+    ]) {
       expect([bad, (await upload(w.owner.token, bad, png)).error]).toEqual([bad, "error_bad_name_i18n"])
     }
     expect((await upload(w.owner.token, "", png)).error).toBe("error_missing_name")

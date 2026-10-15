@@ -20,6 +20,14 @@ const EMOJI_MAX_SIDE = 4096
 
 const NAME = /^[a-z0-9_-]{1,100}$/
 
+/**
+ * Names that are Object.prototype's members (`constructor`, `__proto__`…): clients keep emoji
+ * in plain objects keyed by name, where these would read as what they inherit.
+ */
+const PROTOTYPE_NAMES: ReadonlySet<string> = new Set(
+  Object.getOwnPropertyNames(Object.prototype).map((n) => n.toLowerCase()),
+)
+
 /** Every standard short name, which custom emoji may not take. */
 export const STANDARD_EMOJI: ReadonlySet<string> = new Set([
   ...STANDARD_EMOJI_CATEGORIES.flatMap(([, names]) => names.split(" ")),
@@ -31,13 +39,13 @@ export const nameOf = (raw: string | undefined) => raw?.trim().replace(/^:|:$/g,
 
 /**
  * A new emoji's name, checked as Slack checks it: lowercase letters, digits, - and _, up to
- * 100 characters, and not a standard emoji's.
+ * 100 characters, not a standard emoji's, and not one of Object.prototype's members.
  */
 export function newName(raw: string | undefined): string {
   const name = nameOf(raw)
   if (!name) throw new CampflareError("error_missing_name")
   if (STANDARD_EMOJI.has(name)) throw new CampflareError("error_name_taken_i18n")
-  if (!NAME.test(name)) throw new CampflareError("error_bad_name_i18n")
+  if (!NAME.test(name) || PROTOTYPE_NAMES.has(name)) throw new CampflareError("error_bad_name_i18n")
   return name
 }
 
