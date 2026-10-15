@@ -56,6 +56,8 @@ describe("MCP over Streamable HTTP", () => {
       "get_events",
       "list_conversations",
       "list_people",
+      "list_pins",
+      "list_saved",
       "read_messages",
       "read_thread",
       "search_messages",
@@ -121,6 +123,34 @@ describe("MCP over Streamable HTTP", () => {
     })
     expect(found.total).toBe(1)
     expect(found.matches[0]).toMatchObject({ conversation: w.general, conversation_name: "#general", from: "@owner" })
+    await client.close()
+  })
+
+  it("lists what's pinned in a conversation and what you saved", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const client = await connect(w.owner.token)
+    const { ts } = await ok<{ ts: string }>(
+      "chat.postMessage",
+      { channel: w.general, text: "Decisión: lanzamos el lunes · 周一发布" },
+      bob.token,
+    )
+    await ok("pins.add", { channel: w.general, timestamp: ts }, bob.token)
+    const pins = await callTool<{ pins: Record<string, unknown>[] }>(client, "list_pins", { conversation: "#general" })
+    expect(pins.pins).toEqual([
+      expect.objectContaining({ ts, from: "@bob", pinned: true, pinned_by: "@bob", permalink: expect.any(String) }),
+    ])
+    expect(await callTool(client, "list_saved")).toEqual({ total: 0, items: [] })
+    await ok("stars.add", { channel: w.general, timestamp: ts }, w.owner.token)
+    await ok("stars.add", { channel: w.general }, w.owner.token)
+    const saved = await callTool<{ total: number; items: Record<string, unknown>[] }>(client, "list_saved")
+    expect(saved.total).toBe(2)
+    expect(saved.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "message", conversation: w.general, ts, from: "@bob" }),
+        { type: "conversation", conversation: w.general },
+      ]),
+    )
     await client.close()
   })
 
