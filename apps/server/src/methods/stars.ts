@@ -94,16 +94,17 @@ async function star(ctx: Ctx<Actor>, added: boolean) {
     )
     if (!removed) throw new CampflareError("not_starred")
   }
-  publish(ctx, {
-    teamId: ctx.auth.team.id,
-    audience: [user],
-    event: {
-      type: added ? "star_added" : "star_removed",
-      user,
-      item: await itemJson(ctx, t, now),
-      event_ts: `${(Date.now() / 1000).toFixed(6)}`,
-    },
-  })
+  // The event's item (a message's reactions and files) is read after the response.
+  const eventTs = `${(Date.now() / 1000).toFixed(6)}`
+  ctx.waitUntil(
+    itemJson(ctx, t, now).then((item) =>
+      publish(ctx, {
+        teamId: ctx.auth.team.id,
+        audience: [user],
+        event: { type: added ? "star_added" : "star_removed", user, item, event_ts: eventTs },
+      }),
+    ),
+  )
   return {}
 }
 

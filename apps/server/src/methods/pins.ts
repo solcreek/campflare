@@ -59,13 +59,12 @@ async function pin(ctx: Ctx<Actor>, added: boolean) {
     if (!(after!.results[0] as MessageRow).pinned_at) throw new CampflareError("too_many_pins")
   } else if (!was.pinned_at) throw new CampflareError("no_pin")
   const message = added ? (after!.results[0] as MessageRow) : was
-  announcePin(ctx, c, {
-    added,
-    message,
-    extras: await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]),
-    audience: audienceFrom(audience!),
-    count: pinCount,
-  })
+  // The message's files and app, for the event, are read after the response.
+  ctx.waitUntil(
+    loadExtras(ctx.env, [message], reactions!.results as ReactionRow[]).then((extras) =>
+      announcePin(ctx, c, { added, message, extras, audience: audienceFrom(audience!), count: pinCount }),
+    ),
+  )
   return {}
 }
 
