@@ -497,8 +497,10 @@ and `reminders.*` (`src/methods/reminders.ts`, user tokens) keep rows in D1
 (`scheduled_messages`, `reminders`, migration 0023). The `Scheduler` Durable
 Object (`src/scheduler.ts`, one per workspace, binding `SCHEDULER`) holds only
 an alarm: methods `await armScheduler()` before answering, and `alarm()` reads
-what's due from D1 (`runDue()`), fires it in order and re-arms at the next due
-time in D1. A separate class, not `TeamHub`'s alarm, which retries deliveries
+what's due from D1 (`runDue()`), fires it five at a time (each conversation's
+messages in order; the built-in bot looked up once per run; a failing row never
+stops the others), then always re-arms at the next due time in D1 unless the
+alarm is already set sooner (`rearm()`). A separate class, not `TeamHub`'s alarm, which retries deliveries
 every few seconds and must not read D1 each time. Firing claims a row with a
 guarded UPDATE (`claimed_until`, a 60 s lease, and a random `claim` token;
 `chat.deleteScheduledMessage` refuses a claimed row) and finishes it in the

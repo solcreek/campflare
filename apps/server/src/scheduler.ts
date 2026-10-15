@@ -22,6 +22,8 @@ export const CLAIM_SECONDS = 60
 export const MAX_ATTEMPTS = 5
 /** Rows of each kind fired per run; more are left for the next, which comes at once. */
 const PER_RUN = 50
+/** Rows fired at once: reminders, and conversations' scheduled messages (each conversation's in order). */
+export const CONCURRENCY = 5
 
 type WaitUntil = (p: Promise<unknown>) => void
 
@@ -67,14 +69,61 @@ export class Scheduler extends DurableObject<Env> {
     if (current === null || current > at * 1000) await this.ctx.storage.setAlarm(at * 1000)
   }
 
-  /** Fires what is due, then rings again at the next due time in D1 (none: no alarm). */
+  /**
+   * Fires what is due, then rings again at the next due time in D1. Whatever
+   * the run hit, it re-arms; only when D1 can't say what's next does the alarm
+   * fail, for Cloudflare to retry it.
+   */
   override async alarm(): Promise<void> {
     const teamId = await this.ctx.storage.get<string>("team")
     if (!teamId) return
     const pending: Promise<unknown>[] = []
-    const next = await runDue(this.env, teamId, (p) => pending.push(p))
+    try {
+      await runDue(this.env, teamId, (p) => pending.push(p))
+    } catch (error) {
+      console.error("scheduler run failed", teamId, error)
+    }
     await Promise.allSettled(pending)
-    if (next !== undefined) await this.ctx.storage.setAlarm(Math.max(next * 1000, Date.now()))
+    await this.rearm(teamId)
+  }
+
+  /**
+   * Rings at the next due time in D1, unless it's already set to ring sooner:
+   * an arm() that came in while the run awaited D1 may have set an earlier one.
+   */
+  async rearm(teamId: string): Promise<void> {
+    const next = await nextDue(this.env, teamId)
+    if (next === undefined) return
+    const at = Math.max(next * 1000, Date.now())
+    const current = await this.ctx.storage.getAlarm()
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at)
+  }
+}
+
+/** What one run's rows share: the workspace, the clock, and the built-in bot, looked up at most once. */
+interface Run {
+  env: Env
+  team: TeamRow
+  waitUntil: WaitUntil
+  now: number
+  bot: () => Promise<Actor>
+}
+
+/** Runs `fn` over `items`, at most `limit` at a time. */
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  const queue = [...items]
+  const worker = async () => {
+    for (let item = queue.shift(); item !== undefined; item = queue.shift()) await fn(item)
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, worker))
+}
+
+/** Runs a row's firing; an error is logged and leaves the row to its claim, never stopping the others. */
+async function isolated(kind: string, id: string, fire: Promise<void>) {
+  try {
+    await fire
+  } catch (error) {
+    console.error(`${kind} ${id} failed`, error)
   }
 }
 
@@ -84,15 +133,16 @@ export async function armScheduler(env: Env, teamId: string, at: number): Promis
 }
 
 /**
- * Fires every due scheduled message and reminder of a workspace (up to
- * PER_RUN of each), in due order; answers the next due time, if any.
+ * Fires the due scheduled messages and reminders of a workspace (up to
+ * PER_RUN of each): CONCURRENCY at a time, each conversation's messages in
+ * due order.
  */
-export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()) {
+export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()): Promise<void> {
   const db = env.DB
   const [messages, reminders, team] = await db.batch([
     stmt(
       db,
-      `SELECT id FROM scheduled_messages WHERE team_id = ? AND post_at <= ? AND (claimed_until IS NULL OR claimed_until <= ?)
+      `SELECT id, channel_id FROM scheduled_messages WHERE team_id = ? AND post_at <= ? AND (claimed_until IS NULL OR claimed_until <= ?)
        ORDER BY post_at, created LIMIT ?`,
       teamId,
       now,
@@ -111,14 +161,21 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
     stmt(db, "SELECT * FROM teams WHERE id = ?", teamId),
   ])
   const teamRow = team!.results[0] as TeamRow | undefined
-  if (!teamRow) return undefined
-  for (const { id } of messages!.results as { id: string }[]) {
-    await fireScheduledMessage(env, teamRow, id, waitUntil, now)
+  if (!teamRow) return
+  let bot: Promise<Actor> | undefined
+  const run: Run = { env, team: teamRow, waitUntil, now, bot: () => (bot ??= systemActor(env, teamRow)) }
+  const byChannel = new Map<string, string[]>()
+  for (const { id, channel_id } of messages!.results as { id: string; channel_id: string }[]) {
+    byChannel.set(channel_id, [...(byChannel.get(channel_id) ?? []), id])
   }
-  for (const { id } of reminders!.results as { id: string }[]) {
-    await fireReminder(env, teamRow, id, waitUntil, now)
-  }
-  return nextDue(env, teamId)
+  await Promise.all([
+    pool([...byChannel.values()], CONCURRENCY, async (ids) => {
+      for (const id of ids) await isolated("scheduled message", id, fireScheduledMessage(run, id))
+    }),
+    pool(reminders!.results as { id: string }[], CONCURRENCY, ({ id }) =>
+      isolated("reminder", id, fireReminder(run, id)),
+    ),
+  ])
 }
 
 /** The earliest time anything of the workspace is due (a claimed row: when its claim ends). */
@@ -135,14 +192,9 @@ export async function nextDue(env: Env, teamId: string): Promise<number | undefi
 }
 
 /** One scheduled message, if this runner gets the claim: posted, or dropped when it can't be. */
-export async function fireScheduledMessage(
-  env: Env,
-  team: TeamRow,
-  id: string,
-  waitUntil: WaitUntil,
-  now = nowSeconds(),
-) {
-  const row = await claimRow<ScheduledMessageRow>(env, "scheduled_messages", id, now)
+async function fireScheduledMessage(run: Run, id: string) {
+  const { env, team, waitUntil } = run
+  const row = await claimRow<ScheduledMessageRow>(env, "scheduled_messages", id, run.now)
   if (!row) return
   try {
     const ts = await postScheduled(env, team, row, waitUntil)
@@ -154,7 +206,7 @@ export async function fireScheduledMessage(
       console.error("scheduled message failed, will retry", row.id, error)
       return
     }
-    await dropScheduled(env, team, row, error instanceof CampflareError ? error.code : "internal_error", waitUntil)
+    await dropScheduled(run, row, error instanceof CampflareError ? error.code : "internal_error")
   }
 }
 
@@ -210,14 +262,15 @@ export async function postScheduled(env: Env, team: TeamRow, row: ScheduledMessa
  * A scheduled message that can't be posted: dropped, and its poster told in a
  * DM from the built-in bot when they are a person still here to read it.
  */
-async function dropScheduled(env: Env, team: TeamRow, row: ScheduledMessageRow, error: string, waitUntil: WaitUntil) {
+async function dropScheduled(run: Run, row: ScheduledMessageRow, error: string) {
+  const { env, waitUntil } = run
   const drop = stmt(env.DB, "DELETE FROM scheduled_messages WHERE id = ? AND claim = ?", row.id, row.claim)
   const poster = row.app_id
     ? undefined
     : await first<UserRow>(env.DB, "SELECT * FROM users WHERE id = ? AND deleted = 0", row.user_id)
   try {
     if (!poster) throw new Error("nobody to tell")
-    const ctx = serverCtx(env, await systemActor(env, team), row.origin, waitUntil)
+    const ctx = serverCtx(env, await run.bot(), row.origin, waitUntil)
     const excerpt = row.text.length > 200 ? `${row.text.slice(0, 200)}…` : row.text
     const text = `Your scheduled message to <#${row.channel_id}> couldn't be sent (${error})${excerpt ? `: ${excerpt}` : "."}`
     await dmFromSystem(ctx, poster.id, text, [holdsClaim(env.DB, "scheduled_messages", row.id, row.claim!), drop])
@@ -247,8 +300,9 @@ export function removed(
 }
 
 /** One reminder, if this runner gets the claim: a DM from the built-in bot, unless its person has gone. */
-export async function fireReminder(env: Env, team: TeamRow, id: string, waitUntil: WaitUntil, now = nowSeconds()) {
-  const row = await claimRow<ReminderRow>(env, "reminders", id, now)
+async function fireReminder(run: Run, id: string) {
+  const { env, waitUntil } = run
+  const row = await claimRow<ReminderRow>(env, "reminders", id, run.now)
   if (!row) return
   const done = stmt(
     env.DB,
@@ -262,7 +316,7 @@ export async function fireReminder(env: Env, team: TeamRow, id: string, waitUnti
       await done.run()
       return
     }
-    const ctx = serverCtx(env, await systemActor(env, team), row.origin, waitUntil)
+    const ctx = serverCtx(env, await run.bot(), row.origin, waitUntil)
     await dmFromSystem(ctx, person.id, `Reminder: ${row.text}`, [
       holdsClaim(env.DB, "reminders", row.id, row.claim!),
       done,

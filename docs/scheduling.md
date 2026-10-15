@@ -21,11 +21,17 @@ holds nothing but the workspace id and its alarm.
 - Scheduling writes the row, then `await`s `Scheduler.arm(teamId, at)`, which
   moves the alarm earlier if `at` is earlier than it. The method answers only
   after both, so an `ok` means the alarm is set.
-- `alarm()` reads what is due from D1 (up to 50 of each kind, oldest first),
-  fires each in order, then re-arms at the earliest due time left in D1. It
-  never trusts its own memory of what is pending: an item scheduled while an
-  arm call failed is still found by the next alarm in the workspace, and every
-  run ends by setting the alarm from D1.
+- `alarm()` reads what is due from D1 (up to 50 of each kind, oldest first)
+  and fires it, five at a time: reminders side by side, scheduled messages
+  side by side across conversations but in due order within one. The built-in
+  bot is looked up once per run. A row that fails is logged and left to its
+  claim; it never stops the others.
+- Then, whatever the run hit, it re-arms at the earliest due time left in D1,
+  unless the alarm is already set sooner (an `arm()` that came in while the run
+  awaited D1). It never trusts its own memory of what is pending: an item
+  scheduled while an arm call failed is still found by the next alarm in the
+  workspace. Only when D1 can't say what's next does `alarm()` throw, and
+  Cloudflare retries it.
 
 Why a separate class and not `TeamHub`'s alarm: a Durable Object has one alarm,
 and `TeamHub.alarm()` already multiplexes Socket Mode resends and Events API
@@ -172,7 +178,8 @@ The posted message itself goes out as any message does (`message`,
 | what fails                               | what happens                                                                                                |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `Scheduler.arm` after the row is written | the method errors; the row stays and fires at the next alarm in the workspace (any later schedule sets one) |
-| the alarm run throws                     | Cloudflare retries it; claimed items wait for their lease                                                   |
+| the run fails (D1 errors)                | logged; the alarm re-arms from D1; claimed items wait for their lease                                       |
+| D1 can't say what's next                 | `alarm()` throws and Cloudflare retries it                                                                  |
 | the runner dies mid-post                 | the batch didn't commit: the claim expires, tried again in 60 s                                             |
 | the runner dies after the post           | the row is gone with the post: nothing repeats                                                              |
 | the runner stalls past its lease         | the run that takes over posts; the stalled one's batch fails on the guard                                   |

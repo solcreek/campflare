@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { issueToken } from "../src/api/auth"
 import { nowSeconds } from "../src/api/ids"
-import { MAX_ATTEMPTS, runDue } from "../src/scheduler"
+import { MAX_ATTEMPTS, nextDue, runDue } from "../src/scheduler"
 import { call, eventually, expectError, ok, workspace, type Workspace } from "./helpers"
 
 type Reminder = {
@@ -210,6 +210,22 @@ describe("firing", () => {
     await ok("reminders.complete", { reminder: r.id }, bob.token)
   })
 
+  it("fires many at once, from one built-in bot", async () => {
+    const w = await workspace()
+    const people = await Promise.all(
+      ["ana", "bjorn", "chloe", "daichi", "eun", "fang", "gael"].map((n) => w.addUser(n)),
+    )
+    for (const [i, person] of people.entries()) await makeDue((await add(person.token, `n.${i}`, "in 1 hour")).id)
+    await runDurableObjectAlarm(scheduler(w.teamId))
+    for (const [i, person] of people.entries()) {
+      expect((await systemDms(w, person)).map((m) => m.text)).toEqual([`Reminder: n.${i}`])
+    }
+    const bots = await env.DB.prepare("SELECT COUNT(*) AS n FROM apps WHERE team_id = ? AND built_in IS NOT NULL")
+      .bind(w.teamId)
+      .first("n")
+    expect(bots).toBe(1)
+  })
+
   it("never fires one completed or deleted before its time", async () => {
     const w = await workspace()
     const done = await add(w.owner.token, "done early", "in 1 hour")
@@ -245,13 +261,15 @@ describe("firing", () => {
       .run()
     const pending: Promise<unknown>[] = []
     const now = nowSeconds()
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now)).toBeGreaterThan(now)
+    await runDue(env, w.teamId, (p) => pending.push(p), now)
+    expect(await nextDue(env, w.teamId)).toBeGreaterThan(now)
     const row = () => env.DB.prepare("SELECT fired, attempts FROM reminders WHERE id = ?").bind(r.id).first()
     expect(await row()).toEqual({ fired: 0, attempts: 1 })
     await env.DB.prepare("UPDATE reminders SET attempts = ?, claimed_until = NULL WHERE id = ?")
       .bind(MAX_ATTEMPTS - 1, r.id)
       .run()
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now)).toBeUndefined()
+    await runDue(env, w.teamId, (p) => pending.push(p), now)
+    expect(await nextDue(env, w.teamId)).toBeUndefined()
     expect(await row()).toEqual({ fired: 1, attempts: MAX_ATTEMPTS })
     await Promise.allSettled(pending)
     expect(await call("reminders.info", { reminder: r.id }, w.owner.token)).toMatchObject({ ok: true })

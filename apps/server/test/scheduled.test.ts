@@ -5,7 +5,17 @@ import { issueToken } from "../src/api/auth"
 import { nowSeconds } from "../src/api/ids"
 import { isUniqueViolation } from "../src/db/query"
 import type { ScheduledMessageRow, TeamRow } from "../src/db/rows"
-import { CLAIM_SECONDS, claimRow, isClaimLost, MAX_ATTEMPTS, postScheduled, runDue } from "../src/scheduler"
+import type { Env } from "../src/env"
+import {
+  CLAIM_SECONDS,
+  claimRow,
+  isClaimLost,
+  MAX_ATTEMPTS,
+  nextDue,
+  postScheduled,
+  runDue,
+  type Scheduler,
+} from "../src/scheduler"
 import { call, connect, eventually, expectError, ok, workspace, type Workspace } from "./helpers"
 
 type Scheduled = { scheduled_message_id: string; post_at: number; channel: string; message: Record<string, unknown> }
@@ -410,9 +420,11 @@ describe("firing", () => {
       .run()
     const pending: Promise<unknown>[] = []
     // A runner that died mid-post holds the claim: nothing happens, and the next run is when it ends.
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now)).toBe(now + CLAIM_SECONDS)
+    await runDue(env, w.teamId, (p) => pending.push(p), now)
+    expect(await nextDue(env, w.teamId)).toBe(now + CLAIM_SECONDS)
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).not.toContain("taken over")
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now + CLAIM_SECONDS)).toBeUndefined()
+    await runDue(env, w.teamId, (p) => pending.push(p), now + CLAIM_SECONDS)
+    expect(await nextDue(env, w.teamId)).toBeUndefined()
     await Promise.allSettled(pending)
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).toContain("taken over")
   })
@@ -468,15 +480,89 @@ describe("firing", () => {
       .run()
     const pending: Promise<unknown>[] = []
     const now = nowSeconds()
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now)).toBe(now + CLAIM_SECONDS)
+    await runDue(env, w.teamId, (p) => pending.push(p), now)
+    expect(await nextDue(env, w.teamId)).toBe(now + CLAIM_SECONDS)
     expect(await rowOf(res.scheduled_message_id)).toMatchObject({ attempts: 1 })
     await env.DB.prepare("UPDATE scheduled_messages SET attempts = ?, claimed_until = NULL WHERE id = ?")
       .bind(MAX_ATTEMPTS - 1, res.scheduled_message_id)
       .run()
-    expect(await runDue(env, w.teamId, (p) => pending.push(p), now)).toBeUndefined()
+    await runDue(env, w.teamId, (p) => pending.push(p), now)
+    expect(await nextDue(env, w.teamId)).toBeUndefined()
     await Promise.allSettled(pending)
     expect(await rowOf(res.scheduled_message_id)).toBeNull()
     expect((await history(w.general, w.owner.token)).map((m) => m.text)).not.toContain("unlucky")
+  })
+})
+
+describe("the alarm", () => {
+  it("never moves an alarm set meanwhile to later", async () => {
+    const w = await workspace()
+    const later = await schedule(w, { text: "later", post_at: nowSeconds() + 3600 })
+    const soon = nowSeconds() + 60
+    // An arm() that landed while a run awaited D1, for a row D1 doesn't show the run yet.
+    await scheduler(w.teamId).arm(w.teamId, soon)
+    await runInDurableObject(scheduler(w.teamId), (instance) => (instance as Scheduler).rearm(w.teamId))
+    expect(await alarmOf(w.teamId)).toBe(soon * 1000)
+    // With nothing sooner set, it rings at the next row.
+    await runInDurableObject(scheduler(w.teamId), async (instance, state) => {
+      await state.storage.deleteAlarm()
+      await (instance as Scheduler).rearm(w.teamId)
+    })
+    expect(await alarmOf(w.teamId)).toBe(later.post_at * 1000)
+  })
+
+  it("re-arms even when a run fails", async () => {
+    const w = await workspace()
+    const res = await schedule(w, { text: "after the outage" })
+    await makeDue(res.scheduled_message_id)
+    await runInDurableObject(scheduler(w.teamId), async (object, state) => {
+      const instance = object as Scheduler & { env: Env }
+      // D1's batch fails for this run; single statements still work.
+      const db = new Proxy(env.DB, {
+        get: (target, key) =>
+          key === "batch"
+            ? () => Promise.reject(new Error("D1 is down"))
+            : (Reflect.get(target, key) as unknown as (...a: unknown[]) => unknown).bind(target),
+      })
+      const healthy = instance.env
+      Object.defineProperty(instance, "env", { value: { ...env, DB: db }, configurable: true, writable: true })
+      await state.storage.deleteAlarm()
+      await instance.alarm()
+      expect(await state.storage.getAlarm()).not.toBeNull()
+      instance.env = healthy
+    })
+    expect((await history(w.general, w.owner.token)).map((m) => m.text)).not.toContain("after the outage")
+    await runDurableObjectAlarm(scheduler(w.teamId))
+    expect((await history(w.general, w.owner.token)).map((m) => m.text)).toContain("after the outage")
+  })
+
+  it("fires conversations side by side, each one's messages in order, past a row that fails", async () => {
+    const w = await workspace()
+    const channels = await Promise.all(
+      ["uno", "deux", "drei", "四", "다섯", "seis"].map(async (name) => {
+        const { channel } = await ok<{ channel: { id: string } }>("conversations.create", { name }, w.owner.token)
+        return channel.id
+      }),
+    )
+    const base = nowSeconds() + 600
+    const ids: string[] = []
+    for (const [i, channel] of channels.entries()) {
+      for (const n of [1, 2, 3]) {
+        ids.push((await schedule(w, { channel, text: `${i}.${n}`, post_at: base + n })).scheduled_message_id)
+      }
+    }
+    const broken = await schedule(w, { text: "broken", post_at: base })
+    await env.DB.prepare("UPDATE scheduled_messages SET post_at = post_at - 700 WHERE team_id = ?").bind(w.teamId).run()
+    await env.DB.prepare("UPDATE scheduled_messages SET origin = 'not a url' WHERE id = ?")
+      .bind(broken.scheduled_message_id)
+      .run()
+    await runDurableObjectAlarm(scheduler(w.teamId))
+    for (const [i, channel] of channels.entries()) {
+      const texts = (await history(channel, w.owner.token)).map((m) => m.text).toReversed()
+      expect(texts.slice(-3)).toEqual([`${i}.1`, `${i}.2`, `${i}.3`])
+    }
+    const left = await ok<Listed>("chat.scheduledMessages.list", {}, w.owner.token)
+    expect(left.scheduled_messages.map((m) => m.id)).toEqual([broken.scheduled_message_id])
   })
 })
 
