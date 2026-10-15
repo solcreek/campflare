@@ -68,11 +68,6 @@ method("team.info", "actor", async (ctx) => {
   return { team: teamJson(ctx.auth.team, ctx.origin) }
 })
 
-method("emoji.list", "actor", async () => {
-  // Custom emoji aren't supported yet; standard emoji are the client's to render.
-  return { emoji: {}, cache_ts: "0.000000" }
-})
-
 method("bots.info", "actor", async (ctx) => {
   const botId = ctx.args.req("bot")
   const app = await first<AppRow>(

@@ -5,6 +5,8 @@ export interface TeamRow {
   name: string
   domain: string
   created: number
+  /** When the workspace's custom emoji last changed, in epoch milliseconds (emoji.list's cache_ts). */
+  emoji_updated: number
 }
 
 export interface UserRow {
@@ -281,4 +283,15 @@ export interface NotificationPrefRow {
   conversation_id: string
   level: NotificationLevel
   updated: number
+}
+
+/** A custom emoji (migration 0024): an image, or an alias of another name. */
+export interface EmojiRow {
+  team_id: string
+  name: string
+  image: string | null
+  image_type: string | null
+  alias_for: string | null
+  created_by: string
+  created: number
 }

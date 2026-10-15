@@ -11,6 +11,7 @@ import "./methods/chat"
 import "./methods/chat-stream"
 import "./methods/conversations"
 import "./methods/dnd"
+import "./methods/emoji"
 import "./methods/events"
 import "./methods/invites"
 import "./methods/oauth"
@@ -42,6 +43,7 @@ import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
 import { avatarSvg } from "./api/avatar"
 import { handlePhoto } from "./api/photos"
+import { handleEmoji } from "./api/emoji"
 import { first } from "./db/query"
 import type { UserRow } from "./db/rows"
 
@@ -195,5 +197,8 @@ app.get("/avatars/:id", async (c) => {
 
 /** Profile photos (users.setPhoto): /avatars/<user>/<photo>_<size>.<ext>, no token, as the initials. */
 app.get("/avatars/:id/:name", (c) => handlePhoto(c.env, c.req.param("id"), c.req.param("name")))
+
+/** Custom emoji images (emoji.list's URLs): /emoji/<team>/<image>.<ext>, no token, as Slack's. */
+app.get("/emoji/:team/:file", (c) => handleEmoji(c.env, c.req.param("team"), c.req.param("file")))
 
 export default app

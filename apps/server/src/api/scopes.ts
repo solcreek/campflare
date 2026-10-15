@@ -117,6 +117,12 @@ export const NEEDS: Record<string, Need> = {
 
   "team.info": ["team:read"],
   "emoji.list": ["emoji:read"],
+  "admin.emoji.list": ["emoji:read"],
+  "admin.emoji.add": ["emoji:write"],
+  "admin.emoji.addAlias": ["emoji:write"],
+  "admin.emoji.remove": ["emoji:write"],
+  "admin.emoji.rename": ["emoji:write"],
+  "campflare.emoji.add": ["emoji:write"],
 
   "dnd.info": ["dnd:read"],
   "dnd.teamInfo": ["dnd:read"],
@@ -273,6 +279,7 @@ export const FULL_USER_SCOPES = [
   "users:write",
   "users.profile:write",
   "usergroups:write",
+  "emoji:write",
   "apps:read",
   "apps:write",
   "tokens:read",
@@ -312,6 +319,7 @@ export const DEFAULT_BOT_SCOPES = [
   "users:read",
   "users.profile:read",
   "usergroups:read",
+  "emoji:read",
   "rtm:stream",
   "events:read",
   "activity:read",
