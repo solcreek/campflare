@@ -1,6 +1,7 @@
 import { audienceOf, channelType, publish } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
+import { requireConversationScope } from "../api/scopes"
 import { ids, nowSeconds } from "../api/ids"
 import { conversationJson } from "../api/shapes"
 import { first, isUniqueViolation, run, stmt } from "./query"
@@ -27,6 +28,10 @@ async function findWithMembership(ctx: Ctx<Actor>, where: string, ...params: unk
     c,
     joined === null ? null : { conversation_id: c.id, user_id: ctx.auth.user.id, last_read: lastRead!, joined },
   )
+  // The token's scope for this type of conversation, once it's one the actor may see: a hidden
+  // one stays channel_not_found (requireReadable), so a missing scope never reveals it.
+  const visible = joined !== null || (c.kind === "channel" && !c.is_private)
+  if (ctx.verb && visible) requireConversationScope(ctx.auth, c, ctx.verb)
   return c
 }
 
@@ -89,7 +94,8 @@ export function requireNotArchived(c: ConversationRow) {
 /** Bots may post in any public channel (chat:write.public); everyone else must be a member. */
 export async function requireWritable(ctx: Ctx<Actor>, c: ConversationRow) {
   requireNotArchived(c)
-  if (ctx.auth.kind === "bot" && c.kind === "channel" && !c.is_private) return
+  if (ctx.auth.kind === "bot" && c.kind === "channel" && !c.is_private && ctx.auth.scopes.includes("chat:write.public"))
+    return
   await requireMember(ctx, c)
 }
 
@@ -109,6 +115,7 @@ export async function openConversation(ctx: Ctx<Actor>, userIds: string[]): Prom
     .all<UserRow>()
   if (users.results.length !== everyone.length) throw new CampflareError("user_not_found")
   const kind = others.length <= 1 ? "im" : "mpim"
+  if (ctx.verb) requireConversationScope(ctx.auth, { kind, is_private: 1 }, ctx.verb)
   const memberKey = everyone.join(",")
   const existing = await first<ConversationRow>(
     ctx.env.DB,

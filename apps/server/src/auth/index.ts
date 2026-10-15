@@ -3,7 +3,7 @@ import { mcp } from "@better-auth/mcp"
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider"
 import { betterAuth } from "better-auth"
 import { jwt } from "better-auth/plugins"
-import { DEFAULT_USER_SCOPES } from "../api/auth"
+import { GRANTABLE_USER_SCOPES } from "../api/scopes"
 import type { Env } from "../env"
 import { campflareSignIn } from "./sign-in"
 import { fetchClientMetadataResource } from "./cimd-fetch"
@@ -35,7 +35,7 @@ export function createAuth(env: Env, origin: string, overrides: AuthOverrides = 
         consentPage: "/consent",
         resource: `${origin}/mcp`,
         // OpenID's defaults, and Slack's user scopes for apps signing a person in (/oauth/v2/authorize).
-        scopes: ["openid", "profile", "email", "offline_access", ...DEFAULT_USER_SCOPES],
+        scopes: ["openid", "profile", "email", "offline_access", ...GRANTABLE_USER_SCOPES],
       }),
       cimd({
         fetchClientMetadataResource: overrides.fetchClientMetadataResource ?? fetchClientMetadataResource,

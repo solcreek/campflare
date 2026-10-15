@@ -1,8 +1,9 @@
 import { all, first, run } from "../db/query"
 import type { AppRow, UserRow } from "../db/rows"
 import { sha256Hex } from "../api/crypto"
-import { method } from "../api/context"
+import { method, methods, type Access } from "../api/context"
 import { CampflareError } from "../api/errors"
+import { acceptedScopes, NEEDS, PRESETS } from "../api/scopes"
 import { teamJson } from "../api/shapes"
 import { issueTicket, wsOrigin } from "../api/tickets"
 
@@ -12,6 +13,36 @@ method("api.test", "none", async (ctx) => {
   if (ctx.args.str("error")) throw new CampflareError(ctx.args.str("error")!, { args })
   return Object.keys(args).length > 0 ? { args } : {}
 })
+
+const TOKEN_KINDS: Record<Access, string[]> = {
+  user: ["user"],
+  bot: ["bot"],
+  actor: ["user", "bot"],
+  app: ["app"],
+  none: [],
+}
+
+/**
+ * Every method, with the token types it takes and the scopes it accepts (any
+ * one will do; a conversation method also wants the one for the
+ * conversation's type), and what each preset holds. No token needed: an agent
+ * checks its plan against its token's scopes (x-oauth-scopes) before acting.
+ */
+method("campflare.methods.list", "none", async () => ({
+  methods: [...methods]
+    .map(([name, def]) => {
+      const need = NEEDS[name] ?? []
+      return {
+        name,
+        tokens: TOKEN_KINDS[def.access],
+        scopes: acceptedScopes(need),
+        ...("conversation" in need ? { conversation_scope: need.conversation } : {}),
+        ...("all" in need ? { scopes_required: "all" } : {}),
+      }
+    })
+    .toSorted((a, b) => a.name.localeCompare(b.name)),
+  presets: PRESETS,
+}))
 
 method("auth.test", "actor", async (ctx) => {
   const { team, user, app, kind } = ctx.auth

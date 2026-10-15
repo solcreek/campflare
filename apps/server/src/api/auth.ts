@@ -4,59 +4,9 @@ import type { Env } from "../env"
 import { sha256Hex } from "./crypto"
 import type { Auth } from "./context"
 import { CampflareError } from "./errors"
+import { expandScopes, FULL_USER_SCOPES } from "./scopes"
 
-export const DEFAULT_USER_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "channels:write",
-  "chat:write",
-  "dnd:read",
-  "dnd:write",
-  "emoji:read",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "groups:write",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "mpim:write",
-  "reactions:read",
-  "reactions:write",
-  "search:read",
-  "team:read",
-  "users:read",
-  "users:read.email",
-  "users:write",
-  "users.profile:read",
-  "users.profile:write",
-]
-
-export const DEFAULT_BOT_SCOPES = [
-  "channels:history",
-  "channels:join",
-  "channels:read",
-  "chat:write",
-  "chat:write.public",
-  "files:read",
-  "files:write",
-  "groups:history",
-  "groups:read",
-  "im:history",
-  "im:read",
-  "im:write",
-  "mpim:history",
-  "mpim:read",
-  "reactions:read",
-  "reactions:write",
-  "team:read",
-  "users:read",
-]
-
-export const APP_SCOPES = ["connections:write"]
+export { APP_SCOPES, DEFAULT_BOT_SCOPES, FULL_USER_SCOPES } from "./scopes"
 
 const PREFIX = { user: "xoxp-", bot: "xoxb-", app: "xapp-" } as const
 
@@ -81,16 +31,24 @@ export async function authenticate(env: Env, token: string): Promise<Auth> {
   const row = tokens!.results[0] as TokenRow | undefined
   if (!row || row.revoked || row.kind !== kind)
     throw new CampflareError(row?.revoked ? "token_revoked" : "invalid_auth")
+  if (row.expires !== null && row.expires <= Math.floor(Date.now() / 1000)) throw new CampflareError("token_expired")
   const team = teams!.results[0] as TeamRow | undefined
   if (!team) throw new CampflareError("invalid_auth")
   const user = users!.results[0] as UserRow | undefined
   if (row.user_id && (!user || user.deleted)) throw new CampflareError("account_inactive")
   const app = apps!.results[0] as AppRow | undefined
-  return { kind, team, user, app, scopes: row.scopes ? row.scopes.split(",") : [] }
+  return {
+    kind,
+    team,
+    user,
+    app,
+    scopes: expandScopes(row.scopes),
+    ...(row.expires === null ? {} : { expires: row.expires }),
+  }
 }
 
 /** The identity of a Campflare user signed in some other way (an OAuth access token): as their user token would be. */
-export async function actorFor(env: Env, userId: string): Promise<Auth> {
+export async function actorFor(env: Env, userId: string, scopes = FULL_USER_SCOPES): Promise<Auth> {
   const [users, teams] = await env.DB.batch([
     stmt(env.DB, "SELECT * FROM users WHERE id = ?", userId),
     stmt(env.DB, "SELECT * FROM teams WHERE id = (SELECT team_id FROM users WHERE id = ?)", userId),
@@ -99,7 +57,7 @@ export async function actorFor(env: Env, userId: string): Promise<Auth> {
   if (!user || user.deleted) throw new CampflareError("account_inactive")
   const team = teams!.results[0] as TeamRow | undefined
   if (!team) throw new CampflareError("invalid_auth")
-  return { kind: user.is_bot ? "bot" : "user", team, user, scopes: DEFAULT_USER_SCOPES }
+  return { kind: user.is_bot ? "bot" : "user", team, user, scopes }
 }
 
 type TokenOptions = {
@@ -107,7 +65,10 @@ type TokenOptions = {
   kind: Auth["kind"]
   userId?: string
   appId?: string
+  /** Scopes and preset names (scopes.ts), stored as given. */
   scopes: string[]
+  /** When it stops working, epoch seconds; never when absent. */
+  expires?: number
   label?: string
   /** The OAuth client it is issued to (oauth.v2.access). */
   clientId?: string
@@ -122,7 +83,7 @@ export async function prepareToken(
   const token = `${PREFIX[opts.kind]}${opts.teamId}-${random}`
   const insert = stmt(
     env.DB,
-    "INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, client_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO tokens (hash, team_id, kind, user_id, app_id, scopes, label, client_id, created, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     await sha256Hex(token),
     opts.teamId,
     opts.kind,
@@ -132,6 +93,7 @@ export async function prepareToken(
     opts.label ?? "",
     opts.clientId ?? null,
     Math.floor(Date.now() / 1000),
+    opts.expires ?? null,
   )
   return { token, insert }
 }

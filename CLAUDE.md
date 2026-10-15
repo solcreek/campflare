@@ -114,6 +114,25 @@ their side effects. `access` is `user` (xoxp), `bot` (xoxb), `actor` (either),
 multipart/JSON (`Args` in `src/api/args.ts`), authenticates, runs the handler,
 and wraps the result as `{ ok: true, ...result }`.
 
+**Scopes and roles** (`docs/scopes-and-roles.md`). Scopes are binding:
+`NEEDS` in `src/api/scopes.ts` says what every method needs (a test fails for a
+method without an entry), and `authorize()` (`context.ts`) checks the token
+type and scopes for `/api/:method` and MCP's `invoke()` alike, answering
+Slack's `missing_scope` with `needed`/`provided`. A conversation method
+(`{ conversation: "read" | "history" | "write" }`) also wants the scope for the
+conversation's type (`channels:`/`groups:`/`im:`/`mpim:`), checked in
+`findWithMembership()` once the conversation is fetched, never for one the
+caller can't see; `ctx.verb` carries it there. Tokens store scopes and preset
+names (`read`, `write`, `full`, `bot`; migration 0018), expanded on every call
+by `expandScopes()`, so a preset token gains scopes later features add to the
+preset: add a new method's scope to the right preset. `tokens.expires` answers
+`token_expired`. Roles are the user's `is_owner`/`is_admin`, read with the
+token: admin methods need `admin.users:write` and the role (`not_an_admin`,
+`not_an_owner`); acting for someone takes a role above theirs
+(`requireOutranks()` in `admin.ts`). Server-built bot identities
+(interactivity, Huddle Scribe) skip the checks. `campflare.methods.list`
+answers the table without a token.
+
 **Errors.** Throw `CampflareError(code)` with Slack's error code; it is answered
 as HTTP 200 `{ ok: false, error }`, as Slack does. `invalidArguments()` adds
 `response_metadata.messages`.
@@ -474,8 +493,10 @@ the top one as a Dialog. CLI: `campflare view list|submit|close|click`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a
-workspace, its owner and #general; others add people, tokens and apps (an app is
-a bot user + xoxb + xapp).
+workspace, its owner and #general; others add people, set roles
+(`campflare.users.setRole`), mint tokens (`campflare.tokens.create` with
+`preset`/`scopes`/`expires_in`, never beyond the calling token's scopes) and
+create apps (an app is a bot user + xoxb + xapp).
 
 **Huddles.** `src/huddle/` (`docs/huddles.md`), off unless `REALTIME_APP_ID`/
 `REALTIME_APP_SECRET` are set (`huddles_not_configured`). Media never touches
@@ -627,7 +648,9 @@ service's domain could ever be claimed; the scheme works for every server.
   use `campflare` or a neutral name (`CampflareError`, `x-campflare-req-id`,
   `src/api/`). The wire surface stays Slack's: method names, token prefixes
   (`xoxp-`/`xoxb-`/`xapp-`), JSON fields, error codes.
-- **Adding a Slack method:** a handler in `src/methods/`, shapes in `shapes.ts`
+- **Adding a Slack method:** a handler in `src/methods/`, its scopes in `NEEDS`
+  (`src/api/scopes.ts`; Slack's documented scope, or a `noun:verb` of ours, put in
+  the presets it belongs to), shapes in `shapes.ts`
   if new, events via `publish()` if Slack emits any, a server test in
   `apps/server/test/`, and a conformance case when an official SDK method covers it.
 - **D1 round trips:** deployed, every awaited query is a network round trip, and

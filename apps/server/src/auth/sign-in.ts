@@ -2,6 +2,7 @@ import type { BetterAuthPlugin } from "better-auth"
 import { APIError, createAuthEndpoint } from "better-auth/api"
 import { setSessionCookie } from "better-auth/cookies"
 import * as z from "zod"
+import { FULL_USER_SCOPES } from "../api/scopes"
 import { authenticate } from "../api/auth"
 import { CampflareError } from "../api/errors"
 import { first } from "../db/query"
@@ -80,6 +81,11 @@ export function campflareSignIn(env: Env) {
             throw error
           }
           if (actor.kind !== "user" || !actor.user) throw await refuse("a user token (xoxp-) is needed")
+          // A session signs in OAuth clients, which may ask for every scope: only a token that is
+          // the whole person may start one, or a narrow or expiring token could be traded for more.
+          if (actor.expires !== undefined || !FULL_USER_SCOPES.every((s) => actor.scopes.includes(s))) {
+            throw await refuse("this token can't sign in: it is limited (scopes or expiry); use your own sign-in token")
+          }
           const user = await signInAs(ctx, actor.user, "campflare-token")
           return ctx.json({ user, campflare_user: actor.user.id, team: actor.team.id })
         },

@@ -35,7 +35,7 @@ describe("people and tokens", () => {
   it("only admins add people; handles and emails are unique", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
-    await expectError("campflare.users.create", { name: "carol" }, bob.token, "not_allowed_token_type")
+    await expectError("campflare.users.create", { name: "carol" }, bob.token, "not_an_admin")
     await expectError("campflare.users.create", { name: "bob" }, w.owner.token, "name_taken")
     await ok("campflare.users.create", { name: "dee", email: "dee@x.test" }, w.owner.token)
     await expectError("campflare.users.create", { name: "dee2", email: "DEE@x.test" }, w.owner.token, "already_in_team")
@@ -50,7 +50,7 @@ describe("people and tokens", () => {
   it("deactivating someone revokes their tokens", async () => {
     const w = await workspace()
     const bob = await w.addUser("bob")
-    await expectError("campflare.users.deactivate", { user: bob.id }, bob.token, "not_allowed_token_type")
+    await expectError("campflare.users.deactivate", { user: bob.id }, bob.token, "not_an_admin")
     await expectError("campflare.users.deactivate", { user: w.owner.id }, w.owner.token, "cant_deactivate_self")
     await ok("campflare.users.deactivate", { user: bob.id }, w.owner.token)
     await expectError("campflare.users.deactivate", { user: bob.id }, w.owner.token, "user_not_found")
@@ -64,7 +64,7 @@ describe("people and tokens", () => {
     const bob = await w.addUser("bob")
     const created = await ok<{ token: string }>("campflare.tokens.create", { label: "cli" }, bob.token)
     expect(created.token).toMatch(/^xoxp-/)
-    await expectError("campflare.tokens.create", { user: w.owner.id }, bob.token, "not_allowed_token_type")
+    await expectError("campflare.tokens.create", { user: w.owner.id }, bob.token, "not_an_admin")
     await ok("campflare.tokens.create", { user: bob.id }, w.owner.token)
     await expectError("campflare.tokens.create", { user: "UNOPE" }, w.owner.token, "user_not_found")
     const list = await ok<{ tokens: { id: string; label: string }[] }>("campflare.tokens.list", {}, bob.token)

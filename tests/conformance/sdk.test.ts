@@ -68,6 +68,20 @@ describe("@slack/web-api", () => {
     })
   })
 
+  it("reports missing_scope with what was needed, and reads the token's scopes", async () => {
+    const made = (await owner.apiCall("campflare.tokens.create", { preset: "read", label: "sdk" })) as unknown as {
+      token: string
+    }
+    const reader = client(made.token)
+    const test = await reader.auth.test()
+    expect(test.response_metadata?.scopes).toContain("channels:history")
+    const error = await reader.chat.postMessage({ channel: general, text: "nein" }).catch((e: unknown) => e)
+    expect(error).toMatchObject({
+      code: "slack_webapi_platform_error",
+      data: { ok: false, error: "missing_scope", needed: "chat:write" },
+    })
+  })
+
   it("paginates users.list and conversations.list with the SDK's iterator", async () => {
     const names: string[] = []
     for await (const page of owner.paginate("users.list", { limit: 1 })) {

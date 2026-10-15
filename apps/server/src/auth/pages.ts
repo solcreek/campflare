@@ -123,13 +123,20 @@ ${state.error ? `<p role="alert"><strong>${escape(state.error)}</strong></p>` : 
   )
 }
 
+/** What a preset (scopes.ts) grants, in words, since its name alone doesn't say. */
+const PRESET_WORDS: Record<string, string> = {
+  read: "read everything you can read",
+  write: "read everything you can read, and post, react and upload as you",
+  full: "everything you can do, including your tokens, apps and password, and what an admin may do if you are one",
+}
+
 export function consentPage(url: URL, client: { name: string; uri?: string | null }): Response {
   const scopes = (url.searchParams.get("scope") ?? "").split(" ").filter(Boolean)
   return page(
     "Allow access",
     `<h1>Allow ${escape(client.name)}?</h1>
 <p>${escape(client.name)}${client.uri ? ` (${escape(client.uri)})` : ""} wants to use Campflare as you: read the conversations you can read, and post as you.</p>
-${scopes.length ? `<ul>${scopes.map((s) => `<li><code>${escape(s)}</code></li>`).join("")}</ul>` : ""}
+${scopes.length ? `<ul>${scopes.map((s) => `<li><code>${escape(s)}</code>${PRESET_WORDS[s] ? `: ${PRESET_WORDS[s]}` : ""}</li>`).join("")}</ul>` : ""}
 <form method="post" action="/consent">
   <input type="hidden" name="oauth_query" value="${escape(oauthQuery(url))}">
   <div class="row">

@@ -27,7 +27,7 @@ Account
                                  when it's a re-login (same server and user); else it's kept
   logout [--profile <name>]      forget the profile; revokes a token from login --oauth
   bootstrap --url <server> --secret <s> --team <name> --user <handle> [--email <e>]
-  whoami                         who the token belongs to
+  whoami                         who the token belongs to, their role and the token's scopes
   profiles                       list saved profiles; --use <name> switches
   password set                   set your password for signing in with your email (asks, or reads stdin)
 
@@ -66,6 +66,7 @@ Workspace
   events [--cursor N] [--wait S] [--follow] [--json]
                                    the event log (Campflare): what came since a cursor, by polling
   api <method> [key=value]…        call any Web API method, print the JSON
+  api --list [prefix]              every method, the tokens it takes and the scopes it needs
 
 Admin (Campflare only)
   admin add-user <handle> [--email <e>] [--name <real name>] [--admin]
@@ -77,7 +78,12 @@ Admin (Campflare only)
                                    --rotate-secret replaces the signing secret at once.
                                    Shows how deliveries are doing, and if they were
                                    turned off for failing (set the URL again to resume)
-  token create [--label <l>]   token list   token revoke <id>
+  admin role <@person> member|admin|owner   (owners only)
+  token create [--preset read|write|full] [--scopes a,b] [--expires 1h|7d|<seconds>] [--label <l>]
+                                   a token for a script or an agent: the preset and scopes
+                                   together, never more than this token holds; prints the
+                                   token alone on stdout (--json: with its scopes and expiry)
+  token list                       token revoke <id>
 
 Global: --profile <name>, --json. Exit codes: 0 ok, 1 API error, 2 usage.`
 
@@ -520,11 +526,12 @@ const commands: Record<string, Command> = {
   async whoami(argv, io) {
     const { values } = parse(argv)
     const s = await session(io, values)
-    const who = await s.client.call<{ ok: boolean; user: string; user_id: string; team: string; url: string }>(
-      "auth.test",
-    )
-    if (values.json) return s.print(who)
+    const who = await s.client.authTest<{ ok: boolean; user: string; user_id: string; team: string; url: string }>()
+    const { scopes } = who
+    const role = await roleOf(s.client, who.user_id, scopes)
+    if (values.json) return s.print({ ...who, role })
     io.stdout(`@${who.user} (${who.user_id}) in ${who.team} — ${who.url}\n`)
+    io.stdout(`${role ? `Role: ${role}. ` : ""}Scopes: ${scopes.join(", ") || "none"}\n`)
   },
 
   async send(argv, io) {
@@ -972,7 +979,8 @@ const commands: Record<string, Command> = {
   },
 
   async api(argv, io) {
-    const { values, positionals } = parse(argv)
+    const { values, positionals } = parse(argv, { list: { type: "boolean" }, url: { type: "string" } })
+    if (values.list) return listMethods(io, values, positionals[0])
     const [method, ...pairs] = positionals
     if (!method) throw new UsageError("api needs a method, e.g. `campflare api conversations.list limit=5`")
     const args: ApiArgs = {}
@@ -998,7 +1006,17 @@ const commands: Record<string, Command> = {
       "rotate-secret": { type: "boolean" },
     })
     const s = await session(io, values)
-    if (sub === "add-user") {
+    if (sub === "role") {
+      const [who, role] = positionals
+      if (!who || !role) throw new UsageError("admin role needs a person and a role: member, admin or owner")
+      const user = await resolveUser(s.client, who, s.self)
+      const res = await s.client.call<{ ok: boolean; user: { name: string } }>("campflare.users.setRole", {
+        user,
+        role,
+      })
+      if (values.json) return s.print(res)
+      io.stdout(`@${res.user.name} is now ${role === "member" ? "a member" : `an ${role}`}\n`)
+    } else if (sub === "add-user") {
       const [handle] = positionals
       if (!handle) throw new UsageError("admin add-user needs a handle")
       const res = await s.client.call<{ ok: boolean; user: { id: string; name: string }; token: string }>(
@@ -1082,20 +1100,47 @@ const commands: Record<string, Command> = {
 
   async token(argv, io) {
     const [sub, ...rest] = argv
-    const { values, positionals } = parse(rest, { label: { type: "string" } })
+    const { values, positionals } = parse(rest, {
+      label: { type: "string" },
+      preset: { type: "string" },
+      scopes: { type: "string" },
+      expires: { type: "string" },
+    })
     const s = await session(io, values)
     if (sub === "create") {
-      const res = await s.client.call<{ ok: boolean; token: string }>("campflare.tokens.create", {
-        label: str(values.label),
-      })
+      const expires = str(values.expires)
+      const res = await s.client.call<{ ok: boolean; token: string; scopes: string[]; expires: number | null }>(
+        "campflare.tokens.create",
+        {
+          label: str(values.label),
+          preset: str(values.preset),
+          scopes: str(values.scopes),
+          expires_in: expires === undefined ? undefined : seconds(expires),
+        },
+      )
+      if (values.json) return s.print({ token: res.token, scopes: res.scopes, expires: res.expires })
+      // The token alone on stdout, for TOKEN=$(campflare token create …); what it holds on stderr.
       io.stdout(`${res.token}\n`)
+      io.stderr(`Scopes: ${res.scopes.join(", ")}${res.expires ? `; expires ${isoTime(res.expires)}` : ""}\n`)
     } else if (sub === "list") {
       const res = await s.client.call<{
         ok: boolean
-        tokens: { id: string; kind: string; label: string; created: number }[]
+        tokens: {
+          id: string
+          kind: string
+          label: string
+          created: number
+          scopes?: string[]
+          expires?: number | null
+        }[]
       }>("campflare.tokens.list")
       if (values.json) return s.print(res.tokens)
-      for (const t of res.tokens) io.stdout(`${t.id}  ${t.kind}  ${time(String(t.created))}  ${t.label}\n`)
+      for (const t of res.tokens) {
+        const expiry = t.expires ? `  expires ${isoTime(t.expires)}` : ""
+        io.stdout(
+          `${t.id}  ${t.kind}  ${time(String(t.created))}  ${t.label}  [${(t.scopes ?? []).join(",")}]${expiry}\n`,
+        )
+      }
     } else if (sub === "revoke") {
       const [id] = positionals
       if (!id) throw new UsageError("token revoke needs an id from `token list`")
@@ -1114,6 +1159,57 @@ interface MessageRecord {
   text?: string
   reply_count?: number
   files?: { name?: string }[]
+}
+
+const UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86_400, w: 604_800 }
+
+/** "90", "30m", "12h", "7d", "2w" as seconds. */
+export function seconds(text: string): number {
+  const match = /^(\d+)([smhdw]?)$/.exec(text.trim())
+  if (!match) throw new UsageError(`--expires takes seconds or a number with s, m, h, d or w: got ${text}`)
+  return Number(match[1]) * UNITS[match[2] || "s"]!
+}
+
+const isoTime = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d+Z$/, "Z")
+
+/** A person's role from users.info, when the token may read it (users:read); bots have none. */
+async function roleOf(client: Client, userId: string, scopes: string[]): Promise<string | undefined> {
+  if (!scopes.includes("users:read")) return undefined
+  const { user } = await client.call<{ ok: boolean; user: { is_bot: boolean; is_admin: boolean; is_owner: boolean } }>(
+    "users.info",
+    { user: userId },
+  )
+  if (user.is_bot) return "bot"
+  return user.is_owner ? "owner" : user.is_admin ? "admin" : "member"
+}
+
+/** campflare.methods.list as a table: one method a line, its token types and scopes. */
+async function listMethods(io: Io, values: Values, prefix = "") {
+  const profile = await activeProfile(io, str(values.profile)).catch(() => undefined)
+  const url = str(values.url) ?? profile?.url ?? io.env.CAMPFLARE_URL
+  if (!url) throw new UsageError("api --list needs a server: log in, or pass --url")
+  const res = await createClient({ url, fetch: io.fetch }).call<{
+    ok: boolean
+    methods: {
+      name: string
+      tokens: string[]
+      scopes: string[]
+      conversation_scope?: string
+      scopes_required?: "all"
+    }[]
+    presets: Record<string, string[]>
+  }>("campflare.methods.list")
+  const methods = res.methods.filter((m) => m.name.startsWith(prefix))
+  if (values.json) {
+    io.stdout(`${JSON.stringify({ methods, presets: res.presets }, null, 2)}\n`)
+    return
+  }
+  for (const m of methods) {
+    const scopes = m.conversation_scope
+      ? `*:${m.conversation_scope} for the conversation's type`
+      : m.scopes.join(m.scopes_required === "all" ? " + " : " | ")
+    io.stdout(`${m.name}  (${m.tokens.join(", ") || "no token"})  ${scopes || "no scope"}\n`)
+  }
 }
 
 /** Runs one command; resolves to the exit code. */
@@ -1140,12 +1236,28 @@ export async function run(argv: string[], io: Io): Promise<number> {
       return 2
     }
     if (error instanceof ApiError) {
-      io.stderr(
-        `error: ${error.code}${error.data.response_metadata?.messages ? ` ${error.data.response_metadata.messages.join(" ")}` : ""}\n`,
-      )
+      // An agent reading --json output gets the error as JSON too, on stderr.
+      if (rest.includes("--json")) {
+        io.stderr(`${JSON.stringify(error.data)}\n`)
+        return 1
+      }
+      io.stderr(`error: ${error.code}${errorDetail(error)}\n`)
       return 1
     }
     io.stderr(`error: ${error instanceof Error ? error.message : String(error)}\n`)
     return 1
   }
+}
+
+/** What an API error adds to its code: Slack's messages, or which scopes would do. */
+function errorDetail(error: ApiError): string {
+  const data = error.data as ApiError["data"] & { needed?: string; provided?: string }
+  if (error.code === "missing_scope" && data.needed) {
+    return (
+      ` (needs ${data.needed.split(",").join(" or ")}; this token has ${data.provided || "none"}). ` +
+      "A token with it: campflare token create --scopes <scope>"
+    )
+  }
+  const messages = data.response_metadata?.messages
+  return messages ? ` ${messages.join(" ")}` : ""
 }

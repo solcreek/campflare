@@ -1,10 +1,12 @@
 import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { AppRow, TokenRow, UserRow } from "../db/rows"
-import { APP_SCOPES, DEFAULT_BOT_SCOPES, DEFAULT_USER_SCOPES, issueToken } from "../api/auth"
+import { APP_SCOPES, issueToken } from "../api/auth"
+import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES, missingScope } from "../api/scopes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
 import { teamJson, userJson } from "../api/shapes"
+import { publish } from "../events"
 import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
 import { EVENT_TYPE } from "../app-events"
@@ -14,8 +16,47 @@ import { requestUrlProblem, verifyRequestUrl } from "../request-url"
 // methods: creating a workspace, people, tokens and apps. Not part of the
 // Slack-compatible surface, and named so they can't collide with it.
 
+// Roles (docs/scopes-and-roles.md): owner > admin > member. A token's scopes cap
+// what it may do; the person's role, read with the token on every call, caps
+// what they may do. Both must allow it.
+
 function requireAdmin(ctx: Ctx<Actor>) {
-  if (ctx.auth.kind !== "user" || !ctx.auth.user.is_admin) throw new CampflareError("not_allowed_token_type")
+  if (!ctx.auth.user.is_admin) throw new CampflareError("not_an_admin")
+}
+
+function requireOwner(ctx: Ctx<Actor>) {
+  if (!ctx.auth.user.is_owner) throw new CampflareError("not_an_owner")
+}
+
+const rank = (u: Pick<UserRow, "is_admin" | "is_owner">) => (u.is_owner ? 2 : u.is_admin ? 1 : 0)
+
+/** Acting for someone else (deactivating them, minting their token) takes a role above theirs. */
+function requireOutranks(ctx: Ctx<Actor>, target: UserRow) {
+  requireAdmin(ctx)
+  if (rank(ctx.auth.user) <= rank(target))
+    throw new CampflareError(target.is_owner ? "cant_act_on_owner" : "not_an_owner")
+}
+
+/** A person of the caller's workspace, active; a bot user only with `bots`. */
+async function activePerson(ctx: Ctx<Actor>, id: string, { bots = false } = {}): Promise<UserRow> {
+  const user = await first<UserRow>(
+    ctx.env.DB,
+    "SELECT * FROM users WHERE id = ? AND team_id = ? AND deleted = 0",
+    id,
+    ctx.auth.team.id,
+  )
+  if (!user) throw new CampflareError("user_not_found")
+  if (user.is_bot && !bots) throw new CampflareError("user_is_bot")
+  return user
+}
+
+/** Everyone in the workspace learns of a change to a person, as Slack's user_change. */
+function userChanged(ctx: Ctx<Actor>, user: UserRow) {
+  publish(ctx, {
+    teamId: ctx.auth.team.id,
+    event: { type: "user_change", user: userJson(user, ctx.origin) },
+    audience: "team",
+  })
 }
 
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,79}$/
@@ -116,7 +157,7 @@ method("campflare.bootstrap", "none", async (ctx) => {
     teamId,
     kind: "user",
     userId: owner.id,
-    scopes: DEFAULT_USER_SCOPES,
+    scopes: ["full"],
     label: "bootstrap",
   })
   const team = { id: teamId, name: teamName, domain, created: now }
@@ -126,6 +167,8 @@ method("campflare.bootstrap", "none", async (ctx) => {
 /** Adds a person to the workspace and returns their first user token. */
 method("campflare.users.create", "user", async (ctx) => {
   requireAdmin(ctx)
+  // Making an admin is granting a role: owners only, as in setRole.
+  if (ctx.args.bool("is_admin")) requireOwner(ctx)
   // An initial password is optional; it needs an email to sign in with.
   const password = ctx.args.str("password")
   if (password !== undefined) {
@@ -143,7 +186,7 @@ method("campflare.users.create", "user", async (ctx) => {
       teamId: ctx.auth.team.id,
       kind: "user",
       userId: user.id,
-      scopes: DEFAULT_USER_SCOPES,
+      scopes: ["full"],
       label: "created by admin",
     }),
     password === undefined ? undefined : setPassword(ctx.env, user, password),
@@ -162,42 +205,95 @@ method("campflare.users.setPassword", "user", async (ctx) => {
   return {}
 })
 
+/** Deactivates a person and revokes their tokens. Admins deactivate members; owners, admins too. Owners can't be. */
 method("campflare.users.deactivate", "user", async (ctx) => {
   requireAdmin(ctx)
   const id = ctx.args.req("user", "user_not_found")
   if (id === ctx.auth.user.id) throw new CampflareError("cant_deactivate_self")
-  const res = await run(
-    ctx.env.DB,
-    "UPDATE users SET deleted = 1, updated = ? WHERE id = ? AND team_id = ? AND is_owner = 0 AND deleted = 0",
-    nowSeconds(),
-    id,
-    ctx.auth.team.id,
-  )
-  if (!res.meta.changes) throw new CampflareError("user_not_found")
-  await run(ctx.env.DB, "UPDATE tokens SET revoked = 1 WHERE user_id = ?", id)
+  const target = await activePerson(ctx, id, { bots: true })
+  requireOutranks(ctx, target)
+  const now = nowSeconds()
+  const [changed] = await ctx.env.DB.batch([
+    stmt(ctx.env.DB, "UPDATE users SET deleted = 1, updated = ? WHERE id = ? AND deleted = 0 RETURNING *", now, id),
+    stmt(ctx.env.DB, "UPDATE tokens SET revoked = 1 WHERE user_id = ?", id),
+  ])
+  const user = changed!.results[0] as UserRow | undefined
+  if (user) userChanged(ctx, user)
   return {}
 })
 
-/** Another user token for yourself (one per device or script), or for anyone if you're an admin. */
-method("campflare.tokens.create", "user", async (ctx) => {
-  const userId = ctx.args.str("user") ?? ctx.auth.user.id
-  if (userId !== ctx.auth.user.id) requireAdmin(ctx)
+const ROLES = ["member", "admin", "owner"] as const
+
+/**
+ * Makes a person a member, an admin or an owner. Owners only. The last owner
+ * can't stop being one: make someone else owner first.
+ */
+method("campflare.users.setRole", "user", async (ctx) => {
+  requireOwner(ctx)
+  const role = ctx.args.req("role")
+  if (!(ROLES as readonly string[]).includes(role)) throw invalidArguments("role is member, admin or owner")
+  const target = await activePerson(ctx, ctx.args.req("user", "user_not_found"))
+  const owner = role === "owner" ? 1 : 0
+  const admin = role === "member" ? 0 : 1
+  // The guard and the change in one statement: two owners demoting each other at once can't both win.
   const user = await first<UserRow>(
     ctx.env.DB,
-    "SELECT * FROM users WHERE id = ? AND team_id = ? AND deleted = 0 AND is_bot = 0",
-    userId,
+    `UPDATE users SET is_owner = ?1, is_admin = ?2, updated = ?3 WHERE id = ?4
+       AND (?1 = 1 OR is_owner = 0
+         OR (SELECT COUNT(*) FROM users WHERE team_id = ?5 AND is_owner = 1 AND deleted = 0 AND id != ?4) > 0)
+     RETURNING *`,
+    owner,
+    admin,
+    nowSeconds(),
+    target.id,
     ctx.auth.team.id,
   )
-  if (!user) throw new CampflareError("user_not_found")
+  if (!user) throw new CampflareError("last_owner")
+  if (rank(user) !== rank(target)) userChanged(ctx, user)
+  return { user: userJson(user, ctx.origin) }
+})
+
+/**
+ * Another user token for yourself (one per device, script or agent), or for
+ * someone you outrank. `preset` (read, write, full) and `scopes` (a list)
+ * say what it may do, together; neither copies the calling token's. It never
+ * gets a scope the calling token lacks. `expires_in` (seconds) makes it stop
+ * working after that long.
+ */
+method("campflare.tokens.create", "user", async (ctx) => {
+  const userId = ctx.args.str("user") ?? ctx.auth.user.id
+  if (userId !== ctx.auth.user.id) {
+    // A token for someone is acting as them: only for someone you outrank, or an admin could become an owner.
+    requireOutranks(ctx, await activePerson(ctx, userId))
+  }
+  const scopes = grantedScopes(ctx)
+  const expiresIn = ctx.args.has("expires_in") ? ctx.args.int("expires_in", 0) : undefined
+  if (expiresIn !== undefined && expiresIn < 60) throw invalidArguments("expires_in is at least 60 seconds")
+  const expires = expiresIn === undefined ? undefined : nowSeconds() + expiresIn
   const token = await issueToken(ctx.env, {
     teamId: ctx.auth.team.id,
     kind: "user",
     userId,
-    scopes: DEFAULT_USER_SCOPES,
+    scopes,
+    expires,
     label: ctx.args.str("label") ?? "",
   })
-  return { token, user_id: userId }
+  return { token, user_id: userId, scopes: expandScopes(scopes.join(",")), expires: expires ?? null }
 })
+
+/** What a new token is to hold, as stored: presets by name while the caller holds every scope, else a list. */
+function grantedScopes(ctx: Ctx<Actor>): string[] {
+  const held = new Set(ctx.auth.scopes)
+  const full = FULL_USER_SCOPES.every((s) => held.has(s))
+  const asked = [...ctx.args.list("preset"), ...ctx.args.list("scopes")]
+  if (!asked.length) return full ? ["full"] : ctx.auth.scopes
+  const unknown = asked.filter((s) => !GRANTABLE_USER_SCOPES.has(s))
+  if (unknown.length) throw invalidArguments(`unknown scopes or presets: ${unknown.join(", ")}`)
+  const missing = expandScopes(asked.join(",")).filter((s) => !held.has(s))
+  if (missing.length) throw missingScope(ctx.auth, missing)
+  // A preset grows as features add scopes; stored by name only when the caller holds everything it can grow into.
+  return full ? [...new Set(asked)] : expandScopes(asked.join(","))
+}
 
 method("campflare.tokens.list", "user", async (ctx) => {
   const rows = await all<TokenRow>(
@@ -207,7 +303,17 @@ method("campflare.tokens.list", "user", async (ctx) => {
     ctx.auth.user.id,
   )
   // The hash's prefix identifies a token for revoking without revealing it.
-  return { tokens: rows.map((t) => ({ id: t.hash.slice(0, 16), kind: t.kind, label: t.label, created: t.created })) }
+  return {
+    tokens: rows.map((t) => ({
+      id: t.hash.slice(0, 16),
+      kind: t.kind,
+      label: t.label,
+      created: t.created,
+      /** As stored: presets by name (campflare.methods.list says what they hold). */
+      scopes: t.scopes ? t.scopes.split(",") : [],
+      expires: t.expires,
+    })),
+  }
 })
 
 method("campflare.tokens.revoke", "user", async (ctx) => {
@@ -258,7 +364,7 @@ method("campflare.apps.create", "user", async (ctx) => {
       kind: "bot",
       userId: botUser.id,
       appId,
-      scopes: DEFAULT_BOT_SCOPES,
+      scopes: ["bot"],
     }),
     issueToken(ctx.env, { teamId: ctx.auth.team.id, kind: "app", appId, scopes: APP_SCOPES }),
   ])

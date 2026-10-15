@@ -26,7 +26,8 @@ import { handleResponseUrl } from "./interactivity"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
-import { methods, type Auth, type Ctx } from "./api/context"
+import { authorize, methods, type Auth, type Ctx } from "./api/context"
+import { acceptedScopes, NEEDS, type Verb } from "./api/scopes"
 import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
 import { avatarSvg } from "./api/avatar"
@@ -38,7 +39,16 @@ export { HuddleScribe } from "./huddle/scribe"
 
 const app = new Hono<{ Bindings: Env }>()
 
-app.use("/api/*", cors({ origin: "*", allowHeaders: ["Authorization", "Content-Type"], maxAge: 86_400 }))
+app.use(
+  "/api/*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Authorization", "Content-Type"],
+    // So a browser client can read a token's scopes, as @campflare/client's authTest() does.
+    exposeHeaders: ["X-OAuth-Scopes", "X-Accepted-OAuth-Scopes"],
+    maxAge: 86_400,
+  }),
+)
 // Browser apps fetch url_private with their Bearer token (as Slack clients do) and
 // show the bytes as a blob: URL, since <img src> can't send a header. Credentials
 // are never cookies, so any origin may ask; it still needs the token.
@@ -61,19 +71,23 @@ app.get("/", (c) => c.json({ name: "campflare", api: `${publicOrigin(c.req.raw)}
 app.on(["GET", "POST"], "/api/:method", async (c) => {
   const name = c.req.param("method")
   const def = methods.get(name)
-  const reply = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
-    c.json(body, 200, { "x-campflare-req-id": crypto.randomUUID(), ...headers })
+  const scopeHeaders: Record<string, string> = {}
+  const reply = (body: Record<string, unknown>) =>
+    c.json(body, 200, { "x-campflare-req-id": crypto.randomUUID(), ...scopeHeaders })
   if (!def) return reply({ ok: false, error: "unknown_method", req_method: name })
+  const accepted = acceptedScopes(NEEDS[name] ?? [])
+  if (accepted.length) scopeHeaders["x-accepted-oauth-scopes"] = accepted.join(",")
 
   try {
     const args = await Args.from(c.req.raw)
     let auth: Auth | undefined
+    let verb: Verb | undefined
     if (def.access !== "none") {
       const token = tokenOf(c.req.raw, args.str("token"))
       if (!token) throw new CampflareError("not_authed")
       auth = await authenticate(c.env, token)
-      const allowed = def.access === "actor" ? auth.kind === "user" || auth.kind === "bot" : auth.kind === def.access
-      if (!allowed) throw new CampflareError("not_allowed_token_type")
+      scopeHeaders["x-oauth-scopes"] = auth.scopes.join(",")
+      verb = authorize(name, def, auth)
       if (auth.user) {
         const pending = touch(c.env, auth.user)
         if (pending) c.executionCtx.waitUntil(pending)
@@ -86,9 +100,10 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
       request: c.req.raw,
       origin: publicOrigin(c.req.raw),
       waitUntil: (p) => c.executionCtx.waitUntil(p),
+      verb,
     }
     const result = await def.handler(ctx)
-    return reply({ ok: true, ...result }, auth ? { "x-oauth-scopes": auth.scopes.join(",") } : {})
+    return reply({ ok: true, ...result })
   } catch (error) {
     if (error instanceof CampflareError) return reply({ ok: false, error: error.code, ...error.extra })
     console.error(`${name} failed`, error)
