@@ -241,6 +241,62 @@ describe("campflare.commands.invoke over HTTP", () => {
     expect(await run()).toEqual({ ok: true, delivered: "http" })
   })
 
+  it("answers with the blocks it shows, ids and all, so their buttons click", async () => {
+    const { w, app, bob, run } = await setup()
+    await ok("campflare.apps.setInteractivity", { app: app.id, request_url: "https://app.example/i" }, w.owner.token)
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
+    // No block_id or action_id: the server makes them up, once.
+    answering({
+      text: "Which one?",
+      blocks: [{ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "Staging" } }] }],
+    })
+    const res = await run()
+    const blocks = res.response!.blocks as { block_id: string; elements: { action_id: string }[] }[]
+    const shown = await rtm.next((f) => f.subtype === "ephemeral")
+    expect(shown.blocks).toEqual(blocks)
+    const clicked = await call(
+      "campflare.blocks.action",
+      {
+        channel: w.general,
+        ts: res.response!.ts,
+        block_id: blocks[0]!.block_id,
+        action_id: blocks[0]!.elements[0]!.action_id,
+      },
+      bob.token,
+    )
+    expect(clicked).toEqual({ ok: true, delivered: "http" })
+    rtm.close()
+  })
+
+  it("shows the invoker a notice, not an error, when the app's answer can't be shown", async () => {
+    const { w, bob, run } = await setup()
+    const rtm = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await rtm.next((f) => f.type === "hello")
+    answering({ text: "x", blocks: "not blocks" })
+    const res = await run()
+    expect(res).toEqual({
+      ok: true,
+      delivered: "http",
+      response: {
+        response_type: "ephemeral",
+        text: "/deploy ran, but Deployer's reply couldn't be shown (invalid_blocks).",
+        ts: expect.any(String),
+      },
+      response_error: "invalid_blocks",
+    })
+    expect(await rtm.next((f) => f.subtype === "ephemeral")).toMatchObject({ text: res.response!.text })
+    answering({ response_type: "in_channel", text: "x".repeat(40_001) })
+    expect((await run()).response_error).toBe("msg_too_long")
+    const history = await ok<{ messages: { text: string }[] }>(
+      "conversations.history",
+      { channel: w.general },
+      bob.token,
+    )
+    expect(history.messages.some((m) => m.text.startsWith("xxx"))).toBe(false)
+    rtm.close()
+  })
+
   it("is dispatch_failed when the URL errs, app_unreachable when there's nowhere to send it", async () => {
     const { run } = await setup()
     answering("nope", 500)

@@ -58,6 +58,8 @@ export interface Invoked {
   delivered: "socket" | "http"
   /** What the app answered at once, as it was shown: to the person (ephemeral) or posted (in_channel). */
   response?: { response_type: "ephemeral" | "in_channel"; text: string; blocks?: unknown; ts: string }
+  /** Why the app's answer couldn't be shown (invalid_blocks, msg_too_long…): the person got a notice instead. */
+  response_error?: string
 }
 
 /**
@@ -115,14 +117,25 @@ export async function invokeCommand(
   const answer = answerOf(response)
   if (!answer) return { delivered }
   const asBot = asApp(ctx.env, ctx.request, ctx.waitUntil, { team, app, bot }, new Args(answer), ctx.origin)
-  const shown = content(asBot, false)
-  if (!shown.text && !shown.blocks && !shown.attachments) return { delivered }
-  const blocks = shown.blocks ? (JSON.parse(shown.blocks) as unknown) : undefined
-  if (answer.response_type === "in_channel") {
-    if (c.is_archived) throw new CampflareError("is_archived")
-    const { row } = await postMessage(asBot, c, { ...authorOf(asBot), ...shown })
-    return { delivered, response: { response_type: "in_channel", text: row.text, blocks, ts: row.ts } }
+  // The app has run the command by now: an answer that can't be shown is the person's notice, not their error
+  // (an error would have them run it again).
+  try {
+    // Read once: the blocks answered are the blocks shown, with the same generated block and action ids.
+    const shown = content(asBot, false)
+    if (!shown.text && !shown.blocks && !shown.attachments) return { delivered }
+    const blocks = shown.blocks ? (JSON.parse(shown.blocks) as unknown) : undefined
+    if (answer.response_type === "in_channel") {
+      const { row } = await postMessage(asBot, c, { ...authorOf(asBot), ...shown })
+      return { delivered, response: { response_type: "in_channel", text: row.text, blocks, ts: row.ts } }
+    }
+    const ts = sendEphemeral(asBot, c, user.id, undefined, shown)
+    return { delivered, response: { response_type: "ephemeral", text: shown.text, blocks, ts } }
+  } catch (error) {
+    if (!(error instanceof CampflareError)) throw error
+    console.warn(`${command.name}: ${app.id}'s answer couldn't be shown`, error.code)
+    const notice = `${command.name} ran, but ${app.name}'s reply couldn't be shown (${error.code}).`
+    const noticeCtx = { ...asBot, args: new Args({ text: notice }) }
+    const ts = sendEphemeral(noticeCtx, c, user.id)
+    return { delivered, response: { response_type: "ephemeral", text: notice, ts }, response_error: error.code }
   }
-  const ts = sendEphemeral(asBot, c, user.id)
-  return { delivered, response: { response_type: "ephemeral", text: shown.text, blocks, ts } }
 }

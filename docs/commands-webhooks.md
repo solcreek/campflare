@@ -129,7 +129,13 @@ URL with `app_unreachable` before; it's `dispatch_failed` now, for all).
 
 The immediate answer is shown as the app's bot: `response_type: in_channel`
 posts it in the conversation, anything else is an ephemeral message to the
-invoker over RTM. The method answers it too (`response: { response_type,
+invoker over RTM. The content is read once, so the blocks the method answers
+are the blocks shown, with the same generated `block_id`s and `action_id`s
+(their buttons click). By then the app has run the command, so an answer that
+can't be shown (`invalid_blocks`, `msg_too_long`…) is logged and replaced by an
+ephemeral notice from the bot ("/deploy ran, but Deployer's reply couldn't be
+shown (invalid_blocks)."), and the method still answers `ok` with
+`response_error`: an error would have the person run it again. The method answers it too (`response: { response_type,
 text, blocks, ts }`), so the CLI and agents, which have no RTM link, see it.
 Slack also shows the invoker's own `/command` line above an `in_channel`
 answer; Campflare doesn't post it (yet).

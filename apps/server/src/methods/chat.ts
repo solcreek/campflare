@@ -112,14 +112,24 @@ method("chat.postEphemeral", "actor", async (ctx) => {
   return { message_ts: sendEphemeral(ctx, c, user, ctx.args.ts("thread_ts")) }
 })
 
+/** A message's content as content() reads it from the arguments. */
+export type Content = ReturnType<typeof content>
+
 /**
- * An ephemeral message of the caller's content to one person; its ts.
- * Never stored in D1: only the recipient's live clients see it. An app's,
- * with blocks, is kept in the hub for a day so its buttons can be clicked.
+ * An ephemeral message of the caller's content (or `shown`, read from it
+ * already) to one person; its ts. Never stored in D1: only the recipient's
+ * live clients see it. An app's, with blocks, is kept in the hub for a day so
+ * its buttons can be clicked.
  */
-export function sendEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string, threadTs?: string): string {
+export function sendEphemeral(
+  ctx: Ctx<Actor>,
+  c: ConversationRow,
+  user: string,
+  threadTs?: string,
+  shown?: Content,
+): string {
   const ts = nextTs()
-  const message = ephemeralMessage(ctx, c, ts, threadTs)
+  const message = ephemeralMessage(ctx, c, ts, threadTs, shown)
   publish(ctx, {
     teamId: c.team_id,
     audience: [user],
@@ -131,8 +141,8 @@ export function sendEphemeral(ctx: Ctx<Actor>, c: ConversationRow, user: string,
 }
 
 /** An ephemeral message of the caller's content, as RTM carries it: blocks and attachments as JSON, not strings. */
-function ephemeralMessage(ctx: Ctx<Actor>, c: ConversationRow, ts: string, threadTs?: string) {
-  const { text, blocks, attachments } = content(ctx)
+function ephemeralMessage(ctx: Ctx<Actor>, c: ConversationRow, ts: string, threadTs?: string, shown?: Content) {
+  const { text, blocks, attachments } = shown ?? content(ctx)
   return {
     type: "message",
     subtype: "ephemeral",
