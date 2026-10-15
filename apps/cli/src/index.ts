@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, open, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import type { Io } from "./io"
@@ -58,6 +58,19 @@ const io: Io = {
   secret: process.stdin.isTTY ? readHidden : undefined,
   env: process.env,
   readFile: async (path) => new Uint8Array(await readFile(path)),
+  async openFile(path) {
+    const handle = await open(path, "r")
+    const { size } = await handle.stat()
+    return {
+      size,
+      async read(offset, length) {
+        const buffer = new Uint8Array(length)
+        const { bytesRead } = await handle.read(buffer, 0, length, offset)
+        return buffer.subarray(0, bytesRead)
+      },
+      close: () => handle.close(),
+    }
+  },
   readConfig: () => readFile(configPath, "utf8").catch(() => undefined),
   async writeConfig(text) {
     await mkdir(dirname(configPath), { recursive: true, mode: 0o700 })

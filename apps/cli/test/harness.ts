@@ -19,7 +19,7 @@ export function memoryIo(
      * A generator can act between pieces (stop the stream, say).
      */
     stdinChunks?: string[] | (() => AsyncIterable<string>)
-    files?: Record<string, string>
+    files?: Record<string, string | Uint8Array>
     env?: Record<string, string>
     openUrl?: (url: string) => Promise<void>
     /** Answers to hidden terminal prompts, in order; none means no terminal. */
@@ -47,7 +47,7 @@ export function memoryIo(
     async readFile(path) {
       const text = opts.files?.[path]
       if (text === undefined) throw new Error(`ENOENT: ${path}`)
-      return new TextEncoder().encode(text)
+      return typeof text === "string" ? new TextEncoder().encode(text) : new Uint8Array(text)
     },
     readConfig: async () => config,
     writeConfig: async (text) => void (config = text),
