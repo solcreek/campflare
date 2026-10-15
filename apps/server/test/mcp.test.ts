@@ -1,7 +1,8 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client"
 import { SELF } from "cloudflare:test"
 import { describe, expect, it } from "vitest"
-import { ok, workspace } from "./helpers"
+import { ORIGIN, ok, workspace } from "./helpers"
+import { makePng } from "./images"
 
 const MCP_URL = "https://campflare.test/mcp"
 
@@ -57,6 +58,7 @@ describe("MCP over Streamable HTTP", () => {
       "get_activity",
       "get_events",
       "list_conversations",
+      "list_emoji",
       "list_groups",
       "list_people",
       "list_pins",
@@ -199,6 +201,30 @@ describe("MCP over Streamable HTTP", () => {
       ]),
     )
     expect(groups.groups).toHaveLength(2)
+    await client.close()
+  })
+
+  it("lists custom emoji and their aliases", async () => {
+    const w = await workspace()
+    const client = await connect(w.owner.token)
+    expect(await callTool(client, "list_emoji")).toEqual({ emoji: [] })
+    const form = new FormData()
+    form.set("name", "shipit")
+    form.set("image", new File([await makePng(16, 16)], "shipit.png"))
+    const added = (await (
+      await SELF.fetch(`${ORIGIN}/api/campflare.emoji.add`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${w.owner.token}` },
+        body: form,
+      })
+    ).json()) as { emoji: { url: string } }
+    await ok("admin.emoji.addAlias", { name: "lgtm", alias_for: "shipit" }, w.owner.token)
+    expect(await callTool(client, "list_emoji")).toEqual({
+      emoji: [
+        { name: "lgtm", alias_for: "shipit" },
+        { name: "shipit", url: added.emoji.url },
+      ],
+    })
     await client.close()
   })
 
