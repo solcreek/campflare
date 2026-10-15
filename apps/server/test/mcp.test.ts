@@ -1,7 +1,7 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client"
 import { SELF } from "cloudflare:test"
 import { describe, expect, it } from "vitest"
-import { ok, workspace } from "./helpers"
+import { fakeRequestUrls, ok, workspace } from "./helpers"
 
 const MCP_URL = "https://campflare.test/mcp"
 
@@ -56,6 +56,7 @@ describe("MCP over Streamable HTTP", () => {
       "cancel_scheduled",
       "get_activity",
       "get_events",
+      "list_commands",
       "list_conversations",
       "list_groups",
       "list_people",
@@ -65,6 +66,7 @@ describe("MCP over Streamable HTTP", () => {
       "mark_activity_read",
       "read_messages",
       "read_thread",
+      "run_command",
       "schedule_message",
       "search_messages",
       "send_message",
@@ -383,6 +385,51 @@ describe("MCP over Streamable HTTP", () => {
     const res = await callTool(client, "wait_for_reply", { conversation: "#general", timeout_seconds: 1 })
     expect(res).toEqual({ replied: false, conversation: w.general })
     await client.close()
+  })
+
+  it("lists and runs an app's slash commands, with the app's answer", async () => {
+    const w = await workspace()
+    const app = await w.addApp("Deployer")
+    const urls = fakeRequestUrls()
+    try {
+      urls.answer = (hit) =>
+        typeof hit.body?.command === "string"
+          ? Response.json({ text: `Deploying ${String(hit.body.text)}` })
+          : new Response("")
+      await ok(
+        "campflare.apps.setCommands",
+        {
+          app: app.id,
+          commands: [
+            {
+              command: "/deploy",
+              description: "Deploy a branch",
+              usage_hint: "[branch]",
+              url: "https://app.example/c",
+            },
+          ],
+        },
+        w.owner.token,
+        { json: true },
+      )
+      const client = await connect(w.owner.token)
+      expect(await callTool(client, "list_commands")).toEqual({
+        commands: [{ command: "/deploy", description: "Deploy a branch", usage: "[branch]", app: "Deployer" }],
+      })
+      const ran = await callTool(client, "run_command", { conversation: "#general", command: "deploy", text: "main" })
+      expect(ran).toMatchObject({
+        conversation: w.general,
+        response: { response_type: "ephemeral", text: "Deploying main" },
+      })
+      const missing = (await client.callTool({
+        name: "run_command",
+        arguments: { conversation: "#general", command: "/nope" },
+      })) as ToolResult
+      expect(missing).toMatchObject({ isError: true, content: [{ text: "error: command_not_found" }] })
+      await client.close()
+    } finally {
+      urls.restore()
+    }
   })
 
   it("works with a bot token, as the bot", async () => {

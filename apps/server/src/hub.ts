@@ -226,7 +226,8 @@ export class TeamHub extends DurableObject<Env> {
   private interactions = new Map<string, (response?: unknown) => void>()
 
   /**
-   * Sends an interaction (block_actions, view_submission…) to one of an app's
+   * Sends an interaction (block_actions, view_submission…), or a slash command
+   * (`type` slash_commands, docs/commands-webhooks.md), to one of an app's
    * Socket Mode links and waits for its ack. Unlike events, it isn't kept or
    * sent again: as on Slack, an app that doesn't ack within 3 seconds shows
    * the person an error. Its trigger_id, if it carries one, is kept first
@@ -237,7 +238,11 @@ export class TeamHub extends DurableObject<Env> {
   async interact(
     appId: string,
     payload: Record<string, unknown>,
-    { trigger, acceptsResponse = false }: { trigger?: TriggerGrant; acceptsResponse?: boolean } = {},
+    {
+      trigger,
+      acceptsResponse = false,
+      type = "interactive",
+    }: { trigger?: TriggerGrant; acceptsResponse?: boolean; type?: "interactive" | "slash_commands" } = {},
   ): Promise<{ status: "acked" | "timeout" | "no_link"; response?: string }> {
     if (trigger) this.grantTrigger(appId, trigger)
     const ws = this.nextLink(appId)
@@ -257,7 +262,7 @@ export class TeamHub extends DurableObject<Env> {
     const sent = send(ws, {
       envelope_id: envelopeId,
       payload,
-      type: "interactive",
+      type,
       accepts_response_payload: acceptsResponse,
     })
     if (!sent) {

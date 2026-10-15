@@ -163,6 +163,13 @@ export const NEEDS: Record<string, Need> = {
   "campflare.apps.setEventSubscriptions": ["apps:write"],
   "campflare.apps.setInteractivity": ["apps:write"],
   "campflare.apps.rotateSigningSecret": ["apps:write"],
+  "campflare.apps.createWebhook": ["apps:write"],
+  "campflare.apps.webhooks.list": ["apps:write"],
+  "campflare.apps.webhooks.revoke": ["apps:write"],
+  // The installer (apps:write), or the app itself with its bot token (commands).
+  "campflare.apps.setCommands": ["apps:write", "commands"],
+  "campflare.commands.list": ["chat:write"],
+  "campflare.commands.invoke": ["chat:write"],
 
   "campflare.tokens.list": ["tokens:read"],
   "campflare.tokens.create": ["tokens:write"],
@@ -316,6 +323,7 @@ export const DEFAULT_BOT_SCOPES = [
   "events:read",
   "activity:read",
   "activity:write",
+  "commands",
 ]
 
 export const APP_SCOPES = ["connections:write"]

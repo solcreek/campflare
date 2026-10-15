@@ -1,10 +1,9 @@
 import { Args } from "./api/args"
-import { DEFAULT_BOT_SCOPES } from "./api/auth"
+import { asApp } from "./api/as-app"
 import type { Actor, Ctx } from "./api/context"
 import { sign, verify } from "./api/crypto"
 import { CampflareError } from "./api/errors"
 import { randomSecret } from "./api/ids"
-import { publicOrigin } from "./api/origin"
 import { b64url, unb64url } from "./api/tickets"
 import { requireMessage, postMessage } from "./db/messages"
 import { stmt } from "./db/query"
@@ -36,8 +35,8 @@ export interface ResponseUrlClaims {
   purpose: "response_url"
   teamId: string
   channelId: string
-  /** The message clicked. */
-  ts: string
+  /** The message clicked; none for a slash command's (docs/commands-webhooks.md). */
+  ts?: string
   /** Its thread, when it's a reply: where answers go. */
   threadTs?: string
   /** The message clicked was the clicker's ephemeral one: replacing or deleting it is theirs alone. */
@@ -373,24 +372,20 @@ export async function handleResponseUrl(
     const bot = users!.results[0] as UserRow | undefined
     const c = conversations!.results[0] as ConversationRow | undefined
     if (!app || !team || !bot || !c) return answer(404, { ok: false, error: "expired_url" })
-    const ctx: Ctx<Actor> = {
-      env,
-      args,
-      auth: { kind: "bot", team, user: bot, app, scopes: DEFAULT_BOT_SCOPES },
-      request,
-      origin: publicOrigin(request),
-      waitUntil,
-    }
+    const ctx = asApp(env, request, waitUntil, { team, app, bot }, args)
     const threadTs = args.ts("thread_ts") ?? claims.threadTs
+    const ts = claims.ts
     // The clicked message was ephemeral: it's the clicker's alone to change.
-    const original = claims.ephemeral ? undefined : () => requireMessage(ctx, c.id, claims.ts)
+    const original = claims.ephemeral || !ts ? undefined : () => requireMessage(ctx, c.id, ts)
     if (args.bool("delete_original")) {
+      // A slash command's response_url has no message of its own to delete.
+      if (!ts) throw new CampflareError("message_not_found")
       if (original) await deleteMessage(ctx, c, await original())
-      else deleteEphemeral(ctx, c, claims.userId, claims.ts)
-    } else if (args.bool("replace_original")) {
+      else deleteEphemeral(ctx, c, claims.userId, ts)
+    } else if (args.bool("replace_original") && ts) {
       if (c.is_archived) throw new CampflareError("is_archived")
       if (original) await editMessage(ctx, c, await original(), { quiet: true })
-      else replaceEphemeral(ctx, c, claims.userId, claims.ts, claims.threadTs)
+      else replaceEphemeral(ctx, c, claims.userId, ts, claims.threadTs)
     } else if (args.str("response_type") === "in_channel") {
       if (c.is_archived) throw new CampflareError("is_archived")
       await postMessage(ctx, c, { ...authorOf(ctx), ...content(ctx), thread_ts: threadTs ?? null })

@@ -362,7 +362,7 @@ function appSettings(app: AppRow) {
   }
 }
 
-const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
+export const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
 
 /** appSettings and how its Request URL is doing (the team hub keeps the counts). */
 async function appOut(ctx: Ctx<Actor>, app: AppRow) {
@@ -372,12 +372,12 @@ async function appOut(ctx: Ctx<Actor>, app: AppRow) {
 }
 
 /** An app of the caller's workspace that they installed, or any if they're an admin. */
-async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
+export async function ownApp(ctx: Ctx<Actor>, id = ctx.args.req("app", "app_not_found")): Promise<AppRow> {
   const app = await first<AppRow>(
     ctx.env.DB,
     // The built-in bot (system-bot.ts) is the server's: nobody manages it.
     "SELECT * FROM apps WHERE id = ? AND team_id = ? AND built_in IS NULL",
-    ctx.args.req("app", "app_not_found"),
+    id,
     ctx.auth.team.id,
   )
   if (!app) throw new CampflareError("app_not_found")
