@@ -140,6 +140,7 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     "tokens",
     ["hash", "team_id", "kind", "user_id", "app_id", "scopes", "created"],
     [
+      // Presets by name, as migration 0018 stores them: a person's own token, an app's bot.
       ...users.map((u) => [sha256(u.token), teamId, "user", u.id, null, "full", now]),
       [sha256(botToken), teamId, "bot", botUserId, "ABENCH0001", "bot", now],
     ],
@@ -294,6 +295,12 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
       ...saved.map((m, i) => [users[0]!.id, `message:${m[0]}/${m[1]}`, teamId, "message", m[0]!, m[1]!, now - i]),
       ...[general, busy, fanout].map((cid) => [users[0]!.id, `channel:${cid}`, teamId, "channel", cid, null, now]),
     ],
+  )
+  // Who takes part in each thread, as replies posted through the API would have recorded it (migration 0019).
+  lines.push(
+    `INSERT OR IGNORE INTO thread_participants (channel_id, thread_ts, user_id)
+     SELECT channel_id, thread_ts, user_id FROM messages WHERE thread_ts IS NOT NULL AND thread_ts != ts
+     UNION SELECT channel_id, thread_ts, parent_user_id FROM messages WHERE thread_ts IS NOT NULL AND thread_ts != ts;`,
   )
   // Reactions may repeat (same user, same emoji): keep one.
   insert(

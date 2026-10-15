@@ -132,6 +132,10 @@ export const NEEDS: Record<string, Need> = {
   "reminders.delete": ["reminders:write"],
   "reminders.info": ["reminders:read"],
   "reminders.list": ["reminders:read"],
+  "campflare.activity.list": ["activity:read"],
+  "campflare.activity.mark": ["activity:write"],
+  "campflare.prefs.get": ["prefs:read"],
+  "campflare.prefs.set": ["prefs:write"],
 
   "apps.connections.open": ["connections:write"],
   // The live feeds carry every message the person sees, so they want every type's :history too.
@@ -240,6 +244,8 @@ const READ = [
   "events:read",
   "views:read",
   "calls:read",
+  "activity:read",
+  "prefs:read",
 ]
 
 const WRITE = [
@@ -253,6 +259,8 @@ const WRITE = [
   "files:write",
   "reminders:write",
   "views:write",
+  "activity:write",
+  "prefs:write",
 ]
 
 /** Every scope a user token can hold: what a person's own sign-in gets. */
@@ -306,6 +314,8 @@ export const DEFAULT_BOT_SCOPES = [
   "usergroups:read",
   "rtm:stream",
   "events:read",
+  "activity:read",
+  "activity:write",
 ]
 
 export const APP_SCOPES = ["connections:write"]

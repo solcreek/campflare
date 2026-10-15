@@ -240,6 +240,20 @@ function scenarios(d: Dataset): Scenario[] {
       (i) => ({ method: "chat.postMessage", token: owner, args: { channel: "#busy", text: `by name ${i}` } }),
     ],
     [
+      "chat.postMessage (activity: mention)",
+      (i) => ({
+        method: "chat.postMessage",
+        token: user(i),
+        args: { channel: d.busy, text: `<@${d.owner.id}> look ${i}` },
+      }),
+    ],
+    // The owner's inbox: the mentions above, a few hundred items.
+    ["campflare.activity.list 50", () => ({ method: "campflare.activity.list", token: owner, args: { limit: "50" } })],
+    [
+      "campflare.activity.mark",
+      (i) => ({ method: "campflare.activity.mark", token: owner, args: { up_to: String(i + 1) } }),
+    ],
+    [
       "chat.update",
       (i) => ({
         method: "chat.update",

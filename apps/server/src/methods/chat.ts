@@ -1,3 +1,4 @@
+import { activityRemoved, messageActivityGone } from "../activity"
 import { requireNotArchived, requireReadable, requireWritable, resolveConversation } from "../db/conversations"
 import {
   announceChanged,
@@ -11,7 +12,7 @@ import { announcePin, pinCountFrom, pinCountStatement } from "../db/pins"
 import { stmt } from "../db/query"
 import { announceUnsaved, unsaveStatement } from "../db/stars"
 import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
-import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
+import { audienceFrom, audienceOf, audienceStatement, channelType, publish, publishEach } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
@@ -271,7 +272,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   const db = ctx.env.DB
   if (message.thread_ts === message.ts && message.reply_count > 0) {
     // A thread head with replies stays as a tombstone, so its replies stay reachable.
-    const [, unsaved, tombstone, audience, reactions, pins] = await db.batch([
+    const [, unsaved, tombstone, audience, reactions, pins, gone] = await db.batch([
       stmt(
         db,
         `UPDATE messages SET subtype = 'tombstone', text = 'This message was deleted.', user_id = 'USLACKBOT',
@@ -286,8 +287,10 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       audienceStatement(db, c.id),
       reactionsStatement(db, c.id, message.ts),
       pinCountStatement(db, c.id),
+      messageActivityGone(db, c.id, message.ts),
     ])
     const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
+    publishEach(ctx, c.team_id, activityRemoved(c.team_id, gone))
     announceChanged(ctx, c, {
       before: message,
       after: tombstone!.results[0] as MessageRow,
@@ -299,7 +302,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
   } else {
     // Its reactions are read for the event before they go; a reply's thread is recounted in the same batch.
     const isReply = Boolean(message.thread_ts && message.thread_ts !== message.ts)
-    const [reactions, audience, , , unsaved, pins] = await db.batch([
+    const [reactions, audience, , , unsaved, pins, gone] = await db.batch([
       reactionsStatement(db, c.id, message.ts),
       audienceStatement(db, c.id),
       stmt(
@@ -311,25 +314,29 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       stmt(db, "DELETE FROM reactions WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       unsaveStatement(db, c.id, message.ts),
       pinCountStatement(db, c.id),
+      messageActivityGone(db, c.id, message.ts),
       ...(isReply ? [recountThread(db, c.id, message.thread_ts!)] : []),
     ])
     const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
     const now = `${(Date.now() / 1000).toFixed(6)}`
-    publish(ctx, {
-      teamId: c.team_id,
-      audience: audienceFrom(audience!),
-      event: {
-        type: "message",
-        subtype: "message_deleted",
-        hidden: true,
-        channel: c.id,
-        channel_type: channelType(c),
-        ts: now,
-        event_ts: now,
-        deleted_ts: message.ts,
-        previous_message: messageJson(message, extras, ctx.origin),
+    publishEach(ctx, c.team_id, [
+      {
+        teamId: c.team_id,
+        audience: audienceFrom(audience!),
+        event: {
+          type: "message",
+          subtype: "message_deleted",
+          hidden: true,
+          channel: c.id,
+          channel_type: channelType(c),
+          ts: now,
+          event_ts: now,
+          deleted_ts: message.ts,
+          previous_message: messageJson(message, extras, ctx.origin),
+        },
       },
-    })
+      ...activityRemoved(c.team_id, gone),
+    ])
     unpinned(ctx, c, message, { extras, audience: audienceFrom(audience!), count: pinCountFrom(pins!) })
     announceUnsaved(ctx, c.team_id, unsaved!)
   }

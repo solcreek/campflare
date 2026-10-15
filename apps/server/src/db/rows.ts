@@ -251,3 +251,34 @@ export interface StarRow {
   file_id: string | null
   created: number
 }
+
+export type ActivityKind = "mention" | "dm" | "thread_reply" | "reaction"
+
+/** An activity item (migration 0019, docs/activity.md). */
+export interface ActivityRow {
+  id: number
+  team_id: string
+  user_id: string
+  kind: ActivityKind
+  channel_id: string
+  ts: string
+  thread_ts: string | null
+  /** Who did it; '' when unknown. */
+  actor_id: string
+  /** The emoji, for a reaction; '' otherwise. */
+  reaction: string
+  created: number
+  notify: number
+  /** When it was read (epoch seconds), 0 while unread. */
+  read: number
+}
+
+export type NotificationLevel = "all" | "mentions" | "none"
+
+export interface NotificationPrefRow {
+  user_id: string
+  /** '' for the person's default. */
+  conversation_id: string
+  level: NotificationLevel
+  updated: number
+}

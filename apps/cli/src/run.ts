@@ -67,6 +67,17 @@ Messages
   stop <#channel|id> <ts>          stop an app's reply that is still streaming (Campflare);
                                    the app's next append is answered stopped_by_user
 
+Attention (Campflare)
+  inbox [--unread] [--type mention,dm,thread_reply,reaction] [-n 20] [--follow] [--json]
+                                   what needs you, newest last (* unread): mentions, DMs,
+                                   replies in your threads, reactions to your messages;
+                                   unread counts on stderr; --follow prints new ones as they come
+  inbox read <id…> | --all | --up-to <id>   mark items read
+  notify                           your notification levels
+  notify <#channel|@person> all|mentions|none|default
+  notify --default all|mentions|none   when to notify: every item, mentions and DMs only,
+                                   or never (items are recorded either way)
+
 Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
                                  stream piped markdown into one message as it arrives
@@ -498,6 +509,57 @@ async function joinWorkspace(io: Io, link: string, handle: string | undefined, v
 
 type Command = (argv: string[], io: Io) => Promise<number | void>
 
+/** An activity item, as campflare.activity.list and activity_added give it. */
+interface ActivityItem {
+  id: string
+  type: string
+  channel: string
+  ts: string
+  actor?: string
+  reaction?: string
+  is_read: boolean
+  message?: MessageRecord
+}
+
+type Unread = Record<string, number> & { total: number }
+
+/** "3 unread: 1 mention, 2 dm", for stderr. */
+function unreadLine(unread: Unread): string {
+  const parts = Object.entries(unread)
+    .filter(([kind, n]) => kind !== "total" && n > 0)
+    .map(([kind, n]) => `${n} ${kind}`)
+  return `${unread.total} unread${parts.length ? `: ${parts.join(", ")}` : ""}`
+}
+
+/** Conversation ids as people name them: #channel, @person for a DM, a group DM's name. */
+async function conversationNames(s: Session): Promise<Map<string, string>> {
+  const [list, names] = await Promise.all([
+    s.client.paginate<Conversation>("users.conversations", "channels", {
+      types: "public_channel,private_channel,mpim,im",
+    }),
+    s.names(),
+  ])
+  return new Map(
+    list.map((c) => [
+      c.id,
+      c.is_im ? `@${names.get(c.user ?? "") ?? c.user}` : c.is_mpim ? (c.name ?? c.id) : `#${c.name}`,
+    ]),
+  )
+}
+
+/** One inbox line: "* 42  2026-10-15 09:30  mention       #general  bob: text". */
+function itemLine(item: ActivityItem, names: Map<string, string>, where: Map<string, string>): string {
+  const who = item.actor ? (names.get(item.actor) ?? item.actor) : "someone"
+  const text = plain(item.message?.text ?? "", names).replace(/\n/g, " ")
+  const what = item.reaction ? `${who} reacted :${item.reaction}: to: ${text}` : `${who}: ${text}`
+  const place = where.get(item.channel) ?? item.channel
+  return `${item.is_read ? " " : "*"} ${item.id}  ${time(item.ts)}  ${item.type.padEnd(12)}  ${place}  ${what}`
+}
+
+const LEVELS = ["all", "mentions", "none"]
+
+type Prefs = { notifications: { default: string; conversations: Record<string, string> } }
+
 const commands: Record<string, Command> = {
   async login(argv, io) {
     const { values } = parse(argv, {
@@ -910,7 +972,7 @@ const commands: Record<string, Command> = {
     if (values.json) return s.print(res.items)
     if (res.items.length === 0) return io.stdout("Nothing saved\n")
     const names = await s.names()
-    const where = await conversationNames(s, names)
+    const where = await conversationLabels(s, names)
     for (const item of res.items) {
       if (item.type === "message" && item.message) {
         const place = where.get(item.channel ?? "") ?? item.channel
@@ -1392,6 +1454,91 @@ const commands: Record<string, Command> = {
     io.stderr(`cursor ${page.cursor}${page.has_more ? " (more)" : ""}\n`)
   },
 
+  async inbox(argv, io) {
+    const { values, positionals } = parse(argv, {
+      unread: { type: "boolean" },
+      type: { type: "string" },
+      n: { type: "string", short: "n" },
+      follow: { type: "boolean" },
+      all: { type: "boolean" },
+      "up-to": { type: "string" },
+    })
+    const s = await session(io, values)
+    if (positionals[0] === "read") {
+      const ids = positionals.slice(1)
+      const upTo = str(values["up-to"])
+      if ([ids.length > 0, Boolean(values.all), upTo !== undefined].filter(Boolean).length !== 1) {
+        throw new UsageError("inbox read needs item ids, --all or --up-to <id>")
+      }
+      const res = await s.client.call<{ ok: boolean; marked: number; unread: Unread }>("campflare.activity.mark", {
+        ...(ids.length ? { ids: ids.join(",") } : {}),
+        ...(values.all ? { all: true } : {}),
+        ...(upTo !== undefined ? { up_to: upTo } : {}),
+      })
+      if (values.json) return s.print(res)
+      io.stdout(`Marked ${res.marked} read; ${unreadLine(res.unread)}\n`)
+      return
+    }
+    if (positionals.length) throw new UsageError(`inbox takes no ${positionals[0]}: did you mean inbox read?`)
+    const res = await s.client.call<{ ok: boolean; items: ActivityItem[]; unread: Unread }>("campflare.activity.list", {
+      limit: str(values.n) ?? 20,
+      unread_only: Boolean(values.unread),
+      types: str(values.type),
+    })
+    const [names, where] = values.json
+      ? [new Map<string, string>(), new Map<string, string>()]
+      : await Promise.all([s.names(), conversationNames(s)])
+    const print = (item: ActivityItem) =>
+      io.stdout(values.json ? `${JSON.stringify(item)}\n` : `${itemLine(item, names, where)}\n`)
+    // Oldest first, as a terminal reads, so the newest is next to the prompt (and to what --follow adds).
+    for (const item of res.items.toReversed()) print(item)
+    io.stderr(`${unreadLine(res.unread)}\n`)
+    if (!values.follow) return
+    const types = str(values.type)?.split(",")
+    const listener = listen({
+      client: s.client,
+      mode: "rtm",
+      WebSocket: io.WebSocket,
+      onStatus: (status, detail) => io.stderr(`[${status}${detail ? `: ${detail}` : ""}]\n`),
+      onEvent: (event) => {
+        if (event.type !== "activity_added") return
+        const item = event.item as ActivityItem
+        if (!types || types.includes(item.type)) print(item)
+      },
+    })
+    await io.interrupted()
+    listener.close()
+  },
+
+  async notify(argv, io) {
+    const { values, positionals } = parse(argv, { default: { type: "string" } })
+    const s = await session(io, values)
+    const level = str(values.default)
+    let prefs: Prefs
+    if (level !== undefined) {
+      if (positionals.length) throw new UsageError("notify --default takes only a level")
+      if (!LEVELS.includes(level)) throw new UsageError("notify --default takes all, mentions or none")
+      prefs = (await s.client.call<{ ok: boolean; prefs: Prefs }>("campflare.prefs.set", { level })).prefs
+    } else if (positionals.length) {
+      const [target, wanted] = positionals
+      if (!target || !wanted || ![...LEVELS, "default"].includes(wanted)) {
+        throw new UsageError("notify needs a conversation and a level: all, mentions, none or default")
+      }
+      const channel = await s.conversation(target)
+      prefs = (await s.client.call<{ ok: boolean; prefs: Prefs }>("campflare.prefs.set", { channel, level: wanted }))
+        .prefs
+    } else {
+      prefs = (await s.client.call<{ ok: boolean; prefs: Prefs }>("campflare.prefs.get")).prefs
+    }
+    if (values.json) return s.print(prefs)
+    const { notifications } = prefs
+    io.stdout(`default  ${notifications.default}\n`)
+    const entries = Object.entries(notifications.conversations)
+    if (entries.length === 0) return
+    const where = await conversationNames(s)
+    for (const [id, l] of entries) io.stdout(`${where.get(id) ?? id}  ${l}\n`)
+  },
+
   async api(argv, io) {
     const { values, positionals } = parse(argv, { list: { type: "boolean" }, url: { type: "string" } })
     if (values.list) return listMethods(io, values, positionals[0])
@@ -1670,7 +1817,7 @@ async function saveOrUnsave(argv: string[], io: Io, add: boolean) {
 }
 
 /** "#name" for channels, "@person" for DMs: the conversations the person is in. */
-async function conversationNames(s: Session, people: Map<string, string>) {
+async function conversationLabels(s: Session, people: Map<string, string>) {
   const conversations = await s.client.paginate<Conversation>("users.conversations", "channels", {
     types: "public_channel,private_channel,im,mpim",
   })
