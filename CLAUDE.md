@@ -522,7 +522,8 @@ codes (`no_such_subteam`, `handle_already_exists`, `name_already_exists`,
 member change `subteam_members_changed` (counts as strings, as Slack) to the team
 plus `subteam_self_added`/`_removed` to those people. Handles share a namespace
 with people's names: triggers refuse a clash on either side in the writing
-statement. `usergroups.users.update` replaces the members in one batch that reads
+statement, except that a bot user is never refused for a group's handle (built-in
+bots such as the Huddle Scribe have fixed handles; a group can't take a bot's). `usergroups.users.update` replaces the members in one batch that reads
 the old list first, so the events describe exactly that change. Anyone may manage
 any group (Slack's default; no admin restriction yet); `usergroups:read` is in
 `read` and the bot defaults, `usergroups:write` only in `full`. Mentions are

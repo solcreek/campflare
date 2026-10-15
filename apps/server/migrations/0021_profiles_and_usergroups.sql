@@ -50,8 +50,13 @@ BEGIN
   SELECT RAISE(ABORT, 'handle_taken_by_user');
 END;
 
+-- People only: an app's bot user (built-in ones too, such as the Huddle Scribe,
+-- whose handle is fixed) is named after its app and is never refused for a
+-- group's handle. A group still can't take a bot's name, so a handle reaches
+-- one or the other; a bot made after a group shares the group's handle, and a
+-- mention of the group (<!subteam^…>) stays the group's, being by id.
 CREATE TRIGGER users_name_insert BEFORE INSERT ON users
-WHEN EXISTS (SELECT 1 FROM usergroups WHERE team_id = NEW.team_id AND handle = NEW.name)
+WHEN NEW.is_bot = 0 AND EXISTS (SELECT 1 FROM usergroups WHERE team_id = NEW.team_id AND handle = NEW.name)
 BEGIN
   SELECT RAISE(ABORT, 'name_taken_by_usergroup');
 END;

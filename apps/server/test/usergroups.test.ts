@@ -79,6 +79,9 @@ describe("usergroups", () => {
     // A person's name is a handle too.
     await expectError("usergroups.create", { name: "Bobs", handle: "bob" }, w.owner.token, "handle_already_exists")
     await expectError("campflare.users.create", { name: "equipe-front-end" }, w.owner.token, "name_taken")
+    // A bot user isn't refused for a group's handle: built-in bots' handles are fixed.
+    await ok("usergroups.create", { name: "Robots", handle: "robot" }, w.owner.token)
+    await w.addApp("Robot")
     await expectError("usergroups.create", { name: "All", handle: "here" }, w.owner.token, "invalid_handle")
     await expectError("usergroups.create", { name: "Bad", handle: "no spaces" }, w.owner.token, "invalid_handle")
     await expectError("usergroups.create", { name: "  " }, w.owner.token, "invalid_name")
