@@ -3,9 +3,9 @@ import { isEmail, normalizeEmail } from "./api/email-address"
 import { CampflareError, invalidArguments } from "./api/errors"
 import { ids, nowSeconds, randomSecret } from "./api/ids"
 import { userJson } from "./api/shapes"
-import { checkPassword, hashPassword, setPassword } from "./auth/password"
+import { checkPassword, hashPassword, passwordStatements } from "./auth/password"
 import { addressChecks, counter, countFailure, IP_FREE_FAILURES, keys, readCounter, waitFor } from "./auth/throttle"
-import { all, first, isUniqueViolation, run, stmt } from "./db/query"
+import { all, first, isUniqueViolation, stmt } from "./db/query"
 import type { UserRow } from "./db/rows"
 import { emailSender, type EmailSender } from "./email"
 import type { Env } from "./env"
@@ -314,16 +314,23 @@ export async function completeReset(
   }
   const person = results[3]!.results[0] as ResetDetails | undefined
   if (!person) throw await refuse()
-  checkPassword(opts.password)
-  // Single use: whoever deletes the row has it; two at once can't both.
-  const claimed = await run(
-    env.DB,
-    "DELETE FROM password_resets WHERE user_id = (SELECT user_id FROM password_resets WHERE hash = ? AND expires > ?)",
-    hash,
-    now,
-  )
-  if (!claimed.meta.changes) throw await refuse()
-  await setPassword(env, person, opts.password)
+  const passwordHash = await hashPassword(checkPassword(opts.password))
+  // One batch: the password is written only while the link is good, and the link spent only with it,
+  // last. Single use: of two at once, the second finds the row gone and writes nothing.
+  const claim = await env.DB.batch([
+    ...passwordStatements(env, person, passwordHash, {
+      sql: "EXISTS (SELECT 1 FROM password_resets WHERE hash = ? AND expires > ?)",
+      params: [hash, now],
+    }),
+    stmt(
+      env.DB,
+      `DELETE FROM password_resets WHERE user_id = (SELECT user_id FROM password_resets WHERE hash = ? AND expires > ?)
+       RETURNING hash`,
+      hash,
+      now,
+    ),
+  ])
+  if (!claim.at(-1)!.results.length) throw await refuse()
   return person
 }
 

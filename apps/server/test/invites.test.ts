@@ -543,6 +543,23 @@ describe("resetting a password through a link", () => {
     expect(gone.error).toBe("invalid_reset")
   })
 
+  it("spends the link only together with the password write", async () => {
+    const { email, hana, reset } = await person()
+    // The password write fails (a trigger stands in for a failing database): the link must survive it.
+    const trigger = `fail_password_${hana.id}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE ON passwords WHEN NEW.user_id = '${hana.id}'
+       BEGIN SELECT RAISE(ABORT, 'password write failed'); END`,
+    ).run()
+    const failed = await anonymous("campflare.users.resetPassword", { code: reset.url, password: "long enough now" })
+    expect(failed.error).toBe("internal_error")
+    await env.DB.prepare(`DROP TRIGGER ${trigger}`).run()
+    expect((await signIn(email, "the old password")).status).toBe(200)
+    const res = await anonymous("campflare.users.resetPassword", { code: reset.url, password: "long enough now" })
+    expect(res.ok).toBe(true)
+    expect((await signIn(email, "long enough now")).status).toBe(200)
+  })
+
   it("refuses an expired link", async () => {
     const { reset } = await person()
     await env.DB.prepare("UPDATE password_resets SET expires = 1").run()
