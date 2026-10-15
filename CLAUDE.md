@@ -569,7 +569,7 @@ over `members` (members only; a thread's participants from `thread_participants`
 edits record nothing. Each row stores `notify`, decided then: the
 conversation's level in `notification_prefs`, else the person's default
 (`conversation_id` ''), else `all`; `mentions` notifies only mention and dm;
-`none` nothing; snoozed nothing. Items are recorded whatever the level. The
+`none` nothing; snoozed or within DND hours (the stored window, `docs/dnd.md`) nothing. Items are recorded whatever the level. The
 returned rows go out as RTM-only `activity_added` (with the message), one per
 recipient, in the same hub call as the message or reaction event and after it
 (`publishEach()`, so order holds). Deleting a message (or tombstoning
@@ -583,6 +583,27 @@ messages, their reactions and the unread counts are one batch.
 `mention` for its members in the conversation: they join the named set in the
 INSERT, in SQL (`?7`, the groups named). CLI: `campflare inbox`,
 `campflare notify`; MCP: `get_activity`, `mark_activity_read`.
+
+**Time zones, status expiry, DND hours** (`docs/dnd.md`, migration 0027).
+`campflare.users.setTimezone` (`users.profile:write`) stores an IANA `tz`
+(`ianaZone()` in `src/api/when.ts`: no fixed offsets; a link keeps the name
+given); `userJson` sends `tz_label`/`tz_offset` for now via `Intl`
+(`zoneLabel()`, `zoneOffset()`), so DST needs no write. `users.profile.set`
+with a future `status_expiration` arms the `Scheduler` (passing the origin,
+kept in its storage for `user_change`'s URLs); `runDue()` also runs
+`expireStatuses()`, one `UPDATE … WHERE id IN (due) AND status_expiration <=
+now RETURNING *` (a status set again meanwhile isn't due, a second run clears
+nothing), and `moveDndWindows()`. DND hours (`campflare.dnd.setSchedule`,
+`dnd:write`; `users.dnd_start`/`dnd_end`/`dnd_days`, `src/api/dnd-hours.ts`'s
+`windowAt()` computes windows from wall-clock times through `zonedTime()`, so
+they follow DST) store the window in progress or next on the user
+(`dnd_window_start`/`_end`) so activity's `notify()` checks it in SQL; the
+Scheduler, armed at the window's end, moves ended windows on, guarded on the
+row as read. `src/dnd.ts` builds `dnd.info`'s Slack shape (the caller also gets
+`dnd_schedule`; a stale stored window is recomputed) and the `dnd_updated`
+(to the person, with the snooze) / `dnd_updated_user` (the workspace, without)
+pair sent on every change. `dnd.endDnd` skips the window in progress and ends a
+snooze. CLI: `campflare dnd`, `campflare profile --tz`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a

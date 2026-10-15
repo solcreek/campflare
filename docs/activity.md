@@ -152,7 +152,9 @@ A person sets a level per conversation, and a default for the rest:
 
 The level is the conversation's, else the person's default, else `all`: items
 are already the things worth attention, so the built-in default lets them all
-through. Snoozed (`dnd.setSnooze`, until `users.snooze_until`) nothing notifies.
+through. Snoozed (`dnd.setSnooze`, until `users.snooze_until`) or within the person's DND
+hours (`campflare.dnd.setSchedule`, the window stored on the user; docs/dnd.md)
+nothing notifies.
 
 Activity is **recorded regardless of preferences**: Slack's Activity view shows
 mentions in muted channels too, and a level only says whether to interrupt. So
