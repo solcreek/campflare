@@ -256,6 +256,12 @@ method("admin.emoji.rename", "user", async (ctx) => {
   const name = nameOf(ctx.args.str("name"))
   if (!name) throw new CampflareError("emoji_not_found")
   const to = newName(ctx.args.str("new_name"))
+  // Taken, by itself: refused rather than a change that changes nothing yet tells everyone.
+  if (to === name) {
+    throw new CampflareError("error_name_taken", {
+      response_metadata: { messages: ["[ERROR] new_name is the emoji's name already"] },
+    })
+  }
   const db = ctx.env.DB
   const team = ctx.auth.team.id
   const may = mayChange(ctx)

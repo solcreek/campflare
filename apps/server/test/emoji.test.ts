@@ -435,6 +435,16 @@ describe("admin.emoji.rename", () => {
     await expectError("admin.emoji.rename", { name: "cat-jam", new_name: "kitty" }, carol.token, "not_an_admin")
     await expectError("admin.emoji.rename", { name: "nothing", new_name: "kitty" }, bob.token, "emoji_not_found")
     await expectError("admin.emoji.rename", { name: "cat-jam", new_name: "good-dog" }, bob.token, "error_name_taken")
+    // To its own name: nothing to change, so nothing changes (no cache_ts bump).
+    const before = (await list(bob.token)).cache_ts
+    const same = await expectError(
+      "admin.emoji.rename",
+      { name: "cat-jam", new_name: ":Cat-Jam:" },
+      bob.token,
+      "error_name_taken",
+    )
+    expect(same.response_metadata).toEqual({ messages: ["[ERROR] new_name is the emoji's name already"] })
+    expect((await list(bob.token)).cache_ts).toBe(before)
     await expectError("admin.emoji.rename", { name: "cat-jam", new_name: "cat" }, bob.token, "error_name_taken_i18n")
     await expectError("admin.emoji.rename", { name: "cat-jam", new_name: "Chat Été" }, bob.token, "error_bad_name_i18n")
 
