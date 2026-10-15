@@ -350,6 +350,27 @@ describe("marking what can't be listed", () => {
   })
 })
 
+describe("live order", () => {
+  it("sends an item after the message or reaction that made it, never before", async () => {
+    const w = await workspace()
+    const bob = await w.addUser("bob")
+    const link = await connect((await ok<{ url: string }>("rtm.connect", {}, bob.token)).url)
+    await link.next((f) => f.type === "hello")
+    for (let i = 0; i < 3; i++) {
+      const ts = await post(w.owner.token, w.general, `<@${bob.id}> orden ${i} 顺序`)
+      const added = await link.next((f) => f.type === "activity_added" && (f.item as Item).ts === ts)
+      expect(added).toBeDefined()
+      // Its message arrived first, and is still waiting to be read.
+      expect(link.frames.some((f) => f.type === "message" && f.ts === ts)).toBe(true)
+      const mine = await post(bob.token, w.general, `Meins ${i}`)
+      await ok("reactions.add", { channel: w.general, timestamp: mine, name: "ok" }, w.owner.token)
+      await link.next((f) => f.type === "activity_added" && (f.item as Item).ts === mine)
+      expect(link.frames.some((f) => f.type === "reaction_added" && (f.item as { ts: string }).ts === mine)).toBe(true)
+    }
+    link.close()
+  })
+})
+
 describe("live", () => {
   it("sends activity_added, activity_marked and activity_removed to the recipient only", async () => {
     const w = await workspace()

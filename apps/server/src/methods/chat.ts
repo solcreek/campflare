@@ -1,4 +1,4 @@
-import { announceActivityGone, messageActivityGone } from "../activity"
+import { activityRemoved, messageActivityGone } from "../activity"
 import { requireNotArchived, requireReadable, requireWritable, resolveConversation } from "../db/conversations"
 import {
   announceChanged,
@@ -10,7 +10,7 @@ import {
 } from "../db/messages"
 import { stmt } from "../db/query"
 import type { ConversationRow, MessageRow, ReactionRow } from "../db/rows"
-import { audienceFrom, audienceOf, audienceStatement, channelType, publish } from "../events"
+import { audienceFrom, audienceOf, audienceStatement, channelType, publish, publishEach } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
@@ -284,7 +284,7 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       reactionsStatement(db, c.id, message.ts),
       messageActivityGone(db, c.id, message.ts),
     ])
-    announceActivityGone(ctx, c.team_id, gone)
+    publishEach(ctx, c.team_id, activityRemoved(c.team_id, gone))
     announceChanged(ctx, c, {
       before: message,
       after: tombstone!.results[0] as MessageRow,
@@ -302,24 +302,26 @@ export async function deleteMessage(ctx: Ctx<Actor>, c: ConversationRow, message
       stmt(db, "DELETE FROM reactions WHERE channel_id = ? AND ts = ?", c.id, message.ts),
       ...(isReply ? [recountThread(db, c.id, message.thread_ts!)] : []),
     ])
-    announceActivityGone(ctx, c.team_id, gone)
     const extras = await loadExtras(ctx.env, [message], reactions!.results as ReactionRow[])
     const now = `${(Date.now() / 1000).toFixed(6)}`
-    publish(ctx, {
-      teamId: c.team_id,
-      audience: audienceFrom(audience!),
-      event: {
-        type: "message",
-        subtype: "message_deleted",
-        hidden: true,
-        channel: c.id,
-        channel_type: channelType(c),
-        ts: now,
-        event_ts: now,
-        deleted_ts: message.ts,
-        previous_message: messageJson(message, extras, ctx.origin),
+    publishEach(ctx, c.team_id, [
+      {
+        teamId: c.team_id,
+        audience: audienceFrom(audience!),
+        event: {
+          type: "message",
+          subtype: "message_deleted",
+          hidden: true,
+          channel: c.id,
+          channel_type: channelType(c),
+          ts: now,
+          event_ts: now,
+          deleted_ts: message.ts,
+          previous_message: messageJson(message, extras, ctx.origin),
+        },
       },
-    })
+      ...activityRemoved(c.team_id, gone),
+    ])
   }
 }
 

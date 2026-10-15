@@ -1,7 +1,6 @@
 import { stmt } from "./db/query"
 import type { ActivityKind, ActivityRow, ConversationRow, MessageRow } from "./db/rows"
-import { publishEach } from "./events"
-import type { Ctx } from "./api/context"
+import type { PublishInput } from "./hub"
 import { nowSeconds } from "./api/ids"
 import { permalink } from "./api/shapes"
 
@@ -168,44 +167,26 @@ export function activityJson(row: ActivityRow, origin: string, message?: unknown
   }
 }
 
-/** Tells each recipient's clients about their new items (RTM activity_added), after the response. */
-export function announceActivity(
-  ctx: Pick<Ctx, "env" | "waitUntil" | "origin">,
-  teamId: string,
-  result: D1Result | undefined,
-  message: unknown,
-) {
-  const rows = (result?.results ?? []) as ActivityRow[]
-  publishEach(
-    ctx,
+/** RTM activity_added for each new item, to its recipient alone: to send right after what made them. */
+export function activityAdded(origin: string, teamId: string, result: D1Result | undefined, message: unknown) {
+  return ((result?.results ?? []) as ActivityRow[]).map((row): PublishInput => ({
     teamId,
-    rows.map((row) => ({
-      teamId,
-      audience: [row.user_id],
-      rtmOnly: true,
-      event: { type: "activity_added", item: activityJson(row, ctx.origin, message) },
-    })),
-  )
+    audience: [row.user_id],
+    rtmOnly: true,
+    event: { type: "activity_added", item: activityJson(row, origin, message) },
+  }))
 }
 
-/** Tells each recipient's clients which of their items went (RTM activity_removed). */
-export function announceActivityGone(
-  ctx: Pick<Ctx, "env" | "waitUntil">,
-  teamId: string,
-  result: D1Result | undefined,
-) {
+/** RTM activity_removed for the items a delete returned, one per recipient with their ids. */
+export function activityRemoved(teamId: string, result: D1Result | undefined) {
   const byUser = new Map<string, string[]>()
   for (const r of (result?.results ?? []) as Pick<ActivityRow, "id" | "user_id">[]) {
     byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), String(r.id)])
   }
-  publishEach(
-    ctx,
+  return [...byUser].map(([user, ids]): PublishInput => ({
     teamId,
-    [...byUser].map(([user, ids]) => ({
-      teamId,
-      audience: [user],
-      rtmOnly: true,
-      event: { type: "activity_removed", ids },
-    })),
-  )
+    audience: [user],
+    rtmOnly: true,
+    event: { type: "activity_removed", ids },
+  }))
 }

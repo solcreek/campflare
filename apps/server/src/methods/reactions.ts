@@ -1,11 +1,12 @@
-import { announceActivity, announceActivityGone, reactionActivity, reactionActivityGone } from "../activity"
+import { activityAdded, activityRemoved, reactionActivity, reactionActivityGone } from "../activity"
 import { requireReadable, resolveConversation } from "../db/conversations"
-import { messageOut, requireMessage } from "../db/messages"
+import { messageOut, reactionsStatement, requireMessage } from "../db/messages"
 import { isUniqueViolation, stmt } from "../db/query"
-import { audienceFrom, audienceStatement, publish } from "../events"
+import type { ReactionRow } from "../db/rows"
+import { audienceFrom, audienceStatement, publishEach, sendEach } from "../events"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
-import { permalink } from "../api/shapes"
+import { loadExtras, messageJson, permalink } from "../api/shapes"
 
 const MAX_DISTINCT = 50
 
@@ -57,15 +58,22 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
   const item = added
     ? reactionActivity(db, c, message, name, user)
     : reactionActivityGone(db, c.id, message.ts, name, user)
+  // An added item carries the message, so the message's reactions come in the same batch.
+  const withMessage = added && item !== undefined
   let results: D1Result[]
   try {
-    results = await db.batch([change, audienceStatement(db, c.id), ...(item ? [item] : [])])
+    results = await db.batch([
+      change,
+      audienceStatement(db, c.id),
+      ...(item ? [item] : []),
+      ...(withMessage ? [reactionsStatement(db, c.id, message.ts)] : []),
+    ])
   } catch (error) {
     if (added && isUniqueViolation(error)) throw new CampflareError("already_reacted")
     throw error
   }
   if (!results[0]!.meta.changes) throw new CampflareError(added ? "too_many_reactions" : "no_reaction")
-  publish(ctx, {
+  const event = {
     teamId: c.team_id,
     audience: audienceFrom(results[1]!),
     event: {
@@ -76,15 +84,23 @@ async function react(ctx: Ctx<Actor>, added: boolean) {
       ...(message.user_id ? { item_user: message.user_id } : {}),
       event_ts: `${(Date.now() / 1000).toFixed(6)}`,
     },
-  })
-  if (added) {
-    // The item carries the message, so a client can show it without a fetch: read after the response.
-    const items = results[2]
-    if (items?.results.length) {
-      ctx.waitUntil(messageOut(ctx, message).then((json) => announceActivity(ctx, c.team_id, items, json)))
-    }
+  }
+  if (!added) {
+    publishEach(ctx, c.team_id, [event, ...activityRemoved(c.team_id, results[2])])
+  } else if (!results[2]?.results.length) {
+    publishEach(ctx, c.team_id, [event])
   } else {
-    announceActivityGone(ctx, c.team_id, results[2])
+    // The reaction, then the author's item, in one hub call after the response. Files and a bot
+    // app, if the message has them, are the only reads left (none for most messages).
+    const reactions = results[3]!.results as ReactionRow[]
+    ctx.waitUntil(
+      loadExtras(ctx.env, [message], reactions).then((extras) =>
+        sendEach(ctx.env, c.team_id, [
+          event,
+          ...activityAdded(ctx.origin, c.team_id, results[2], messageJson(message, extras, ctx.origin)),
+        ]),
+      ),
+    )
   }
   return {}
 }

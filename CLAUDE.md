@@ -504,7 +504,8 @@ conversation's level in `notification_prefs`, else the person's default
 (`conversation_id` ''), else `all`; `mentions` notifies only mention and dm;
 `none` nothing; snoozed nothing. Items are recorded whatever the level. The
 returned rows go out as RTM-only `activity_added` (with the message), one per
-recipient, in one hub RPC (`publishEach()`). Deleting a message (or tombstoning
+recipient, in the same hub call as the message or reaction event and after it
+(`publishEach()`, so order holds). Deleting a message (or tombstoning
 a head) and removing a reaction delete their items in the same batch
 (`activity_removed`). `campflare.activity.list` joins `members` and the message,
 so items of a conversation the person left are hidden (back on rejoining), and

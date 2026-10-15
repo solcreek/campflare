@@ -13,15 +13,21 @@ export function publish(ctx: Pick<Ctx, "env" | "waitUntil">, input: PublishInput
   )
 }
 
-/** Several events of one workspace in one RPC to its hub, after the response; none sends nothing. */
-export function publishEach(ctx: Pick<Ctx, "env" | "waitUntil">, teamId: string, inputs: PublishInput[]): void {
+/**
+ * Several events of one workspace in one RPC to its hub, which sends them in
+ * this order (a message, then the activity items it made); none sends nothing.
+ */
+export async function sendEach(env: Ctx["env"], teamId: string, inputs: PublishInput[]): Promise<void> {
   if (inputs.length === 0) return
-  const stub = ctx.env.HUB.get(ctx.env.HUB.idFromName(teamId))
-  ctx.waitUntil(
-    stub.publishEach(inputs).catch((error: unknown) => {
-      console.error("publish failed", inputs[0]!.event.type, error)
-    }),
-  )
+  const stub = env.HUB.get(env.HUB.idFromName(teamId))
+  await stub.publishEach(inputs).catch((error: unknown) => {
+    console.error("publish failed", inputs[0]!.event.type, error)
+  })
+}
+
+/** sendEach() after the response. */
+export function publishEach(ctx: Pick<Ctx, "env" | "waitUntil">, teamId: string, inputs: PublishInput[]): void {
+  if (inputs.length > 0) ctx.waitUntil(sendEach(ctx.env, teamId, inputs))
 }
 
 /** audienceOf() as a statement, to read the audience in the same batch as a change. */

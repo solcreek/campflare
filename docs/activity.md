@@ -54,7 +54,10 @@ erase: no table of its own, and two range scans of the thread index; the prefere
 snooze from `notification_prefs` and `users`, so posting costs no extra round
 trip. A reaction's item is one more statement in `reactions.add`'s batch. The
 returned rows go out as `activity_added` RTM events (`rtmOnly`), one per
-recipient, in one RPC to the hub (`publishEach()`), after the response.
+recipient, after the response in the same hub call as the message or reaction
+event and after it (`publishEach()`), so no client sees an item before what made
+it. A reaction's item carries the message, whose reactions are read in the
+reaction's own batch.
 
 ### Deletes and leaving
 

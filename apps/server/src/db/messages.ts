@@ -1,5 +1,5 @@
-import { announceActivity, messageActivity } from "../activity"
-import { audienceFrom, audienceStatement, channelType, publish } from "../events"
+import { activityAdded, messageActivity } from "../activity"
+import { audienceFrom, audienceStatement, channelType, publish, publishEach } from "../events"
 import type { Actor, Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
 import { nextTs } from "../api/ids"
@@ -161,12 +161,11 @@ export async function postMessage(
   const row = results.at(-2)!.results[0] as MessageRow
   const audience = audienceFrom(results.at(-1)!)
   const message = messageJson(row, await newMessageExtras(ctx, row), ctx.origin)
-  publish(ctx, {
-    teamId: c.team_id,
-    audience,
-    event: { ...message, channel: c.id, channel_type: channelType(c), event_ts: ts },
-  })
-  if (hasItems) announceActivity(ctx, c.team_id, results.at(-3), message)
+  // The message, then the items it made, in one hub call: no client sees an item before its message.
+  publishEach(ctx, c.team_id, [
+    { teamId: c.team_id, audience, event: { ...message, channel: c.id, channel_type: channelType(c), event_ts: ts } },
+    ...(hasItems ? activityAdded(ctx.origin, c.team_id, results.at(-3), message) : []),
+  ])
   return { row, message }
 }
 /** A message's reactions, as a statement to batch with a change to it. */
