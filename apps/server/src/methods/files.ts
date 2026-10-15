@@ -1,7 +1,8 @@
 import { requireWritable, resolveConversation } from "../db/conversations"
 import { postMessage } from "../db/messages"
-import { all, first, run } from "../db/query"
+import { all, first, run, stmt } from "../db/query"
 import type { ConversationRow, FileRow } from "../db/rows"
+import { announceUnsaved, unsaveFileStatement } from "../db/stars"
 import type { Env } from "../env"
 import { publish } from "../events"
 import { authenticate, tokenOf } from "../api/auth"
@@ -19,24 +20,24 @@ const SNIFF_LIMIT = 32 * 1024 * 1024
 
 const r2Key = (f: Pick<FileRow, "team_id" | "id">) => `${f.team_id}/${f.id}`
 
-async function getFile(ctx: Ctx<Actor>, id: string) {
+export async function getFile(ctx: Ctx<Actor>, id: string) {
   const f = await first<FileRow>(ctx.env.DB, "SELECT * FROM files WHERE id = ? AND team_id = ?", id, ctx.auth.team.id)
   if (!f) throw new CampflareError("file_not_found")
   return f
 }
 
 /**
- * SQL that is true when the user (the first parameter) can read one of the
+ * SQL that is true when the user (the first parameter, or `user`) can read one of the
  * conversations in `channels`, a JSON array of ids: they're a member, or it's
  * a public channel.
  */
-const readsOneOf = (channels: string) => `EXISTS (
+export const readsOneOf = (channels: string, user = "?") => `EXISTS (
   SELECT 1 FROM json_each(${channels}) j JOIN conversations c ON c.id = j.value
-  LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ?
+  LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = ${user}
   WHERE m.user_id IS NOT NULL OR (c.kind = 'channel' AND c.is_private = 0))`
 
 /** A file is visible to its uploader, and to anyone who can read a conversation it's shared in. */
-async function canSee(env: Env, auth: Auth & { user: NonNullable<Auth["user"]> }, f: FileRow) {
+export async function canSee(env: Env, auth: Auth & { user: NonNullable<Auth["user"]> }, f: FileRow) {
   if (f.team_id !== auth.team.id) return false
   if (f.user_id === auth.user.id) return true
   const row = await first<{ ok: number }>(env.DB, `SELECT ${readsOneOf("?")} AS ok`, f.channels, auth.user.id)
@@ -211,7 +212,12 @@ method("files.delete", "actor", async (ctx) => {
   if (f.user_id !== ctx.auth.user.id && !admin) throw new CampflareError("cant_delete_file")
   // The thumbnails too, made or not: deleting a missing key is no error.
   await ctx.env.FILES.delete([r2Key(f), ...THUMB_VARIANTS.map((v) => thumbKey(f, v))])
-  await run(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id)
+  // Anyone's saved star on it goes with it, and they're told.
+  const [, unsaved] = await ctx.env.DB.batch([
+    stmt(ctx.env.DB, "DELETE FROM files WHERE id = ?", f.id),
+    unsaveFileStatement(ctx.env.DB, f.id),
+  ])
+  announceUnsaved(ctx, f.team_id, unsaved!)
   const channels = JSON.parse(f.channels) as string[]
   const members = await all<{ user_id: string }>(
     ctx.env.DB,

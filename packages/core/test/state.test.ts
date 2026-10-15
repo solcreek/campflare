@@ -328,6 +328,88 @@ describe("reduce", () => {
     expect(reduce(s, { type: "event", event: { type: "reaction_added", user: "U1", reaction: "x" } })).toBe(s)
   })
 
+  it("keeps a conversation's pins, and the messages' pinned_to, from pins.list and pin events", () => {
+    const ts = "0000000200.000000"
+    const item = (t: string, created: number) => ({
+      channel: "C1",
+      created,
+      created_by: "U2",
+      message: { ts: t, user: "U2", text: "Décision · 決定 · 결정" } as Message,
+    })
+    let s = run(ready, history([msg(ts), msg("0000000300.000000")]))
+    // Before pins.list, an event still marks the loaded message but builds no list.
+    s = reduce(s, e({ type: "pin_added", channel_id: "C1", item: item(ts, 10) }))
+    expect(s.messages[keyOf("C1", ts)]?.pinned_to).toEqual(["C1"])
+    expect(s.pins.C1).toBeUndefined()
+    s = reduce(s, { type: "pins", channel: "C1", items: [item(ts, 10)] })
+    expect(s.pins.C1).toEqual([
+      { ts, created: 10, createdBy: "U2", message: { ts, user: "U2", text: "Décision · 決定 · 결정", channel: "C1" } },
+    ])
+    s = reduce(s, e({ type: "pin_added", channel_id: "C1", item: item("0000000300.000000", 20) }))
+    expect(s.pins.C1?.map((p) => p.ts)).toEqual(["0000000300.000000", ts])
+    s = reduce(s, e({ type: "pin_removed", channel_id: "C1", item: item(ts, 10) }))
+    expect(s.pins.C1?.map((p) => p.ts)).toEqual(["0000000300.000000"])
+    expect(s.messages[keyOf("C1", ts)]).not.toHaveProperty("pinned_to")
+    // A deleted message leaves the pins.
+    s = reduce(s, event({ channel: "C1", subtype: "message_deleted", deleted_ts: "0000000300.000000" }))
+    expect(s.pins.C1).toEqual([])
+    expect(reduce(s, e({ type: "pin_added", channel_id: "C1" }))).toBe(s)
+    // A pin of a message the store doesn't hold leaves the messages alone.
+    const unseen = reduce(s, e({ type: "pin_added", channel_id: "C1", item: item("0000000900.000000", 30) }))
+    expect(unseen.messages).toBe(s.messages)
+    expect(unseen.pins.C1?.map((p) => p.ts)).toEqual(["0000000900.000000"])
+  })
+
+  it("takes pinned_to and is_starred from the server's copies", () => {
+    const ts = "0000000200.000000"
+    const key = keyOf("C1", ts)
+    let s = run(ready, history([msg(ts, { pinned_to: ["C1"], is_starred: true })]))
+    // An edit's message_changed carries pinned_to when pinned: without it, the message was unpinned.
+    s = reduce(s, event({ channel: "C1", subtype: "message_changed", message: { ts, user: "U2", text: "editado" } }))
+    expect(s.messages[key]).not.toHaveProperty("pinned_to")
+    // is_starred is the caller's, which events never carry: it stays.
+    expect(s.messages[key]?.is_starred).toBe(true)
+    const changed = { ts, user: "U2", text: "編集", pinned_to: ["C1"] }
+    s = reduce(s, event({ channel: "C1", subtype: "message_changed", message: changed }))
+    expect(s.messages[key]?.pinned_to).toEqual(["C1"])
+    // A reloaded page is the whole truth for both.
+    s = reduce(s, history([msg(ts)]))
+    expect(s.messages[key]).not.toHaveProperty("pinned_to")
+    expect(s.messages[key]).not.toHaveProperty("is_starred")
+  })
+
+  it("keeps a conversation's bookmarks bar in rank order", () => {
+    const bm = (id: string, rank: string, title = id) => ({
+      id,
+      channel_id: "C1",
+      title,
+      link: `https://example.com/${id}`,
+      rank,
+    })
+    let s = run(ready)
+    expect(reduce(s, e({ type: "bookmark_added", channel_id: "C1", bookmark: bm("Bk1", "1") }))).toBe(s)
+    s = reduce(s, { type: "bookmarks", channel: "C1", bookmarks: [bm("Bk2", "0000000002"), bm("Bk1", "0000000001")] })
+    expect(s.bookmarks.C1?.map((b) => b.id)).toEqual(["Bk1", "Bk2"])
+    s = reduce(s, e({ type: "bookmark_added", channel_id: "C1", bookmark: bm("Bk3", "0000000003", "Ñandú") }))
+    s = reduce(s, e({ type: "bookmark_changed", bookmark: bm("Bk1", "0000000001", "手册") }))
+    expect(s.bookmarks.C1?.map((b) => b.title)).toEqual(["手册", "Bk2", "Ñandú"])
+    s = reduce(s, e({ type: "bookmark_removed", channel_id: "C1", bookmark: bm("Bk2", "0000000002") }))
+    expect(s.bookmarks.C1?.map((b) => b.id)).toEqual(["Bk1", "Bk3"])
+    expect(reduce(s, e({ type: "bookmark_removed", channel_id: "C1" }))).toBe(s)
+  })
+
+  it("marks saved messages is_starred from star events", () => {
+    const ts = "0000000200.000000"
+    const star = (type: string, item: Record<string, unknown>) => e({ type, user: "U1", item })
+    let s = run(ready, history([msg(ts)]))
+    s = reduce(s, star("star_added", { type: "message", channel: "C1", message: { ts } }))
+    expect(s.messages[keyOf("C1", ts)]?.is_starred).toBe(true)
+    s = reduce(s, star("star_removed", { type: "message", channel: "C1", message: { ts } }))
+    expect(s.messages[keyOf("C1", ts)]).not.toHaveProperty("is_starred")
+    expect(reduce(s, star("star_added", { type: "channel", channel: "C1" }))).toBe(s)
+    expect(reduce(s, star("star_added", { type: "message", channel: "C1", message: { ts: "1.000000" } }))).toBe(s)
+  })
+
   it("follows conversation changes", () => {
     let s = run(
       ready,

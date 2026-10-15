@@ -1,8 +1,8 @@
 import { ApiError, listen, type ApiResult, type Client, type Listener, type RealtimeEvent } from "@campflare/client"
 import type { Click } from "./blocks"
 import { createFileCache, type FileCache, type FileCacheOptions } from "./files"
-import { type Action, initialState, isReply, keyOf, reduce, type WorkspaceState } from "./state"
-import type { Conversation, Message, User } from "./types"
+import { type Action, initialState, isReply, keyOf, type PinItem, reduce, type WorkspaceState } from "./state"
+import type { Bookmark, Conversation, Message, User } from "./types"
 import type { FormValues, View } from "./views"
 
 // A live workspace: the store, the Web API calls that fill it, and the RTM link
@@ -55,6 +55,17 @@ export interface Workspace {
   remove(channel: string, ts: string): Promise<void>
   /** Adds your reaction, or takes it back if it's there. */
   toggleReaction(channel: string, ts: string, name: string): Promise<void>
+  /** A conversation's pinned messages, into `pins`; pin and unpin events keep them current. */
+  loadPins(channel: string): Promise<void>
+  /** Pins a message to its conversation, or unpins it. */
+  setPinned(channel: string, ts: string, pinned: boolean): Promise<void>
+  /** A conversation's bookmarks bar, into `bookmarks`; bookmark events keep it current. */
+  loadBookmarks(channel: string): Promise<void>
+  /** Adds an http(s) link to a conversation's bookmarks bar (the title defaults to the link). */
+  addBookmark(channel: string, link: string, opts?: { title?: string; emoji?: string }): Promise<void>
+  removeBookmark(channel: string, id: string): Promise<void>
+  /** Saves a message for later, or forgets it (stars): the message's is_starred. */
+  setSaved(channel: string, ts: string, saved: boolean): Promise<void>
   /**
    * Clicks a button in an app's message (campflare.blocks.action). Resolves
    * once the app has taken it; what the app does about it (a replaced
@@ -146,7 +157,13 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   async function resync() {
     const conversations = await listConversations().catch(() => [])
     for (const conversation of conversations) dispatch({ type: "conversation", conversation })
-    await Promise.all([...Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})), loadViews()])
+    // Events missed while the link was down are lost: what's loaded is read again.
+    await Promise.all([
+      ...Object.keys(state.timelines).map((c) => loadHistory(c).catch(() => {})),
+      ...Object.keys(state.pins).map((c) => loadPins(c).catch(() => {})),
+      ...Object.keys(state.bookmarks).map((c) => loadBookmarks(c).catch(() => {})),
+      loadViews(),
+    ])
   }
 
   function goLive() {
@@ -352,6 +369,61 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     }
   }
 
+  /** Calls a method whose "already so" errors mean the change was made already: nothing to report. */
+  async function idempotent(method: string, args: Record<string, string>, already: string[]) {
+    try {
+      await client.call(method, args)
+    } catch (error) {
+      if (!(error instanceof ApiError && already.includes(error.code))) throw error
+    }
+  }
+
+  async function loadPins(channel: string) {
+    const res = await client.call<ApiResult & { items: PinItem[] }>("pins.list", { channel })
+    dispatch({ type: "pins", channel, items: res.items })
+  }
+
+  async function setPinned(channel: string, ts: string, pinned: boolean) {
+    await idempotent(pinned ? "pins.add" : "pins.remove", { channel, timestamp: ts }, ["already_pinned", "no_pin"])
+    const message = state.messages[keyOf(channel, ts)]
+    // The event that follows says the same; applying it now shows the change at once.
+    if (message) {
+      const item: PinItem = { channel, created: Math.floor(Date.now() / 1000), created_by: selfId(), message }
+      dispatch({ type: "event", event: { type: pinned ? "pin_added" : "pin_removed", channel_id: channel, item } })
+    } else if (state.pins[channel]) await loadPins(channel)
+  }
+
+  async function loadBookmarks(channel: string) {
+    const res = await client.call<ApiResult & { bookmarks: Bookmark[] }>("bookmarks.list", { channel_id: channel })
+    dispatch({ type: "bookmarks", channel, bookmarks: res.bookmarks })
+  }
+
+  async function addBookmark(channel: string, link: string, opts: { title?: string; emoji?: string } = {}) {
+    const res = await client.call<ApiResult & { bookmark: Bookmark }>("bookmarks.add", {
+      channel_id: channel,
+      type: "link",
+      link,
+      title: opts.title ?? link,
+      ...(opts.emoji ? { emoji: opts.emoji } : {}),
+    })
+    dispatch({ type: "event", event: { type: "bookmark_added", channel_id: channel, bookmark: res.bookmark } })
+  }
+
+  async function removeBookmark(channel: string, id: string) {
+    const bookmark = state.bookmarks[channel]?.find((b) => b.id === id)
+    await client.call("bookmarks.remove", { channel_id: channel, bookmark_id: id })
+    if (bookmark) dispatch({ type: "event", event: { type: "bookmark_removed", channel_id: channel, bookmark } })
+  }
+
+  async function setSaved(channel: string, ts: string, saved: boolean) {
+    await idempotent(saved ? "stars.add" : "stars.remove", { channel, timestamp: ts }, [
+      "already_starred",
+      "not_starred",
+    ])
+    const item = { type: "message", channel, message: { ts } }
+    dispatch({ type: "event", event: { type: saved ? "star_added" : "star_removed", user: selfId(), item } })
+  }
+
   async function click(channel: string, ts: string, { blockId, actionId, value }: Click) {
     await client.call("campflare.blocks.action", {
       channel,
@@ -464,6 +536,12 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     edit,
     remove,
     toggleReaction,
+    loadPins,
+    setPinned,
+    loadBookmarks,
+    addBookmark,
+    removeBookmark,
+    setSaved,
     click,
     stopStream,
     clickInView,

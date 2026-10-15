@@ -129,6 +129,52 @@ describe("@slack/web-api", () => {
     expect(res.messages?.matches?.[0]).toMatchObject({ text: "needle in a haystack", channel: { id: general } })
   })
 
+  it("pins.add, pins.list, pins.remove", async () => {
+    const posted = await owner.chat.postMessage({ channel: general, text: "pin this · 置顶 · épingler" })
+    await bob.client.pins.add({ channel: general, timestamp: posted.ts! })
+    const listed = await owner.pins.list({ channel: general })
+    expect(listed.items?.[0]).toMatchObject({
+      type: "message",
+      channel: general,
+      created_by: bob.id,
+      message: { ts: posted.ts, pinned_to: [general] },
+    })
+    await expect(owner.pins.add({ channel: general, timestamp: posted.ts! })).rejects.toMatchObject({
+      data: { ok: false, error: "already_pinned" },
+    })
+    await owner.pins.remove({ channel: general, timestamp: posted.ts! })
+    expect((await owner.pins.list({ channel: general })).items).toEqual([])
+  })
+
+  it("bookmarks.add, .edit, .list, .remove", async () => {
+    const added = await owner.bookmarks.add({
+      channel_id: general,
+      type: "link",
+      title: "Handbuch",
+      link: "https://example.com/handbook",
+      emoji: ":books:",
+    })
+    expect(added.bookmark).toMatchObject({ title: "Handbuch", link: "https://example.com/handbook", type: "link" })
+    const id = added.bookmark!.id!
+    const edited = await bob.client.bookmarks.edit({ channel_id: general, bookmark_id: id, title: "ハンドブック" })
+    expect(edited.bookmark).toMatchObject({ id, title: "ハンドブック", last_updated_by_user_id: bob.id })
+    expect((await bob.client.bookmarks.list({ channel_id: general })).bookmarks?.map((b) => b.id)).toEqual([id])
+    await owner.bookmarks.remove({ channel_id: general, bookmark_id: id })
+    expect((await owner.bookmarks.list({ channel_id: general })).bookmarks).toEqual([])
+  })
+
+  it("stars.add, stars.list, stars.remove", async () => {
+    const posted = await owner.chat.postMessage({ channel: general, text: "save for later · 나중에" })
+    await bob.client.stars.add({ channel: general, timestamp: posted.ts! })
+    await bob.client.stars.add({ channel: general })
+    const listed = await bob.client.stars.list({ limit: 10 })
+    expect(listed.items?.map((i) => i.type).toSorted()).toEqual(["channel", "message"])
+    expect(listed.items?.find((i) => i.type === "message")?.message).toMatchObject({ ts: posted.ts, is_starred: true })
+    await bob.client.stars.remove({ channel: general, timestamp: posted.ts! })
+    await bob.client.stars.remove({ channel: general })
+    expect((await bob.client.stars.list({})).items).toEqual([])
+  })
+
   it("posts as a bot", async () => {
     const bot = client(app.botToken)
     const res = await bot.chat.postMessage({ channel: general, text: "beep" })

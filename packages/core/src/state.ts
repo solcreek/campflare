@@ -1,5 +1,5 @@
 import type { RealtimeEvent } from "@campflare/client"
-import type { Conversation, Message, Reaction, Self, User } from "./types"
+import type { Bookmark, Conversation, Message, Pin, Reaction, Self, User } from "./types"
 import type { View } from "./views"
 
 // The workspace as an app sees it, and one pure function that moves it on.
@@ -32,6 +32,10 @@ export interface WorkspaceState {
   statuses: Record<string, ThreadStatus>
   /** Modals apps opened for you, bottom of the stack first: the last is shown. */
   views: View[]
+  /** A conversation's pinned messages, most recently pinned first, by channel id, once loaded (pins.list). */
+  pins: Record<string, Pin[]>
+  /** A conversation's bookmarks bar, in rank order, by channel id, once loaded (bookmarks.list). */
+  bookmarks: Record<string, Bookmark[]>
 }
 
 /**
@@ -68,6 +72,19 @@ export type Action =
   | { type: "event"; event: RealtimeEvent }
   /** Your open views, as the server has them now (campflare.views.list, or an answer to a submit or close). */
   | { type: "views"; views: View[] }
+  /** pins.list's items for a conversation. */
+  | { type: "pins"; channel: string; items: PinItem[] }
+  /** bookmarks.list for a conversation. */
+  | { type: "bookmarks"; channel: string; bookmarks: Bookmark[] }
+
+/** A pinned message as the API sends it (pins.list's items, pin_added's item). */
+export interface PinItem {
+  channel: string
+  created: number
+  created_by: string
+  /** As the API sends it, without `channel`: pinOf() sets it. */
+  message: Message
+}
 
 export const initialState: WorkspaceState = {
   status: "idle",
@@ -80,6 +97,8 @@ export const initialState: WorkspaceState = {
   unread: {},
   statuses: {},
   views: [],
+  pins: {},
+  bookmarks: {},
 }
 
 export const keyOf = (channel: string, ts: string) => `${channel}/${ts}`
@@ -151,6 +170,10 @@ export function reduce(state: WorkspaceState, action: Action): WorkspaceState {
       return markRead(state, action.channel, action.ts)
     case "views":
       return { ...state, views: action.views }
+    case "pins":
+      return { ...state, pins: { ...state.pins, [action.channel]: action.items.map(pinOf) } }
+    case "bookmarks":
+      return { ...state, bookmarks: { ...state.bookmarks, [action.channel]: byRank(action.bookmarks) } }
     case "event":
       return applyEvent(state, action.event)
   }
@@ -226,6 +249,19 @@ function pendingTwin(state: WorkspaceState, m: Message): string | undefined {
   return list?.keys.find((k) => standsFor(m, state.messages[k]))
 }
 
+/**
+ * A newer copy of a known message over the old one. Local fields (pending,
+ * failed…) stay unless the copy sets them. pinned_to is the server's to say:
+ * every copy it sends carries it when pinned, so a copy without it means
+ * unpinned. is_starred is not: it's the caller's alone, and events (sent to
+ * everyone) never carry it, so it changes by star events and page loads only.
+ */
+function merge(known: Message, m: Message): Message {
+  const next = { ...known, ...m }
+  if (!m.pending && !("pinned_to" in m)) delete next.pinned_to
+  return next
+}
+
 /** Adds or replaces a message, filing it under its conversation or its thread. */
 function upsert(state: WorkspaceState, m: Message): WorkspaceState {
   // RTM's copy of your message can beat chat.postMessage's or an upload's answer: it takes the pending one's place.
@@ -233,7 +269,7 @@ function upsert(state: WorkspaceState, m: Message): WorkspaceState {
   if (twin) state = remove(state, m.channel, state.messages[twin]!.ts)
   const key = keyOf(m.channel, m.ts)
   const known = state.messages[key]
-  const messages = { ...state.messages, [key]: known ? { ...known, ...m } : m }
+  const messages = { ...state.messages, [key]: known ? merge(known, m) : m }
   if (isReply(m)) {
     const threadKey = keyOf(m.channel, m.thread_ts!)
     const thread = state.threads[threadKey] ?? { keys: [], hasMore: false }
@@ -332,7 +368,9 @@ function onMessage(state: WorkspaceState, event: RealtimeEvent): WorkspaceState 
     // The changed message is whole: blocks or attachments it doesn't have were taken out (an app replacing its buttons).
     return upsert(state, { blocks: undefined, attachments: undefined, ...m, channel })
   }
-  if (subtype === "message_deleted") return remove(state, channel, event.deleted_ts as string)
+  if (subtype === "message_deleted") {
+    return unpinDeleted(remove(state, channel, event.deleted_ts as string), channel, event.deleted_ts as string)
+  }
   const { type: _type, channel_type: _channelType, event_ts: _eventTs, ...fields } = event
   const m = { ...fields, type: "message", channel } as Message
   let next = upsert(state, m)
@@ -376,6 +414,65 @@ function onStatus(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
   })
 }
 
+const pinOf = (item: PinItem): Pin => ({
+  ts: item.message.ts,
+  created: item.created,
+  createdBy: item.created_by,
+  message: { ...item.message, channel: item.channel },
+})
+
+const byRank = (bookmarks: Bookmark[]) => bookmarks.toSorted((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0))
+
+/** Sets or clears a loaded message's field: pinned_to, is_starred. */
+function patchLoaded(state: WorkspaceState, channel: string, ts: string, patch: Partial<Message>): WorkspaceState {
+  const key = keyOf(channel, ts)
+  const m = state.messages[key]
+  if (!m) return state
+  const next = { ...m, ...patch }
+  for (const [k, v] of Object.entries(patch)) if (v === undefined) delete next[k]
+  return { ...state, messages: { ...state.messages, [key]: next } }
+}
+
+/** pin_added / pin_removed: the message's pinned_to, and the conversation's pins if loaded. */
+function onPin(state: WorkspaceState, event: RealtimeEvent, added: boolean): WorkspaceState {
+  const item = event.item as PinItem | undefined
+  if (!item?.message) return state
+  const channel = item.channel
+  const ts = item.message.ts
+  let next = patchLoaded(state, channel, ts, { pinned_to: added ? [channel] : undefined })
+  const pins = state.pins[channel]
+  if (pins) {
+    const rest = pins.filter((p) => p.ts !== ts)
+    next = { ...next, pins: { ...next.pins, [channel]: added ? [pinOf(item), ...rest] : rest } }
+  }
+  return next
+}
+
+/** bookmark_added / _changed / _removed, to a bar that's loaded. */
+function onBookmark(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
+  const bookmark = event.bookmark as Bookmark | undefined
+  const channel = (event.channel_id as string | undefined) ?? bookmark?.channel_id
+  const bar = channel ? state.bookmarks[channel] : undefined
+  if (!bookmark || !channel || !bar) return state
+  const rest = bar.filter((b) => b.id !== bookmark.id)
+  const next = event.type === "bookmark_removed" ? rest : byRank([...rest, bookmark])
+  return { ...state, bookmarks: { ...state.bookmarks, [channel]: next } }
+}
+
+/** star_added / star_removed: a saved message is_starred. */
+function onStar(state: WorkspaceState, event: RealtimeEvent, added: boolean): WorkspaceState {
+  const item = event.item as { type?: string; channel?: string; message?: { ts: string } } | undefined
+  if (item?.type !== "message" || !item.channel || !item.message) return state
+  return patchLoaded(state, item.channel, item.message.ts, { is_starred: added ? true : undefined })
+}
+
+/** A deleted message leaves the pins it was in. */
+function unpinDeleted(state: WorkspaceState, channel: string, ts: string): WorkspaceState {
+  const pins = state.pins[channel]
+  if (!pins?.some((p) => p.ts === ts)) return state
+  return { ...state, pins: { ...state.pins, [channel]: pins.filter((p) => p.ts !== ts) } }
+}
+
 /** One RTM event. Events the store has no use for leave it as it was. */
 export function applyEvent(state: WorkspaceState, event: RealtimeEvent): WorkspaceState {
   switch (event.type) {
@@ -389,6 +486,18 @@ export function applyEvent(state: WorkspaceState, event: RealtimeEvent): Workspa
       return react(state, event, true)
     case "reaction_removed":
       return react(state, event, false)
+    case "pin_added":
+      return onPin(state, event, true)
+    case "pin_removed":
+      return onPin(state, event, false)
+    case "bookmark_added":
+    case "bookmark_changed":
+    case "bookmark_removed":
+      return onBookmark(state, event)
+    case "star_added":
+      return onStar(state, event, true)
+    case "star_removed":
+      return onStar(state, event, false)
     case "channel_marked":
     case "group_marked":
     case "im_marked":

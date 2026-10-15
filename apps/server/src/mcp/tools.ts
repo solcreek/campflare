@@ -185,6 +185,76 @@ export function buildServer(caller: Caller): McpServer {
   )
 
   server.registerTool(
+    "list_pins",
+    {
+      title: "List pinned messages",
+      description:
+        "The messages pinned in a conversation, most recently pinned first: what its members marked as worth keeping at hand (decisions, how-tos, links).",
+      inputSchema: z.object({ conversation }),
+      annotations: READ,
+    },
+    tool(async ({ conversation: ref }) => {
+      const channel = await conversationId(caller, ref)
+      const [res, dir] = await Promise.all([
+        invoke<{ items: { created: number; created_by: string; message: RawMessage & { permalink: string } }[] }>(
+          caller,
+          "pins.list",
+          { channel },
+        ),
+        directory(caller),
+      ])
+      return {
+        conversation: channel,
+        pins: res.items.map((p) => ({
+          ...compactMessage(p.message, dir),
+          pinned_by: dir.name(p.created_by),
+          permalink: p.message.permalink,
+        })),
+      }
+    }),
+  )
+
+  server.registerTool(
+    "list_saved",
+    {
+      title: "List saved items",
+      description: "What you saved for later (messages, files, conversations), newest first.",
+      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20) }),
+      annotations: READ,
+    },
+    tool(async ({ limit }) => {
+      const [res, dir] = await Promise.all([
+        invoke<{
+          items: {
+            type: string
+            channel?: string
+            message?: RawMessage & { permalink: string }
+            file?: { id: string; name: string }
+            date_create: number
+          }[]
+          paging: { total: number }
+        }>(caller, "stars.list", { limit }),
+        directory(caller),
+      ])
+      return {
+        total: res.paging.total,
+        items: res.items.map((i) =>
+          i.message
+            ? {
+                type: "message",
+                conversation: i.channel,
+                ...compactMessage(i.message, dir),
+                permalink: i.message.permalink,
+              }
+            : i.file
+              ? { type: "file", file: i.file.id, name: i.file.name }
+              : { type: "conversation", conversation: i.channel },
+        ),
+      }
+    }),
+  )
+
+  server.registerTool(
     "list_people",
     {
       title: "List people",

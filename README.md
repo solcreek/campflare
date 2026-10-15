@@ -120,6 +120,7 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | reminders             | `add`, `info`, `list`, `complete`, `delete`; DMed by the built-in Campflare bot                                                                                                                                                                  |
 | streaming             | `chat.startStream`, `appendStream`, `stopStream` (markdown, blocks, `task_update`/`plan_update` as `task_card`/`plan` blocks); a person stops one with `campflare.chat.stopStream`; `assistant.threads.setStatus`                                |
 | reactions             | `add`, `remove`, `get`                                                                                                                                                                                                                           |
+| pins/bookmarks/stars  | `pins.add`, `remove`, `list` (messages; `pinned_to` in history, `pin_count`); `bookmarks.add`, `edit`, `remove`, `list` (http(s) links); `stars.add`, `remove`, `list` (saved messages, files and conversations; `is_starred` in history)        |
 | files                 | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
 | search                | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
 | users                 | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set` (with `status_expiration`), `setPhoto`, `deletePhoto`; `user_change` on every change                                                                 |
@@ -392,6 +393,7 @@ or a bot:
 | `send_message`, `add_reaction`                | post (or reply in a thread), react                           |
 | `schedule_message`, `set_reminder`            | post later; remind yourself (times as people say them)       |
 | `list_scheduled`, `cancel_scheduled`          | your scheduled messages; delete one before it posts          |
+| `list_pins`, `list_saved`                     | what's pinned in a conversation; what you saved for later    |
 | `list_conversations`, `list_people`, `whoami` | where you are and who's here                                 |
 | `list_groups`                                 | user groups, their members, and how to mention each          |
 | `get_events`                                  | the event log since a cursor, long-polling                   |
@@ -450,6 +452,9 @@ campflare stop '#dev' 1791990000.000200                       # as a person: sto
 campflare send '#dev' "standup in 5" --at 2026-10-16T08:55:00Z # schedule it (or --at 30m, 2h, epoch seconds)
 campflare scheduled                                           # unschedule '#dev' <id> deletes one
 campflare remind "renew the certificate" tomorrow at 9am      # reminders; reminder done <id>
+campflare pin '#dev' 1791990000.000300                        # pins '#dev' lists them; unpin takes it back
+campflare bookmark add '#dev' https://ci.example.com --title CI --emoji :rocket:   # bookmarks '#dev'
+campflare save '#dev' 1791990000.000300                       # saved lists them, newest first; unsave
 campflare listen --json                                       # RTM; --socket for Socket Mode
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare api conversations.list limit=5                      # any method, raw JSON
@@ -505,9 +510,10 @@ client and CLI bundles. The Worker is bundled by wrangler.
   resets are links today; [docs/invites.md](docs/invites.md)).
 - Periodic Socket Mode `disconnect` refreshes.
 - Rate limiting (HTTP 429 with `Retry-After`).
-- Pins, bookmarks, stars, custom emoji, an admin setting restricting who may
-  manage user groups, scheduled DND hours, setting a person's time zone
-  (reminders read `tz`, which no method sets yet).
+- Custom emoji, an admin setting restricting who may manage user groups,
+  scheduled DND hours, setting a person's time zone (reminders read `tz`,
+  which no method sets yet). Pinning files (pin the message that shares one),
+  file comments, bookmark folders and message or file bookmarks.
 - A `user_change` when a status expires (it reads as cleared at once, but
   clients holding the profile learn only on their next read).
 - Recurring reminders, and reminders for someone else

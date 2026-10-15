@@ -269,6 +269,8 @@ export interface MessageExtras {
   apps: Map<string, AppRow>
   /** Whether files carry thumb_* (thumbnails are on). */
   thumbs?: boolean
+  /** The messages the caller saved (`channel/ts`), for is_starred; absent when not read. */
+  starred?: Set<string>
 }
 
 const key = (channelId: string, ts: string) => `${channelId}/${ts}`
@@ -285,6 +287,23 @@ export function reactionsOfQuery(db: D1Database, messages: string, ...params: un
     )
     .bind(...params)
 }
+
+/**
+ * Which of the messages a query selects this person saved, as a statement to
+ * batch with the query itself; starredFrom() reads its result.
+ */
+export function starredOfQuery(db: D1Database, userId: string, messages: string, ...params: unknown[]) {
+  return db
+    .prepare(
+      `SELECT channel_id, ts FROM stars WHERE user_id = ? AND type = 'message'
+         AND (channel_id, ts) IN (SELECT channel_id, ts FROM (${messages}))`,
+    )
+    .bind(userId, ...params)
+}
+
+/** The keys MessageExtras.starred holds, from a starredOfQuery's result. */
+export const starredFrom = (result: D1Result) =>
+  new Set((result.results as { channel_id: string; ts: string }[]).map((r) => key(r.channel_id, r.ts)))
 
 /** Reactions grouped by message, as MessageExtras holds them. */
 function reactionsByMessage(rows: ReactionRow[]) {
@@ -401,6 +420,9 @@ export function messageJson(m: MessageRow, extras: MessageExtras, origin: string
     ...(m.edited_ts ? { edited: { user: m.edited_user, ts: m.edited_ts } } : {}),
     ...(reactions.length > 0 ? { reactions } : {}),
     ...(m.stream_state ? { streaming_state: m.stream_state } : {}),
+    // A message is pinned only to its own conversation.
+    ...(m.pinned_at ? { pinned_to: [m.channel_id] } : {}),
+    ...(extras.starred?.has(key(m.channel_id, m.ts)) ? { is_starred: true } : {}),
   }
 }
 

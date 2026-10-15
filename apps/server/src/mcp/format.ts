@@ -32,6 +32,7 @@ export interface RawMessage {
   files?: { name?: string; id: string }[]
   bot_profile?: { name?: string }
   edited?: unknown
+  pinned_to?: string[]
 }
 
 /** Who wrote a message: a bot by its name, a person by "@handle", else a custom username. */
@@ -52,6 +53,7 @@ export function compactMessage(m: RawMessage, dir: Directory) {
     ...(m.reactions?.length ? { reactions: m.reactions.map((r) => `:${r.name}: ${r.count}`) } : {}),
     ...(m.files?.length ? { files: m.files.map((f) => f.name ?? f.id) } : {}),
     ...(m.edited ? { edited: true } : {}),
+    ...(m.pinned_to?.length ? { pinned: true } : {}),
   }
 }
 

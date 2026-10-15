@@ -353,6 +353,101 @@ describe("scheduling", () => {
   })
 })
 
+describe("pins, bookmarks and saved items", () => {
+  it("pins, lists and unpins messages", async () => {
+    const cli = await loggedIn()
+    await cli.run("send", "#general", "--json", "Agenda: café ☕ · 议程 · 의제")
+    const { ts } = JSON.parse(cli.out) as { ts: string }
+    cli.clear()
+    expect(await cli.run("pins", "#general")).toBe(0)
+    expect(cli.out).toBe("Nothing pinned in #general\n")
+    expect(await cli.run("pin", "#general", ts)).toBe(0)
+    expect(cli.out).toContain(`Pinned ${ts} in #general`)
+    cli.clear()
+    expect(await cli.run("pins", "#general")).toBe(0)
+    expect(cli.out).toMatch(/owner: Agenda: café ☕ · 议程 · 의제 {2}\(pinned by @owner; ts \d+\.\d+\)\n/)
+    cli.clear()
+    expect(await cli.run("pins", "#general", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toMatchObject([{ message: { ts, pinned_to: [expect.any(String)] } }])
+    cli.clear()
+    expect(await cli.run("pin", "#general", ts)).toBe(1)
+    expect(cli.err).toContain("already_pinned")
+    expect(await cli.run("unpin", "#general", ts, "--json")).toBe(0)
+    expect(await cli.run("pin", "#general")).toBe(2)
+    expect(await cli.run("pins")).toBe(2)
+  })
+
+  it("adds, edits, lists and removes bookmarks", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("bookmarks", "#general")).toBe(0)
+    expect(cli.out).toBe("No bookmarks in #general\n")
+    cli.clear()
+    expect(
+      await cli.run("bookmark", "add", "#general", "https://example.com/docs", "--title", "Docs", "--emoji", "books"),
+    ).toBe(0)
+    const id = cli.out.match(/Bk[A-Z0-9]+/)![0]
+    expect(cli.out).toBe(`Added: ${id}  :books: Docs  https://example.com/docs\n`)
+    cli.clear()
+    expect(await cli.run("bookmark", "add", "#general", "https://example.com/wiki", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toMatchObject({ title: "https://example.com/wiki", link: "https://example.com/wiki" })
+    cli.clear()
+    expect(
+      await cli.run("bookmark", "edit", "#general", id, "--title", "Documentación", "--url", "https://example.com/doc"),
+    ).toBe(0)
+    expect(cli.out).toBe(`Changed: ${id}  :books: Documentación  https://example.com/doc\n`)
+    cli.clear()
+    // An empty --emoji clears it.
+    expect(await cli.run("bookmark", "edit", "#general", id, "--emoji", "")).toBe(0)
+    expect(cli.out).toBe(`Changed: ${id}  Documentación  https://example.com/doc\n`)
+    cli.clear()
+    expect(await cli.run("bookmarks", "#general")).toBe(0)
+    expect(cli.out.split("\n").filter(Boolean)).toHaveLength(2)
+    expect(await cli.run("bookmarks", "#general", "--json")).toBe(0)
+    cli.clear()
+    expect(await cli.run("bookmark", "remove", "#general", id)).toBe(0)
+    expect(cli.out).toBe(`Removed ${id} from #general\n`)
+    expect(await cli.run("bookmark", "remove", "#general", id, "--json")).toBe(1)
+    cli.clear()
+    expect(await cli.run("bookmark", "add", "#general", "javascript:alert(1)")).toBe(1)
+    expect(cli.err).toContain("invalid_link")
+    expect(await cli.run("bookmark", "add", "#general")).toBe(2)
+    expect(await cli.run("bookmark", "remove", "#general")).toBe(2)
+    expect(await cli.run("bookmark", "rename")).toBe(2)
+    expect(await cli.run("bookmarks")).toBe(2)
+  })
+
+  it("saves messages, files and conversations, and lists them", async () => {
+    const cli = await loggedIn()
+    cli.io.readFile = memoryIo({ files: { "/tmp/notes.txt": "Grüße" } }).io.readFile
+    expect(await cli.run("send", "#general", "-f", "/tmp/notes.txt", "--json")).toBe(0)
+    const file = (JSON.parse(cli.out) as { files: { id: string }[] }).files[0]!.id
+    cli.clear()
+    await cli.run("send", "@me", "--json", "read later · 後で読む")
+    const { ts } = JSON.parse(cli.out) as { ts: string }
+    cli.clear()
+    expect(await cli.run("saved")).toBe(0)
+    expect(cli.out).toBe("Nothing saved\n")
+    expect(await cli.run("save", "@me", ts)).toBe(0)
+    expect(await cli.run("save", "#general")).toBe(0)
+    expect(await cli.run("save", "--file", file, "--json")).toBe(0)
+    cli.clear()
+    expect(await cli.run("saved")).toBe(0)
+    expect(cli.out).toContain("@owner  ")
+    expect(cli.out).toContain("owner: read later · 後で読む")
+    expect(cli.out).toContain("#general\n")
+    expect(cli.out).toContain(`file notes.txt (${file})`)
+    cli.clear()
+    expect(await cli.run("saved", "-n", "1")).toBe(0)
+    expect(cli.err).toBe("1 of 3 (-n for more)\n")
+    expect(await cli.run("saved", "--json")).toBe(0)
+    expect(await cli.run("unsave", "@me", ts)).toBe(0)
+    cli.clear()
+    expect(await cli.run("unsave", "@me", ts)).toBe(1)
+    expect(cli.err).toContain("not_starred")
+    expect(await cli.run("save")).toBe(2)
+  })
+})
+
 describe("workspace", () => {
   it("lists channels and people; creates, joins, invites and leaves", async () => {
     const cli = await loggedIn()

@@ -150,6 +150,10 @@ export interface MessageRow {
   stream_stopped_by: string | null
   /** chat.startStream's task_display_mode when it's "plan"; null for the default timeline. */
   stream_task_display: string | null
+  /** Who pinned it to its conversation (migration 0022); null when it isn't pinned. */
+  pinned_by: string | null
+  /** When it was pinned, in seconds; null when it isn't. */
+  pinned_at: number | null
 }
 
 export interface ReactionRow {
@@ -218,4 +222,32 @@ export interface ReminderRow {
   claimed_until: number | null
   claim: string | null
   attempts: number
+}
+
+export interface BookmarkRow {
+  id: string
+  team_id: string
+  channel_id: string
+  title: string
+  link: string
+  emoji: string
+  entity_id: string | null
+  app_id: string | null
+  rank: string
+  created_by: string
+  updated_by: string
+  date_created: number
+  date_updated: number
+}
+
+export interface StarRow {
+  user_id: string
+  /** "message:<channel>/<ts>", "file:<id>" or "channel:<id>". */
+  item: string
+  team_id: string
+  type: "message" | "file" | "channel"
+  channel_id: string | null
+  ts: string | null
+  file_id: string | null
+  created: number
 }
