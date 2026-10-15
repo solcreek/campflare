@@ -3,8 +3,8 @@
 const USER_MENTION = /<@([UW][A-Z0-9]+)(?:\|([^>]*))?>/g
 const CHANNEL_LINK = /<#([CGD][A-Z0-9]+)(?:\|([^>]*))?>/g
 
-/** Slack's own bot: Campflare's tombstones already use the id, so it stays as it is. */
-export const SLACKBOT = "USLACKBOT"
+/** The source's system user (Slackbot): its id stays as it is, as Campflare's tombstones already use it. */
+export const SYSTEM_USER_ID = "USLACKBOT"
 
 /** The user ids a text mentions. */
 export function mentionedUsers(text: string): string[] {

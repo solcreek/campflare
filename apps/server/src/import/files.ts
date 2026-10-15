@@ -3,7 +3,7 @@ import { CampflareError, invalidArguments } from "../api/errors"
 import { stmt } from "../db/query"
 import type { FileRow, MessageRow } from "../db/rows"
 import { bump, limitExceeded, LIMITS, loadJob } from "./job"
-import { SLACKBOT, withoutFileLine } from "./text"
+import { SYSTEM_USER_ID, withoutFileLine } from "./text"
 
 // campflare.import.files: attaches files the client uploaded
 // (files.getUploadURLExternal, then the bytes) to an imported message, in
@@ -64,7 +64,7 @@ export async function importFiles(ctx: Ctx<Actor>) {
   const fileOf = new Map((uploads!.results as FileRow[]).map((f) => [f.id, f]))
 
   // The author owns them, as if they had uploaded them; a bot's or Slackbot's, the importing admin.
-  const owner = m.user_id && m.user_id !== SLACKBOT ? m.user_id : ctx.auth.user.id
+  const owner = m.user_id && m.user_id !== SYSTEM_USER_ID ? m.user_id : ctx.auth.user.id
   const attached: { source_id: string; file_id: string }[] = []
   const writes: D1PreparedStatement[] = []
   let text = m.text

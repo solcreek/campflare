@@ -4,7 +4,7 @@ import { normalizeTs, tsToMicros } from "../api/ids"
 import { MAX_TEXT } from "../db/messages"
 import { stmt } from "../db/query"
 import { bump, CHANGES, limitExceeded, LIMITS, loadJob, MAX_UNMAPPED, type Counts } from "./job"
-import { fileLine, linkedConversations, mentionedUsers, rewriteText, SLACKBOT } from "./text"
+import { fileLine, linkedConversations, mentionedUsers, rewriteText, SYSTEM_USER_ID } from "./text"
 
 // campflare.import.messages: one chunk of one conversation's messages, written
 // straight into D1 in a batch, never through postMessage: no events, no
@@ -129,7 +129,7 @@ export async function importMessages(ctx: Ctx<Actor>) {
   const userOf = new Map(
     (users!.results as { source_id: string; user_id: string }[]).map((r) => [r.source_id, r.user_id]),
   )
-  userOf.set(SLACKBOT, SLACKBOT)
+  userOf.set(SYSTEM_USER_ID, SYSTEM_USER_ID)
   const conversationOf = new Map(
     (conversations!.results as { source_id: string; conversation_id: string }[]).map((r) => [
       r.source_id,

@@ -4,7 +4,7 @@ import { invalidArguments } from "../api/errors"
 import { ids, nowSeconds, randomId } from "../api/ids"
 import { isNameClash, stmt } from "../db/query"
 import { bump, limitExceeded, LIMITS, loadJob, type ImportJobRow } from "./job"
-import { candidates, handleFrom, SLACKBOT } from "./text"
+import { candidates, handleFrom, SYSTEM_USER_ID } from "./text"
 
 // campflare.import.users: the export's people, mapped by email, or made
 // deactivated placeholders (docs/import.md, Mapping).
@@ -95,7 +95,7 @@ async function write(ctx: Ctx<Actor>, job: ImportJobRow, users: Map<string, Expo
       continue
     }
     const email = emailOf(u)
-    const match = u.id === SLACKBOT ? SLACKBOT : email && emailToUser.get(email)
+    const match = u.id === SYSTEM_USER_ID ? SYSTEM_USER_ID : email && emailToUser.get(email)
     if (match) {
       rows.push([u.id, match, 0])
       out.push({ source_id: u.id, user_id: match, action: "mapped" })

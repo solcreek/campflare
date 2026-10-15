@@ -9,15 +9,15 @@ import { makeZip } from "./zip-writer"
 // `campflare import slack` against a real server: a synthetic Slack export,
 // zipped here, with a stand-in for Slack's file and emoji endpoints.
 
-const SLACK_TOKEN = "xoxp-exported-workspace"
-let slack: Server
-let slackUrl = ""
+const SOURCE_TOKEN = "xoxp-exported-workspace"
+let source: Server
+let sourceUrl = ""
 
 beforeAll(async () => {
-  slack = createServer((req, res) => {
+  source = createServer((req, res) => {
     if (req.url === "/api/emoji.list") {
       res.setHeader("content-type", "application/json")
-      const ok = req.headers.authorization === `Bearer ${SLACK_TOKEN}`
+      const ok = req.headers.authorization === `Bearer ${SOURCE_TOKEN}`
       return res.end(
         JSON.stringify(
           ok ? { ok, emoji: { fiesta: "https://x/fiesta.png", party: "alias:fiesta" } } : { ok, error: "invalid_auth" },
@@ -26,7 +26,7 @@ beforeAll(async () => {
     }
     if (req.url === "/files/F01/plan.pdf") {
       // Slack answers a wrong token with its sign-in page.
-      if (req.headers.authorization !== `Bearer ${SLACK_TOKEN}`) {
+      if (req.headers.authorization !== `Bearer ${SOURCE_TOKEN}`) {
         res.setHeader("content-type", "text/html")
         return res.end("<html>sign in</html>")
       }
@@ -36,11 +36,11 @@ beforeAll(async () => {
     res.statusCode = 404
     res.end("not found")
   })
-  await new Promise<void>((resolve) => slack.listen(0, "127.0.0.1", resolve))
-  slackUrl = `http://127.0.0.1:${(slack.address() as { port: number }).port}`
+  await new Promise<void>((resolve) => source.listen(0, "127.0.0.1", resolve))
+  sourceUrl = `http://127.0.0.1:${(source.address() as { port: number }).port}`
 })
 
-afterAll(() => new Promise<void>((resolve) => slack.close(() => resolve())))
+afterAll(() => new Promise<void>((resolve) => source.close(() => resolve())))
 
 const json = (value: unknown) => JSON.stringify(value)
 
@@ -111,8 +111,8 @@ function exportZip(email: string, opts: { zip64?: boolean; folder?: string } = {
       user: "U02",
       text: "Le plan",
       files: [
-        { id: "F01", name: "plan.pdf", title: "Plan · 計画", url_private_download: `${slackUrl}/files/F01/plan.pdf` },
-        { id: "F02", name: "gone.png", url_private_download: `${slackUrl}/files/F02/gone.png` },
+        { id: "F01", name: "plan.pdf", title: "Plan · 計画", url_private_download: `${sourceUrl}/files/F01/plan.pdf` },
+        { id: "F02", name: "gone.png", url_private_download: `${sourceUrl}/files/F02/gone.png` },
         { id: "F03", name: "old.png", mode: "hidden_by_limit" },
         { id: "F04", name: "nolink.txt" },
       ],
@@ -254,11 +254,11 @@ describe("campflare import slack", () => {
       if (String(input).endsWith("campflare.import.messages") && ++calls === 2) throw new Error("connection reset")
       return fetch(input, init)
     }
-    const args = ["import", "slack", "export.zip", "--files", "download", "--slack-token", SLACK_TOKEN]
-    expect(await admin.run(...args, "--slack-api", `${slackUrl}/api`)).toBe(1)
+    const args = ["import", "slack", "export.zip", "--files", "download", "--slack-token", SOURCE_TOKEN]
+    expect(await admin.run(...args, "--slack-api", `${sourceUrl}/api`)).toBe(1)
     expect(admin.err).toContain("connection reset")
     admin.clear()
-    expect(await admin.run(...args, "--slack-api", `${slackUrl}/api`, "--merge-into-existing", "--json")).toBe(0)
+    expect(await admin.run(...args, "--slack-api", `${sourceUrl}/api`, "--merge-into-existing", "--json")).toBe(0)
     expect(admin.err).toContain("Resuming import J")
     expect(admin.err).toContain("(resumed after 2023-11-14.json)")
     const result = JSON.parse(admin.out) as { job: JobJson; failed_files: string[]; emoji: unknown }
@@ -306,7 +306,7 @@ describe("campflare import slack", () => {
         "--slack-token",
         "xoxp-wrong",
         "--slack-api",
-        `${slackUrl}/api/`,
+        `${sourceUrl}/api/`,
       ),
     ).toBe(0)
     expect(admin.out).toContain("file failed    plan.pdf: not authorized (check --slack-token)")

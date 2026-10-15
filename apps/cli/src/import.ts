@@ -204,8 +204,8 @@ export async function importCustomEmoji(_s: Session, emoji: Record<string, strin
 interface Options {
   dryRun: boolean
   files: "skip" | "download"
-  slackToken?: string
-  slackApi: string
+  sourceToken?: string
+  sourceApi: string
   merge: boolean
   json: boolean
 }
@@ -232,15 +232,15 @@ export async function importCommand(argv: string[], io: Io): Promise<number | vo
   if (!path || positionals.length > 1) throw new UsageError("import slack needs one export zip")
   const files = str(values.files) ?? "skip"
   if (files !== "skip" && files !== "download") throw new UsageError("--files is skip or download")
-  const slackToken = str(values["slack-token"]) ?? io.env.SLACK_TOKEN
-  if (files === "download" && !slackToken) {
+  const sourceToken = str(values["slack-token"])
+  if (files === "download" && !sourceToken) {
     throw new UsageError("--files download needs --slack-token (a token of the exported workspace, to fetch files)")
   }
   const options: Options = {
     dryRun: Boolean(values["dry-run"]),
     files,
-    slackToken,
-    slackApi: (str(values["slack-api"]) ?? "https://slack.com/api/").replace(/\/?$/, "/"),
+    sourceToken,
+    sourceApi: (str(values["slack-api"]) ?? "https://slack.com/api/").replace(/\/?$/, "/"),
     merge: Boolean(values["merge-into-existing"]),
     json: Boolean(values.json),
   }
@@ -306,7 +306,7 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
         )
         sent += part.length
         if (options.files === "download" && res.files_needed.length) {
-          failedFiles.push(...(await transferFiles(s, job, c.id, list, res.files_needed, options.slackToken!)))
+          failedFiles.push(...(await transferFiles(s, job, c.id, list, res.files_needed, options.sourceToken!)))
         }
       }
     }
@@ -315,7 +315,7 @@ async function runImport(s: Session, ex: Export, options: Options, sourceName: s
   }
 
   let emoji: { imported: number; skipped: number } | undefined
-  if (options.slackToken) emoji = await customEmoji(s, options)
+  if (options.sourceToken) emoji = await customEmoji(s, options)
 
   let finished: JobJson
   for (;;) {
@@ -343,7 +343,7 @@ async function transferFiles(
   conversation: string,
   day: ExportMessage[],
   needed: { id: string; ts: string }[],
-  slackToken: string,
+  sourceToken: string,
 ): Promise<string[]> {
   const fetch = s.io.fetch ?? globalThis.fetch
   const failed: string[] = []
@@ -358,7 +358,7 @@ async function transferFiles(
       continue
     }
     try {
-      const res = await fetch(url, { headers: { authorization: `Bearer ${slackToken}` } })
+      const res = await fetch(url, { headers: { authorization: `Bearer ${sourceToken}` } })
       // Slack answers a wrong token with its sign-in page, not an error status.
       if (!res.ok || (res.headers.get("content-type") ?? "").startsWith("text/html")) {
         throw new Error(res.ok ? "not authorized (check --slack-token)" : `HTTP ${res.status}`)
@@ -388,9 +388,9 @@ async function transferFiles(
 async function customEmoji(s: Session, options: Options) {
   const fetch = s.io.fetch ?? globalThis.fetch
   try {
-    const res = await fetch(`${options.slackApi}emoji.list`, {
+    const res = await fetch(`${options.sourceApi}emoji.list`, {
       method: "POST",
-      headers: { authorization: `Bearer ${options.slackToken}` },
+      headers: { authorization: `Bearer ${options.sourceToken}` },
     })
     const body = (await res.json()) as { ok: boolean; emoji?: Record<string, string>; error?: string }
     if (!body.ok) throw new Error(body.error ?? "not ok")
