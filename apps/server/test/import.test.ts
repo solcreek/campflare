@@ -23,6 +23,7 @@ type Message = {
   thread_ts?: string
   parent_user_id?: string
   reply_count?: number
+  latest_reply?: string
   reply_users?: string[]
   edited?: { user: string; ts: string }
   reactions?: { name: string; users: string[]; count: number }[]
@@ -485,12 +486,16 @@ describe("campflare.import", () => {
     const res = await messages(w.owner.token, job.id, "C02", [
       { ts: existing.ts, user: "U03", text: "Would overwrite" },
       { ts: "1700000000.000001", user: "U03", text: "Mise à jour du design · デザイン更新" },
+      // An imported reply to a message that was here: the head's thread counts it.
+      { ts: "1700000000.000002", user: "U04", text: "Una respuesta · 返信", thread_ts: existing.ts },
     ])
-    expect(res).toMatchObject({ imported: 1, skipped: 1 })
+    expect(res).toMatchObject({ imported: 2, skipped: 1 })
+    const head = (await history(w.owner.token, design)).find((m) => m.ts === existing.ts)!
+    expect(head).toMatchObject({ thread_ts: existing.ts, reply_count: 1, latest_reply: "1700000000.000002" })
     const list = await history(w.owner.token, design)
     expect(list.find((m) => m.ts === existing.ts)!.text).toBe("Ours")
     expect(list.map((m) => m.text)).toContain("Mise à jour du design · デザイン更新")
-    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 1, messages_skipped: 1 })
+    expect((await status(w.owner.token, job.id)).counts).toMatchObject({ messages: 2, messages_skipped: 1 })
 
     // A DM with the same people goes into the existing one, merge or not.
     const job2 = await start(w.owner.token)

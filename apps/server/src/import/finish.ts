@@ -66,9 +66,11 @@ function finishConversation(db: D1Database, job: ImportJobRow, id: string): D1Pr
       id,
       job.id,
     ),
-    recountThreads(db, id, job.id, {
-      sql: "SELECT DISTINCT thread_ts FROM messages WHERE channel_id = ? AND import_job = ? AND thread_ts IS NOT NULL AND thread_ts <> ts",
-      params: [id, job.id],
+    // Every head the job's replies answer: its own, a tombstone, or one that was here before.
+    recountThreads(db, {
+      sql: `h.channel_id = ? AND h.ts IN (SELECT DISTINCT thread_ts FROM messages
+              WHERE channel_id = ? AND import_job = ? AND thread_ts IS NOT NULL AND thread_ts <> ts)`,
+      params: [id, id, job.id],
     }),
     stmt(
       db,

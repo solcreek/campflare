@@ -254,7 +254,10 @@ export async function importMessages(ctx: Ctx<Actor>) {
       bump(db, job.id, { files: CHANGES }),
     ]),
     // The threads the chunk touches, recounted from what is stored: heads and replies may come in any order.
-    recountThreads(db, c.id, job.id, { sql: "SELECT value FROM json_each(?)", params: [threads] }),
+    recountThreads(db, {
+      sql: "h.channel_id = ? AND h.ts IN (SELECT value FROM json_each(?))",
+      params: [c.id, threads],
+    }),
     ...(added.length
       ? [
           stmt(
@@ -302,31 +305,24 @@ export async function importMessages(ctx: Ctx<Actor>) {
 }
 
 /**
- * Recounts threads of a conversation from what is stored: each head (of the
- * job, its ts among `heads`) with replies gets its thread_ts, reply_count,
- * latest_reply and reply_users (repliers in order of first reply, at most 50,
- * as postMessage keeps them).
+ * Recounts threads from what is stored: each head (`heads`, `h` in its SQL),
+ * the job's or not (an imported reply may answer a message already here),
+ * gets its thread_ts, reply_count, latest_reply and reply_users (repliers in
+ * order of first reply, at most 50, as postMessage keeps them). Only heads
+ * with replies, unless `emptied`: then a head left without any stops being one.
  */
-export function recountThreads(
-  db: D1Database,
-  channelId: string,
-  jobId: string,
-  heads: { sql: string; params: unknown[] },
-) {
+export function recountThreads(db: D1Database, heads: { sql: string; params: unknown[] }, { emptied = false } = {}) {
   const replies =
     "FROM messages r WHERE r.channel_id = h.channel_id AND r.thread_ts = h.ts AND r.ts <> h.ts AND r.deleted = 0"
   return stmt(
     db,
     `UPDATE messages AS h SET
-       thread_ts = h.ts,
+       thread_ts = CASE WHEN EXISTS (SELECT 1 ${replies}) THEN h.ts ELSE NULL END,
        reply_count = (SELECT count(*) ${replies}),
        latest_reply = (SELECT max(r.ts) ${replies}),
        reply_users = coalesce((SELECT json_group_array(u) FROM (
          SELECT r.user_id AS u ${replies} AND r.user_id IS NOT NULL GROUP BY r.user_id ORDER BY min(r.ts) LIMIT 50)), '[]')
-     WHERE h.channel_id = ? AND h.import_job = ? AND h.ts IN (${heads.sql})
-       AND EXISTS (SELECT 1 ${replies})`,
-    channelId,
-    jobId,
+     WHERE ${heads.sql}${emptied ? "" : ` AND EXISTS (SELECT 1 ${replies})`}`,
     ...heads.params,
   )
 }
