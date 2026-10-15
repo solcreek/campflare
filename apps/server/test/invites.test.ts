@@ -217,6 +217,25 @@ describe("campflare.invites.accept", () => {
     expect((await signIn(email, "我的密碼很安全啊對吧")).status).toBe(200)
   })
 
+  it("creates the account and its token together, or neither", async () => {
+    const w = await workspace()
+    const again = await invite(w.owner.token)
+    // Storing the token fails (a trigger stands in for a failing database): no account may be left behind.
+    const trigger = `fail_token_${again.invite.id}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE INSERT ON tokens
+       WHEN NEW.user_id IN (SELECT id FROM users WHERE team_id = '${w.teamId}' AND name = 'ines')
+       BEGIN SELECT RAISE(ABORT, 'token write failed'); END`,
+    ).run()
+    expect((await accept(again.url, { name: "ines" })).ok).toBe(false)
+    await env.DB.prepare(`DROP TRIGGER ${trigger}`).run()
+    expect(await listed(w.owner.token, again.invite.id)).toMatchObject({ uses: 0, state: "pending" })
+    // The retry isn't name_taken: nothing was kept.
+    const joined = await accept(again.url, { name: "ines" })
+    expect(joined.ok).toBe(true)
+    expect(joined.token).toMatch(/^xoxp-/)
+  })
+
   it("takes the whole link or the code alone", async () => {
     const w = await workspace()
     const { url } = await invite(w.owner.token)

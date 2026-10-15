@@ -245,7 +245,7 @@ export function mountLinks(app: Hono<{ Bindings: Env }>) {
     }
     let user
     try {
-      user = await acceptInvite(linkContext(c), {
+      const joined = await acceptInvite(linkContext(c), {
         code,
         name: form.name,
         realName: form.real_name,
@@ -253,6 +253,7 @@ export function mountLinks(app: Hono<{ Bindings: Env }>) {
         password: field("password"),
         ip: clientAddress(c.req.raw.headers),
       })
+      user = joined.user
     } catch (error) {
       const { code: reason, message, retryAfter } = problem(error)
       if (reason in DEAD_INVITE) return deadInvite(url, reason)

@@ -1,4 +1,3 @@
-import { issueToken } from "../api/auth"
 import { method } from "../api/context"
 import { sha256Hex } from "../api/crypto"
 import { isEmail, normalizeEmail } from "../api/email-address"
@@ -161,20 +160,15 @@ method("campflare.invites.revoke", "user", async (ctx) => {
  * the `full` preset, as their own sign-in gets.
  */
 method("campflare.invites.accept", "none", async (ctx) => {
-  const user = await acceptInvite(ctx, {
+  const { user, token } = await acceptInvite(ctx, {
     code: codeOf(ctx.args.req("code"), "join"),
     name: ctx.args.req("name"),
     realName: ctx.args.str("real_name"),
     email: ctx.args.str("email"),
     password: ctx.args.req("password"),
     ip: clientAddress(ctx.request.headers),
-  })
-  const token = await issueToken(ctx.env, {
-    teamId: user.team_id,
-    kind: "user",
-    userId: user.id,
-    scopes: ["full"],
-    label: "invite",
+    // In the admission batch: an account never exists without the token that was its answer.
+    mintToken: true,
   })
   return { user: userJson(user, ctx.origin), team_id: user.team_id, token }
 })

@@ -1,3 +1,4 @@
+import { prepareToken } from "./api/auth"
 import { sha256Hex } from "./api/crypto"
 import { isEmail, normalizeEmail } from "./api/email-address"
 import { CampflareError, invalidArguments } from "./api/errors"
@@ -132,15 +133,18 @@ export interface Joining {
   password: string
   /** The client's address, for the sign-in throttle. */
   ip: string
+  /** Mint the person's first token (the full preset) in the same batch, as the API answers it. */
+  mintToken?: boolean
 }
 
 /**
  * Admits a person through an invite: their user row, their password, #general
- * and the invite's channels, one use counted, all in one batch that changes
- * nothing unless the invite is still good and its inviter may still invite.
- * Publishes team_join, and member_joined_channel for each conversation joined.
+ * and the invite's channels, one use counted, and with `mintToken` their first
+ * token, all in one batch that changes nothing unless the invite is still good
+ * and its inviter may still invite. Publishes team_join, and
+ * member_joined_channel for each conversation joined.
  */
-export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<UserRow> {
+export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<{ user: UserRow; token?: string }> {
   const { env } = lc
   const now = nowSeconds()
   const hash = await sha256Hex(joining.code)
@@ -166,6 +170,13 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
 
   const id = ids.user()
   const exists = "EXISTS (SELECT 1 FROM users WHERE id = ?)"
+  const minted = joining.mintToken
+    ? await prepareToken(
+        env,
+        { teamId: invite.team_id, kind: "user", userId: id, scopes: ["full"], label: "invite" },
+        { sql: exists, params: [id] },
+      )
+    : undefined
   let batch: D1Result[]
   try {
     batch = await env.DB.batch([
@@ -218,6 +229,8 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
          FROM conversations c JOIN members j ON j.conversation_id = c.id AND j.user_id = ?`,
         id,
       ),
+      // Last, so the results above keep their places; stored only if the user went in.
+      ...(minted ? [minted.insert] : []),
     ])
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -247,7 +260,7 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
       },
     })
   }
-  return user
+  return { user, token: minted?.token }
 }
 
 /** The statements that store a person's reset link, replacing any earlier one of theirs. */

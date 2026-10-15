@@ -31,3 +31,12 @@ export const stmt = (db: D1Database, sql: string, ...params: unknown[]) => db.pr
 
 export const isUniqueViolation = (error: unknown) =>
   error instanceof Error && /UNIQUE constraint failed|SQLITE_CONSTRAINT/.test(error.message)
+
+/** A SQL condition with its parameters, for writes in a batch that happen only where it holds. */
+export interface Guard {
+  sql: string
+  params: unknown[]
+}
+
+/** The guard that always holds. */
+export const ALWAYS: Guard = { sql: "1", params: [] }
