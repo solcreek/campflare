@@ -41,6 +41,8 @@ export const keys = {
   ip: (ip: string) => `ip:${ip}`,
   pair: (email: string, ip: string) => `pair:${email}:${ip}`,
   email: (email: string) => `email:${email}`,
+  /** Password reset emails asked for an address (src/invites.ts): bounds flooding a mailbox. */
+  reset: (email: string) => `reset:${email}`,
 }
 
 /** Drops a few expired counters, so the table holds only live ones. */

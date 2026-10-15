@@ -135,6 +135,14 @@ export const NEEDS: Record<string, Need> = {
   "campflare.users.create": ["admin.users:write"],
   "campflare.users.deactivate": ["admin.users:write"],
   "campflare.users.setRole": ["admin.users:write"],
+  "campflare.users.createPasswordReset": ["admin.users:write"],
+  "campflare.invites.create": ["admin.invites:write"],
+  "campflare.invites.revoke": ["admin.invites:write"],
+  "campflare.invites.list": ["admin.invites:read"],
+  // The link's code is the credential (docs/invites.md).
+  "campflare.invites.accept": [],
+  "campflare.users.resetPassword": [],
+  "campflare.users.requestPasswordReset": [],
 }
 
 /** The scopes a method accepts, any one of which will do, for x-accepted-oauth-scopes and missing_scope. */
@@ -221,6 +229,8 @@ export const FULL_USER_SCOPES = [
   "tokens:write",
   "users.password:write",
   "admin.users:write",
+  "admin.invites:read",
+  "admin.invites:write",
 ]
 
 export const DEFAULT_BOT_SCOPES = [

@@ -13,21 +13,30 @@ export const escape = (s: string) =>
  * `'self'` alone stops the flow at the final step. Better Auth redirects only
  * to a URI registered for the client, whatever this query claims.
  */
-function formAction(url: URL): string {
-  try {
-    const target = new URL(url.searchParams.get("redirect_uri") ?? "")
-    if (target.protocol === "https:" || target.protocol === "http:") return `'self' ${target.origin}`
-  } catch {
-    // No redirect URI, or not a URL: nothing to add.
+function formAction(url: URL, extra: string[] = []): string {
+  const origins = new Set<string>()
+  for (const candidate of [url.searchParams.get("redirect_uri") ?? "", ...extra]) {
+    try {
+      const target = new URL(candidate)
+      if (target.protocol === "https:" || target.protocol === "http:") origins.add(target.origin)
+    } catch {
+      // No redirect URI, or not a URL: nothing to add.
+    }
   }
-  return "'self'"
+  return ["'self'", ...origins].join(" ")
 }
 
 export function page(
   title: string,
   body: string,
   url: URL,
-  init: { status?: number; retryAfter?: number } = {},
+  init: {
+    status?: number
+    retryAfter?: number
+    /** URLs whose origins the form's POST may redirect to (APP_URL after /join), besides the OAuth redirect URI. */
+    formActions?: string[]
+    headers?: Headers
+  } = {},
 ): Response {
   const html = `<!doctype html>
 <html lang="en">
@@ -54,17 +63,19 @@ export function page(
 </head>
 <body><main>${body}</main></body>
 </html>`
-  return new Response(html, {
-    status: init.status ?? 200,
-    headers: {
-      ...(init.retryAfter ? { "retry-after": String(init.retryAfter) } : {}),
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      // No scripts, no framing: the forms work without either.
-      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction(url)}; frame-ancestors 'none'`,
-      "x-frame-options": "DENY",
-    },
-  })
+  const headers = new Headers(init.headers)
+  if (init.retryAfter) headers.set("retry-after", String(init.retryAfter))
+  headers.set("content-type", "text/html; charset=utf-8")
+  headers.set("cache-control", "no-store")
+  // No scripts, no framing: the forms work without either.
+  headers.set(
+    "content-security-policy",
+    `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction(url, init.formActions)}; frame-ancestors 'none'`,
+  )
+  headers.set("x-frame-options", "DENY")
+  // A page's URL can hold a secret (/join/<code>, /reset/<code>): never pass it on as a Referer.
+  headers.set("referrer-policy", "no-referrer")
+  return new Response(html, { status: init.status ?? 200, headers })
 }
 
 /** The signed query Better Auth put on this page's URL, passed back with the form. */
@@ -117,7 +128,8 @@ ${state.error ? `<p role="alert"><strong>${escape(state.error)}</strong></p>` : 
     ${query}
     <div class="row"><button type="submit">Continue with token</button></div>
   </form>
-</details>`,
+</details>
+<p><a href="/reset">Forgot your password?</a></p>`,
     url,
     state.retryAfter ? { status: 429, retryAfter: state.retryAfter } : {},
   )

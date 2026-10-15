@@ -10,6 +10,7 @@ import "./methods/chat-stream"
 import "./methods/conversations"
 import "./methods/dnd"
 import "./methods/events"
+import "./methods/invites"
 import "./methods/oauth"
 import { handleDownload, handleThumb, handleUpload } from "./methods/files"
 import "./huddle/methods"
@@ -20,6 +21,7 @@ import "./methods/search"
 import "./methods/users"
 import "./methods/views"
 import { mountAuth } from "./auth/routes"
+import { mountLinks } from "./auth/links"
 import { handlePermalink, offersDesktop } from "./permalinks"
 import { handleMcp } from "./mcp"
 import { handleResponseUrl } from "./interactivity"
@@ -112,6 +114,8 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
 })
 
 mountAuth(app)
+// Invitation and password reset links (docs/invites.md).
+mountLinks(app)
 
 /** A test page for huddles, until there's a UI. */
 app.get("/huddle", () => huddlePage())
