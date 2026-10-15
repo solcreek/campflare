@@ -287,3 +287,19 @@ describe("campflare.tokens.create", () => {
     await expectError("campflare.tokens.create", { expires_in: 5 }, w.owner.token, "invalid_arguments")
   })
 })
+
+describe("campflare.methods.list", () => {
+  it("says, without a token, what each method takes and what each preset holds", async () => {
+    type Listed = {
+      methods: { name: string; tokens: string[]; scopes: string[]; conversation_scope?: string }[]
+      presets: Record<string, string[]>
+    }
+    const list = await ok<Listed>("campflare.methods.list")
+    const byName = new Map(list.methods.map((m) => [m.name, m]))
+    expect(byName.get("chat.postMessage")).toEqual({ name: "chat.postMessage", tokens: ["user", "bot"], scopes: ["chat:write"] })
+    expect(byName.get("conversations.history")).toMatchObject({ conversation_scope: "history", scopes: expect.arrayContaining(["groups:history"]) })
+    expect(byName.get("apps.connections.open")!.tokens).toEqual(["app"])
+    expect(byName.size).toBe(methods.size)
+    expect(list.presets.full).toEqual(FULL_USER_SCOPES)
+  })
+})

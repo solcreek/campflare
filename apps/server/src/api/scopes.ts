@@ -35,6 +35,7 @@ export const NEEDS: Record<string, Need> = {
   "views.push": [],
   "views.update": [],
   "campflare.bootstrap": [],
+  "campflare.methods.list": [],
 
   "conversations.info": conversation("read"),
   "conversations.list": conversation("read"),
