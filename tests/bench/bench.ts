@@ -206,6 +206,7 @@ function scenarios(d: Dataset): Scenario[] {
     ["search: short term (LIKE)", () => ({ method: "search.messages", token: owner, args: { query: "ok" } })],
     ["search: 2-char CJK (LIKE)", () => ({ method: "search.messages", token: owner, args: { query: "部署" } })],
     ["search: no accents (FTS)", () => ({ method: "search.messages", token: owner, args: { query: "reunion" } })],
+    ["stars.list", () => ({ method: "stars.list", token: owner, args: { limit: "100" } })],
     [
       "conversations.mark",
       () => ({ method: "conversations.mark", token: owner, args: { channel: d.busy, ts: d.reactTs } }),

@@ -285,6 +285,16 @@ export function buildSeed(size: Size): { sql: string; dataset: Dataset } {
     ],
     messages,
   )
+  // The owner's saved items: every 100th message in #busy and the first channels, for stars.list.
+  const saved = messages.filter((m) => m[0] === busy).filter((_, i) => i % 100 === 0)
+  insert(
+    "stars",
+    ["user_id", "item", "team_id", "type", "channel_id", "ts", "created"],
+    [
+      ...saved.map((m, i) => [users[0]!.id, `message:${m[0]}/${m[1]}`, teamId, "message", m[0]!, m[1]!, now - i]),
+      ...[general, busy, fanout].map((cid) => [users[0]!.id, `channel:${cid}`, teamId, "channel", cid, null, now]),
+    ],
+  )
   // Reactions may repeat (same user, same emoji): keep one.
   insert(
     "reactions",
