@@ -247,7 +247,9 @@ describe("campflare.commands.invoke over HTTP", () => {
     expect(await run()).toMatchObject({
       ok: false,
       error: "dispatch_failed",
-      response_metadata: { messages: ["[ERROR] the command's Request URL answered 500"] },
+      response_metadata: {
+        messages: ["[ERROR] the app's answer couldn't be used: the command's Request URL answered 500"],
+      },
     })
     answering("{broken")
     expect((await run()).error).toBe("dispatch_failed")

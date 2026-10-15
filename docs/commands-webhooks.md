@@ -123,7 +123,9 @@ Not retried, as on Slack. Errors to the person: `command_not_found` (no such
 command, or its app's bot is deactivated), `app_unreachable` (no link and no
 URL, no ack within 3 seconds, no answer from the URL), `dispatch_failed` (the
 URL answered non-2xx or broken JSON). Each carries a `response_metadata`
-message saying which.
+message saying which. Delivery is interactivity's own `deliverInteraction()`,
+so clicks and submissions map failures the same way (they answered a non-2xx
+URL with `app_unreachable` before; it's `dispatch_failed` now, for all).
 
 The immediate answer is shown as the app's bot: `response_type: in_channel`
 posts it in the conversation, anything else is an ephemeral message to the

@@ -3,11 +3,9 @@ import { asApp } from "./api/as-app"
 import type { Actor, Ctx } from "./api/context"
 import { CampflareError } from "./api/errors"
 import { postMessage } from "./db/messages"
-import { hubOf } from "./events"
 import type { AppRow, ConversationRow, UserRow } from "./db/rows"
-import { channelName, issueResponseUrl, triggerId } from "./interactivity"
+import { channelName, deliverInteraction, issueResponseUrl, triggerId } from "./interactivity"
 import { authorOf, content, sendEphemeral } from "./methods/chat"
-import { postSigned } from "./request-url"
 
 // Slash commands (docs/commands-webhooks.md): a person types `/deploy staging`,
 // the app that registered /deploy gets it as Slack sends it (a Socket Mode
@@ -49,55 +47,10 @@ export const commandSettings = (row: Omit<CommandRow, "team_id" | "created">) =>
 /** What the app answered at once: a message for the person, or for the conversation (`in_channel`). */
 type Answer = Record<string, unknown>
 
-const unreachable = (why: string) =>
-  new CampflareError("app_unreachable", { response_metadata: { messages: [`[ERROR] the app didn't take it: ${why}`] } })
-
-const dispatchFailed = (why: string) =>
-  new CampflareError("dispatch_failed", { response_metadata: { messages: [`[ERROR] ${why}`] } })
-
-/**
- * Hands a command to its app: over a Socket Mode link (`slash_commands`,
- * acked within 3 seconds, the ack's payload the answer), else POSTed as a
- * signed form to the command's Request URL (the body the answer: JSON, or
- * plain text for the person). Its trigger_id is kept for a views.open first,
- * whichever way it goes.
- */
-async function deliver(
-  ctx: Ctx<Actor>,
-  app: AppRow,
-  command: CommandRow,
-  payload: Record<string, string>,
-): Promise<{ delivered: "socket" | "http"; answer?: Answer }> {
-  const hub = hubOf(ctx, app.team_id)
-  const socket = await hub.interact(app.id, payload, {
-    trigger: { id: payload.trigger_id!, userId: ctx.auth.user.id },
-    acceptsResponse: true,
-    type: "slash_commands",
-  })
-  if (socket.status === "acked") return { delivered: "socket", answer: answerOf(socket.response) }
-  if (socket.status === "timeout") throw unreachable("its Socket Mode connection didn't acknowledge within 3 seconds")
-  if (!command.url) throw unreachable("it has no Socket Mode connection and the command has no Request URL")
-  const res = await postSigned(command.url, app.signing_secret, new URLSearchParams(payload).toString(), {
-    contentType: "application/x-www-form-urlencoded",
-  })
-  if (res.status === 0) throw unreachable(`no answer from the command's Request URL (${res.reason})`)
-  if (!res.ok) throw dispatchFailed(`the command's Request URL answered ${res.status}`)
-  const body = res.body.trim()
-  if (!body) return { delivered: "http" }
-  if (!body.startsWith("{")) return { delivered: "http", answer: { text: body } }
-  try {
-    return { delivered: "http", answer: answerOf(body) }
-  } catch {
-    throw dispatchFailed("the command's Request URL answered with broken JSON")
-  }
-}
-
-/** An answer from its JSON (an ack's payload, a response body): an object, or a string for the person. */
-function answerOf(json: string | undefined): Answer | undefined {
-  if (json === undefined) return undefined
-  const value = JSON.parse(json) as unknown
-  if (typeof value === "string") return value ? { text: value } : undefined
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Answer
+/** The answer as a message's fields: an object, or a string for the person; else nothing to show. */
+function answerOf(response: unknown): Answer | undefined {
+  if (typeof response === "string") return response ? { text: response } : undefined
+  if (response && typeof response === "object" && !Array.isArray(response)) return response as Answer
   return undefined
 }
 
@@ -142,7 +95,24 @@ export async function invokeCommand(
     }),
     trigger_id: triggerId(),
   }
-  const { delivered, answer } = await deliver(ctx, app, command, payload)
+  // A slash_commands envelope, else a signed form of the fields to the command's URL (deliverInteraction).
+  const { delivered, response } = await deliverInteraction(ctx, app, payload, {
+    type: "slash_commands",
+    url: command.url,
+    urlName: "the command's Request URL",
+    body: "fields",
+    acceptsResponse: true,
+    textAnswer: true,
+    unconfigured: () =>
+      new CampflareError("app_unreachable", {
+        response_metadata: {
+          messages: [
+            "[ERROR] the app didn't take it: it has no Socket Mode connection and the command has no Request URL",
+          ],
+        },
+      }),
+  })
+  const answer = answerOf(response)
   if (!answer) return { delivered }
   const asBot = asApp(ctx.env, ctx.request, ctx.waitUntil, { team, app, bot }, new Args(answer), ctx.origin)
   const shown = content(asBot, false)

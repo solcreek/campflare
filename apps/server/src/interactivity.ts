@@ -90,51 +90,90 @@ export interface Delivered {
   response?: unknown
 }
 
+/** Where and how an interaction goes when the app has no Socket Mode link. */
+export interface InteractionRoute {
+  /** The Socket Mode envelope's type. */
+  type?: "interactive" | "slash_commands"
+  /** The Request URL to POST to; by default the app's Interactivity Request URL. */
+  url?: string | null
+  /** What it's called in errors. */
+  urlName?: string
+  /**
+   * The form's body: `payload=<json>` (interactivity) or the payload's own
+   * fields (slash commands, whose values are strings).
+   */
+  body?: "payload" | "fields"
+  /** The ack's payload, or the POST's answer, comes back as `response`. */
+  acceptsResponse?: boolean
+  /** A plain-text answer is taken as `{ text }` (slash commands) rather than refused. */
+  textAnswer?: boolean
+  /** The error when there's no link and no URL. */
+  unconfigured?: () => CampflareError
+}
+
 /**
- * Sends an interaction payload to an app, as Slack does: over Socket Mode
- * when it has a link (an `interactive` envelope it must ack), else POSTed,
- * signed, to its Interactivity Request URL. Not retried: an app that doesn't
- * take it within 3 seconds is the person's error, `app_unreachable`. With
- * `acceptsResponse`, the ack's payload (or the POST's JSON answer) comes back.
+ * Sends an interaction (block_actions, view_submission…) or a slash command
+ * to an app, as Slack does: over Socket Mode when it has a link (an envelope
+ * it must ack within 3 seconds), else POSTed, signed, as a form to a Request
+ * URL. Its trigger_id is granted first, whichever way it goes. Not retried.
+ * The person's errors are the same for every kind:
+ *
+ * - `app_unreachable`: the app didn't take it (no ack in time, no answer from
+ *   the URL: a timeout or a failed connection).
+ * - `dispatch_failed`: the URL answered, but not 2xx, or (when an answer is
+ *   wanted) with something that isn't JSON.
+ * - `unconfigured()` when there's neither a link nor a URL.
+ *
+ * With `acceptsResponse`, the ack's payload (or the POST's answer) comes back.
  */
 export async function deliverInteraction(
   ctx: Ctx<Actor>,
   app: AppRow,
   payload: Json,
-  { acceptsResponse = false }: { acceptsResponse?: boolean } = {},
+  {
+    type = "interactive",
+    url = app.interactivity_request_url,
+    urlName = "its Interactivity Request URL",
+    body = "payload",
+    acceptsResponse = false,
+    textAnswer = false,
+    unconfigured = () => new CampflareError("interactivity_not_enabled"),
+  }: InteractionRoute = {},
 ): Promise<Delivered> {
-  const hub = hubOf(ctx, app.team_id)
   const trigger =
     typeof payload.trigger_id === "string" ? { id: payload.trigger_id, userId: ctx.auth.user.id } : undefined
-  const socket = await hub.interact(app.id, payload, { trigger, acceptsResponse })
+  const socket = await hubOf(ctx, app.team_id).interact(app.id, payload, { trigger, acceptsResponse, type })
   if (socket.status === "acked") {
     return { delivered: "socket", ...(socket.response ? { response: JSON.parse(socket.response) as unknown } : {}) }
   }
   if (socket.status === "timeout") throw unreachable("its Socket Mode connection didn't acknowledge within 3 seconds")
-  if (!app.interactivity_request_url) throw new CampflareError("interactivity_not_enabled")
-  const res = await postSigned(
-    app.interactivity_request_url,
-    app.signing_secret,
-    new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
-    { contentType: "application/x-www-form-urlencoded" },
-  )
-  if (!res.ok) {
-    throw unreachable(
-      res.status === 0
-        ? `no answer from its Interactivity Request URL (${res.reason})`
-        : `its Interactivity Request URL answered ${res.status}`,
-    )
-  }
-  if (!acceptsResponse || !res.body.trim()) return { delivered: "http" }
+  if (!url) throw unconfigured()
+  const form =
+    body === "payload"
+      ? new URLSearchParams({ payload: JSON.stringify(payload) })
+      : new URLSearchParams(Object.entries(payload).map(([k, v]) => [k, String(v)]))
+  const res = await postSigned(url, app.signing_secret, form.toString(), {
+    contentType: "application/x-www-form-urlencoded",
+  })
+  if (res.status === 0) throw unreachable(`no answer from ${urlName} (${res.reason})`)
+  if (!res.ok) throw dispatchFailed(`${urlName} answered ${res.status}`)
+  const answer = res.body.trim()
+  if (!acceptsResponse || !answer) return { delivered: "http" }
+  if (textAnswer && !answer.startsWith("{") && !answer.startsWith("[")) return { delivered: "http", response: answer }
   try {
-    return { delivered: "http", response: JSON.parse(res.body) as unknown }
+    return { delivered: "http", response: JSON.parse(answer) as unknown }
   } catch {
-    throw unreachable("its Interactivity Request URL answered with something other than JSON")
+    throw dispatchFailed(`${urlName} answered with something other than JSON`)
   }
 }
 
 const unreachable = (why: string) =>
   new CampflareError("app_unreachable", { response_metadata: { messages: [`[ERROR] the app didn't take it: ${why}`] } })
+
+const dispatchFailed = (why: string) =>
+  new CampflareError("dispatch_failed", {
+    response_metadata: { messages: [`[ERROR] the app's answer couldn't be used: ${why}`] },
+  })
 
 /** Who did it, as an interaction payload names them. */
 export const interactor = (user: UserRow, teamId: string) => ({

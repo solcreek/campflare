@@ -339,8 +339,9 @@ campflare admin app A0123 --interactivity-url https://helper.example/slack/event
 ```
 
 (`campflare.apps.setInteractivity`, `app`, `request_url`; not challenged, as
-on Slack). Clicks aren't retried: an app that doesn't ack, or answer 2xx,
-within 3 seconds gives the clicker `app_unreachable`. The `response_url` takes
+on Slack). Clicks aren't retried: an app that doesn't ack, or answer at all,
+within 3 seconds gives the clicker `app_unreachable`; a URL answering non-2xx
+(or, for a submission, not JSON) gives `dispatch_failed`. The `response_url` takes
 the app's answer for 30 minutes, 5 times: `replace_original`,
 `delete_original`, `response_type: "in_channel"`, or by default a message only
 the clicker sees (ephemeral). Posted as the app's bot, in the clicked message's

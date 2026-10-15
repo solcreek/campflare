@@ -413,11 +413,11 @@ describe("campflare.views.submit", () => {
     expect((await submit("VNOPE")).error).toBe("not_found")
     const fresh = await open()
     urls.answer = () => new Response("boom", { status: 500 })
-    expect((await submit(fresh.id, values)).error).toBe("app_unreachable")
+    expect((await submit(fresh.id, values)).error).toBe("dispatch_failed")
     urls.answer = () => new Response("<html>", { status: 200 })
     expect((await submit(fresh.id, values)).response_metadata).toEqual({
       messages: [
-        "[ERROR] the app didn't take it: its Interactivity Request URL answered with something other than JSON",
+        "[ERROR] the app's answer couldn't be used: its Interactivity Request URL answered with something other than JSON",
       ],
     })
   })
