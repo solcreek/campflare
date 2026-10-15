@@ -58,11 +58,15 @@ export function fakeApi(handlers: Record<string, Handler>): FakeApi {
 export class FakeSocket extends EventTarget {
   static all: FakeSocket[] = []
   closed = false
+  /** Frames the client sent, parsed. */
+  sent: Record<string, unknown>[] = []
   constructor(readonly url: string) {
     super()
     FakeSocket.all.push(this)
   }
-  send(_data: string) {}
+  send(data: string) {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>)
+  }
   close() {
     if (this.closed) return
     this.closed = true

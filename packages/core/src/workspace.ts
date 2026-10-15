@@ -94,6 +94,27 @@ export interface Workspace {
   createChannel(name: string, opts?: { isPrivate?: boolean }): Promise<string>
   /** The IM (one user) or group DM (several) with these people, opened if need be. */
   openDm(users: string[]): Promise<string>
+  /**
+   * Whether the person is looking at this client (its window focused and
+   * visible). Told to the server over RTM, now and after every reconnect, so
+   * it doesn't push to their devices meanwhile (docs/push.md). Say it again
+   * now and then while it holds: the server forgets it after two minutes.
+   */
+  setActive(active: boolean): void
+  /** The server's Web Push key (campflare.push.vapidKey), or null when push isn't configured there. */
+  pushKey(): Promise<string | null>
+  /** Registers a browser's push subscription (PushSubscription.toJSON()) for this person. */
+  subscribePush(subscription: PushSubscriptionInfo, label: string): Promise<void>
+  /** Forgets a browser's push subscription, by its endpoint; one the server doesn't know is fine. */
+  unsubscribePush(endpoint: string): Promise<void>
+  /** Sends a test notification to this person's devices now. */
+  testPush(): Promise<{ sent: number; failed: number; removed: number }>
+}
+
+/** A browser's push subscription as PushSubscription.toJSON() gives it. */
+export interface PushSubscriptionInfo {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
 }
 
 const HISTORY_PAGE = 50
@@ -109,6 +130,8 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
   const listeners = new Set<() => void>()
   let live: Listener | undefined
   let everConnected = false
+  /** What setActive() last said, to say again on each new link. */
+  let active: boolean | undefined
   let localSeq = 0
   const fetchingUsers = new Set<string>()
   const fetchingConversations = new Set<string>()
@@ -181,6 +204,7 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
       onStatus(status) {
         dispatch({ type: "connection", status })
         if (status !== "connected") return
+        if (active !== undefined) live?.send({ type: "campflare.active", active })
         if (everConnected) void resync()
         everConnected = true
       },
@@ -510,6 +534,38 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     return r.channel.id
   }
 
+  function setActive(value: boolean) {
+    active = value
+    live?.send({ type: "campflare.active", active })
+  }
+
+  async function pushKey() {
+    try {
+      return (await client.call<ApiResult & { key: string }>("campflare.push.vapidKey")).key
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "push_not_configured") return null
+      throw error
+    }
+  }
+
+  async function subscribePush(subscription: PushSubscriptionInfo, label: string) {
+    // As JSON: the subscription is an object, and a form would flatten it.
+    await client.call("campflare.push.subscribe", { subscription: JSON.stringify(subscription), label })
+  }
+
+  async function unsubscribePush(endpoint: string) {
+    try {
+      await client.call("campflare.push.unsubscribe", { endpoint })
+    } catch (error) {
+      if (!(error instanceof ApiError && error.code === "subscription_not_found")) throw error
+    }
+  }
+
+  async function testPush() {
+    const r = await client.call<ApiResult & { sent: number; failed: number; removed: number }>("campflare.push.test")
+    return { sent: r.sent, failed: r.failed, removed: r.removed }
+  }
+
   return {
     getState: () => state,
     subscribe(listener) {
@@ -551,5 +607,10 @@ export function createWorkspace(options: WorkspaceOptions): Workspace {
     join,
     createChannel,
     openDm,
+    setActive,
+    pushKey,
+    subscribePush,
+    unsubscribePush,
+    testPush,
   }
 }
