@@ -2,8 +2,8 @@ import type { Env } from "../env"
 import type { Connection, PublishInput } from "../hub"
 import type { PushSubscriptionRow } from "../methods/push"
 import { itemPush, namedUsers, type Names, type PushItem } from "./payload"
-import { sendPush, vapidOf, type PushMessage, type PushOutcome, type Target } from "./send"
-import type { Vapid } from "./vapid"
+import { sendPush, type PushMessage, type PushOutcome, type Target } from "./send"
+import { loadVapid } from "./vapid"
 
 // Delivery of activity items to people's devices (docs/push.md), inside the
 // workspace's TeamHub: it already receives every activity_added event after
@@ -149,7 +149,7 @@ export class PushDelivery {
     })
     if (items.length === 0) return
     const origin = new URL(items[0]!.item.permalink ?? "http://localhost").origin
-    if (!vapidOf(this.env, origin)) return
+    if (!(await loadVapid(this.env, origin))) return
     const now = Date.now()
     const present = items.filter((i) => !this.isActive(i.userId, now))
     if (present.length === 0) return
@@ -171,9 +171,9 @@ export class PushDelivery {
   private async send(teamId: string, outgoing: Outgoing[]): Promise<void> {
     const sql = this.ctx.storage.sql
     const outcomes = await Promise.all(
-      outgoing.map((o) => {
-        const vapid: Vapid | undefined = vapidOf(this.env, o.origin)
-        return vapid ? sendPush(vapid, o.sub as Target, o.message) : Promise.resolve<PushOutcome | undefined>(undefined)
+      outgoing.map(async (o): Promise<PushOutcome | undefined> => {
+        const vapid = await loadVapid(this.env, o.origin)
+        return vapid ? sendPush(vapid, o.sub as Target, o.message) : undefined
       }),
     )
     const used = new Set<string>()
@@ -182,7 +182,7 @@ export class PushDelivery {
     outgoing.forEach((o, i) => {
       const outcome = outcomes[i]
       if (o.retry) sql.exec("DELETE FROM push_retries WHERE id = ?", o.retry.id)
-      if (!outcome) return
+      if (!outcome || outcome.misconfigured) return
       if (outcome.ok) used.add(o.sub.id)
       else if (outcome.gone) gone.add(o.sub.id)
       else if (outcome.transient) {

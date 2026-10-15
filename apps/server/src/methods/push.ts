@@ -4,7 +4,8 @@ import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds, randomId } from "../api/ids"
 import { decode } from "../push/base64url"
 import { importPublic, isPoint } from "../push/keys"
-import { sendPush, vapidOf } from "../push/send"
+import { sendPush } from "../push/send"
+import { loadVapid } from "../push/vapid"
 
 // Web Push subscriptions (docs/push.md): the browsers a person gets
 // notifications in. Delivery is the hub's (src/hub.ts); these only keep the list.
@@ -26,9 +27,9 @@ export interface PushSubscriptionRow {
   last_used: number
 }
 
-/** The server's VAPID keys, or push_not_configured. */
-function requireVapid(ctx: Pick<Ctx, "env" | "origin">) {
-  const vapid = vapidOf(ctx.env, ctx.origin)
+/** The server's VAPID keys (checked: the pair must match), or push_not_configured. */
+async function requireVapid(ctx: Pick<Ctx, "env" | "origin">) {
+  const vapid = await loadVapid(ctx.env, ctx.origin)
   if (!vapid) throw new CampflareError("push_not_configured")
   return vapid
 }
@@ -52,7 +53,7 @@ async function subscriptionsChanged(ctx: Pick<Ctx, "env">, teamIds: string[]) {
 }
 
 method("campflare.push.vapidKey", "none", async (ctx) => {
-  requireVapid(ctx)
+  await requireVapid(ctx)
   return { key: ctx.env.VAPID_PUBLIC_KEY!.trim() }
 })
 
@@ -86,7 +87,7 @@ async function subscriptionArgs(ctx: Ctx<Actor>) {
 }
 
 method("campflare.push.subscribe", "user", async (ctx) => {
-  requireVapid(ctx)
+  await requireVapid(ctx)
   const { endpoint, p256dh, auth } = await subscriptionArgs(ctx)
   const label = [...(ctx.args.str("label") ?? "").trim()].slice(0, MAX_LABEL).join("")
   const user = ctx.auth.user.id
@@ -151,7 +152,7 @@ method("campflare.push.list", "user", async (ctx) => ({
 }))
 
 method("campflare.push.test", "user", async (ctx) => {
-  const vapid = requireVapid(ctx)
+  const vapid = await requireVapid(ctx)
   const id = ctx.args.str("id")
   const rows = (await ownSubscriptions(ctx)).filter((r) => !id || r.id === id)
   if (id && rows.length === 0) throw new CampflareError("subscription_not_found")
@@ -169,6 +170,8 @@ method("campflare.push.test", "user", async (ctx) => {
       }),
     ),
   )
+  // The server's own key failing is its configuration, not the devices'.
+  if (outcomes.some((o) => o.misconfigured)) throw new CampflareError("push_not_configured")
   const sent = rows.filter((_, i) => outcomes[i]!.ok).map((r) => r.id)
   const removed = rows.filter((_, i) => outcomes[i]!.gone).map((r) => r.id)
   const db = ctx.env.DB

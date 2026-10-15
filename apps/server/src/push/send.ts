@@ -1,7 +1,5 @@
-import type { Env } from "../env"
-import { decode, utf8 } from "./base64url"
-import { encrypt } from "./encrypt"
-import { parseKeyPair } from "./keys"
+import { decode, encode, utf8 } from "./base64url"
+import { encrypt, MAX_PLAINTEXT } from "./encrypt"
 import { vapidAuthorization, vapidJwt, type Vapid } from "./vapid"
 
 // One push (RFC 8030): an encrypted payload POSTed to a subscription's
@@ -20,12 +18,6 @@ export const PUSH_TIMEOUT_MS = 10_000
 /** A day: a notification that waited longer is old news; the inbox still has it. */
 export const PUSH_TTL_S = 24 * 60 * 60
 
-/** The server's VAPID keys and contact, or undefined when push isn't configured. */
-export function vapidOf(env: Pick<Env, "VAPID_PUBLIC_KEY" | "VAPID_PRIVATE_KEY" | "VAPID_SUBJECT">, origin: string) {
-  const keys = parseKeyPair({ publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY })
-  return keys ? { ...keys, subject: env.VAPID_SUBJECT || origin } : undefined
-}
-
 export interface Target {
   endpoint: string
   p256dh: string
@@ -40,24 +32,55 @@ export interface PushMessage {
   ttl?: number
 }
 
+/**
+ * How a push went. Exactly one of: `ok`; `gone` (404, 410, or keys of the
+ * subscriber's that can't be used: forget the subscription); `transient` (429,
+ * 5xx, no answer: try again); `misconfigured` (the server's own VAPID key
+ * failed: neither the subscription's fault nor worth a retry); or none of
+ * them, a refusal for good (400, 413, a payload that can't fit).
+ */
 export interface PushOutcome {
   ok: boolean
   /** 0 when there was no answer. */
   status: number
-  /** 404 or 410: the subscription is no more and should be forgotten. */
   gone: boolean
-  /** 429, 5xx or no answer: worth trying again. */
   transient: boolean
+  misconfigured?: boolean
   /** The service's Retry-After, in milliseconds, if it sent one. */
   retryAfterMs?: number
 }
 
-/** JWTs by audience and key, good for an hour here (12 for the service): a busy hub signs a few an hour. */
+const outcome = (o: Partial<PushOutcome>): PushOutcome => ({
+  ok: false,
+  status: 0,
+  gone: false,
+  transient: false,
+  ...o,
+})
+
+/**
+ * The payload as bytes that fit one push: if it's too long, its `body` (the
+ * message text) is cut until it fits. Undefined if even that won't do.
+ */
+export function fitPayload(payload: unknown): Uint8Array<ArrayBuffer> | undefined {
+  let bytes = utf8(JSON.stringify(payload))
+  if (bytes.length <= MAX_PLAINTEXT) return bytes
+  const record = payload as { body?: unknown } | null
+  if (typeof record?.body !== "string") return undefined
+  let chars = [...record.body]
+  while (bytes.length > MAX_PLAINTEXT && chars.length > 0) {
+    chars = chars.slice(0, Math.floor(chars.length * 0.8))
+    bytes = utf8(JSON.stringify({ ...record, body: `${chars.join("")}…` }))
+  }
+  return bytes.length <= MAX_PLAINTEXT ? bytes : undefined
+}
+
+/** JWTs by audience, contact and key, good for an hour here (12 for the service): a busy hub signs a few an hour. */
 const jwts = new Map<string, { jwt: string; until: number }>()
 const JWT_REUSE_MS = 60 * 60 * 1000
 
 async function authorization(vapid: Vapid, audience: string): Promise<string> {
-  const key = `${audience} ${vapid.subject} ${vapid.publicKey.join(",")}`
+  const key = `${audience} ${vapid.subject} ${encode(vapid.publicKey)}`
   const now = Date.now()
   let cached = jwts.get(key)
   if (!cached || cached.until <= now) {
@@ -78,40 +101,53 @@ function retryAfter(value: string | null): number | undefined {
 
 /** Encrypts the payload for the subscription and POSTs it. Never throws: a failure is an outcome. */
 export async function sendPush(vapid: Vapid, target: Target, message: PushMessage): Promise<PushOutcome> {
+  const plaintext = fitPayload(message.payload)
+  if (!plaintext) return outcome({})
   const p256dh = decode(target.p256dh)
   const auth = decode(target.auth)
-  if (!p256dh || !auth) return { ok: false, status: 0, gone: true, transient: false }
+  if (!p256dh || auth?.length !== 16) return outcome({ gone: true })
+  let body: Uint8Array<ArrayBuffer>
   try {
-    const body = await encrypt(utf8(JSON.stringify(message.payload)), { p256dh, auth })
-    const headers: Record<string, string> = {
-      authorization: await authorization(vapid, new URL(target.endpoint).origin),
-      "content-encoding": "aes128gcm",
-      "content-type": "application/octet-stream",
-      ttl: String(message.ttl ?? PUSH_TTL_S),
-      urgency: message.urgency,
-    }
-    if (message.topic) headers.topic = message.topic
-    const res = await (pushFetch ?? fetch)(target.endpoint, {
+    body = await encrypt(plaintext, { p256dh, auth })
+  } catch {
+    // The plaintext fits, so what failed is the subscriber's key: importing it, or ECDH with it.
+    return outcome({ gone: true })
+  }
+  let signed: string
+  try {
+    signed = await authorization(vapid, new URL(target.endpoint).origin)
+  } catch (error) {
+    console.error("signing with the VAPID key failed", error)
+    return outcome({ misconfigured: true })
+  }
+  const headers: Record<string, string> = {
+    authorization: signed,
+    "content-encoding": "aes128gcm",
+    "content-type": "application/octet-stream",
+    ttl: String(message.ttl ?? PUSH_TTL_S),
+    urgency: message.urgency,
+  }
+  if (message.topic) headers.topic = message.topic
+  let res: Response
+  try {
+    res = await (pushFetch ?? fetch)(target.endpoint, {
       method: "POST",
       headers,
       body,
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     })
-    // The body isn't needed; read it so the connection is released.
-    await res.body?.cancel()
-    const transient = res.status === 429 || res.status >= 500
-    return {
-      ok: res.ok,
-      status: res.status,
-      gone: res.status === 404 || res.status === 410,
-      transient,
-      ...(transient ? { retryAfterMs: retryAfter(res.headers.get("retry-after")) } : {}),
-    }
-  } catch (error) {
-    // A key the browser gave that WebCrypto refuses is as good as gone; anything else is the network.
-    if (error instanceof DOMException && error.name !== "TimeoutError" && error.name !== "AbortError") {
-      return { ok: false, status: 0, gone: true, transient: false }
-    }
-    return { ok: false, status: 0, gone: false, transient: true }
+  } catch {
+    // No answer: the network, or the timeout.
+    return outcome({ transient: true })
   }
+  // The body isn't needed; cancel it so the connection is released.
+  await res.body?.cancel()
+  const transient = res.status === 429 || res.status >= 500
+  return outcome({
+    ok: res.ok,
+    status: res.status,
+    gone: res.status === 404 || res.status === 410,
+    transient,
+    ...(transient ? { retryAfterMs: retryAfter(res.headers.get("retry-after")) } : {}),
+  })
 }

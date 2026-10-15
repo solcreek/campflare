@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { decode, encode, utf8 } from "../src/push/base64url"
 import { encrypt, MAX_PLAINTEXT } from "../src/push/encrypt"
 import { generateKeyPair, importPublic, parseKeyPair } from "../src/push/keys"
-import { JWT_LIFETIME_S, vapidAuthorization, vapidJwt } from "../src/push/vapid"
+import { JWT_LIFETIME_S, loadVapid, vapidAuthorization, vapidJwt } from "../src/push/vapid"
 import { decryptPush } from "./push-service"
 
 const b64 = (s: string) => decode(s)!
@@ -71,7 +71,15 @@ describe("VAPID (RFC 8292)", () => {
     const pair = await generateKeyPair()
     const keys = parseKeyPair(pair)!
     const now = 1_760_000_000
-    const jwt = await vapidJwt({ ...keys, subject: "mailto:ops@campflare.test" }, "https://push.example", now)
+    const vapid = await loadVapid(
+      {
+        VAPID_PUBLIC_KEY: pair.publicKey,
+        VAPID_PRIVATE_KEY: pair.privateKey,
+        VAPID_SUBJECT: "mailto:ops@campflare.test",
+      },
+      "https://campflare.test",
+    )
+    const jwt = await vapidJwt(vapid!, "https://push.example", now)
     const [header, claims, signature] = jwt.split(".") as [string, string, string]
     expect(JSON.parse(new TextDecoder().decode(b64(header)))).toEqual({ typ: "JWT", alg: "ES256" })
     expect(JSON.parse(new TextDecoder().decode(b64(claims)))).toEqual({
