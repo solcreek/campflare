@@ -80,6 +80,21 @@ export function devVars(root: string): Check {
   }
 }
 
+/** Web Push's VAPID keys (docs/push.md): without them push is off, so a dev stack makes its own. */
+export function pushKeys(root: string): Check {
+  const text = read(join(root, "apps/server/.dev.vars"))
+  const missing = ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"].filter(
+    (k) => !text || !new RegExp(`^\\s*${k}\\s*=\\s*\\S`, "m").test(text),
+  )
+  return {
+    name: "push keys",
+    ok: missing.length === 0,
+    detail: missing.length === 0 ? "VAPID keys in apps/server/.dev.vars" : "no VAPID keys: push notifications are off",
+    // Without the file, the secrets check's fix comes first.
+    fix: text && missing.length ? "node scripts/vapid-keys.ts --write apps/server/.dev.vars" : undefined,
+  }
+}
+
 function newest(dir: string, matches: (name: string) => boolean): number {
   let latest = 0
   if (!existsSync(dir)) return 0

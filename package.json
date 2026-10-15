@@ -11,6 +11,7 @@
     "e2e": "pnpm --filter @campflare/web e2e",
     "desktop": "pnpm --filter @campflare/desktop dev",
     "ready": "node scripts/ready.ts",
+    "vapid-keys": "node scripts/vapid-keys.ts",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
     "typecheck": "pnpm -r typecheck && tsc -p scripts",
     "lint": "oxlint --deny-warnings",
