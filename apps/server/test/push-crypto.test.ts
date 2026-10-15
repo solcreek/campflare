@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { concat, decode, encode, utf8 } from "../src/push/base64url"
+import { decode, encode, utf8 } from "../src/push/base64url"
 import { encrypt, MAX_PLAINTEXT } from "../src/push/encrypt"
 import { generateKeyPair, importPublic, parseKeyPair } from "../src/push/keys"
 import { JWT_LIFETIME_S, vapidAuthorization, vapidJwt } from "../src/push/vapid"
+import { decryptPush } from "./push-service"
 
 const b64 = (s: string) => decode(s)!
 
@@ -18,58 +19,6 @@ const RFC = {
   body:
     "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_" +
     "yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN",
-}
-
-/** The browser's side, written from RFC 8291 and RFC 8188 independently of src/push: decrypts a body. */
-async function decrypt(body: Uint8Array<ArrayBuffer>, ua: { publicKey: string; privateKey: string }, auth: string) {
-  const salt = body.slice(0, 16)
-  const idlen = body[20]!
-  const asPublic = body.slice(21, 21 + idlen)
-  const ciphertext = body.slice(21 + idlen)
-  const uaPoint = b64(ua.publicKey)
-  const priv = await crypto.subtle.importKey(
-    "jwk",
-    {
-      kty: "EC",
-      crv: "P-256",
-      x: encode(uaPoint.slice(1, 33)),
-      y: encode(uaPoint.slice(33)),
-      d: ua.privateKey,
-    },
-    { name: "ECDH", namedCurve: "P-256" },
-    false,
-    ["deriveBits"],
-  )
-  const pub = await crypto.subtle.importKey("raw", asPublic, { name: "ECDH", namedCurve: "P-256" }, false, [])
-  const shared = new Uint8Array(
-    await crypto.subtle.deriveBits(
-      { name: "ECDH", public: pub } as unknown as SubtleCryptoDeriveKeyAlgorithm,
-      priv,
-      256,
-    ),
-  )
-  const hkdf = async (
-    s: Uint8Array<ArrayBuffer>,
-    ikm: Uint8Array<ArrayBuffer>,
-    info: Uint8Array<ArrayBuffer>,
-    n: number,
-  ) =>
-    new Uint8Array(
-      await crypto.subtle.deriveBits(
-        { name: "HKDF", hash: "SHA-256", salt: s, info },
-        await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]),
-        n * 8,
-      ),
-    )
-  const ikm = await hkdf(b64(auth), shared, concat(utf8("WebPush: info\0"), uaPoint, asPublic), 32)
-  const cek = await hkdf(salt, ikm, utf8("Content-Encoding: aes128gcm\0"), 16)
-  const nonce = await hkdf(salt, ikm, utf8("Content-Encoding: nonce\0"), 12)
-  const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
-  const padded = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, ciphertext))
-  let end = padded.length - 1
-  while (padded[end] === 0) end--
-  expect(padded[end]).toBe(2)
-  return new TextDecoder().decode(padded.slice(0, end))
 }
 
 describe("base64url", () => {
@@ -103,8 +52,9 @@ describe("message encryption (RFC 8291)", () => {
     expect(encode(a.slice(0, 16))).not.toBe(encode(b.slice(0, 16)))
     expect(new DataView(a.buffer).getUint32(16)).toBe(4096)
     expect(a[20]).toBe(65)
-    expect(await decrypt(a, ua, auth)).toBe(text)
-    expect(await decrypt(b, ua, auth)).toBe(text)
+    const browser = { ua, keys: { p256dh: ua.publicKey, auth } }
+    expect(await decryptPush(a, browser)).toBe(text)
+    expect(await decryptPush(b, browser)).toBe(text)
   })
 
   it("refuses a payload that won't fit one push", async () => {

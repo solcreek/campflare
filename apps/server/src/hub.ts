@@ -6,6 +6,7 @@ import type { AppRow } from "./db/rows"
 import { disabledReason, disableDelivery, tellInstaller } from "./delivery-disabled"
 import { createHealthTables, healthOf, recordAttempt, resetWindow, type DeliveryHealth } from "./delivery-health"
 import { postSigned, REQUEST_TIMEOUT_MS, type PostResult } from "./request-url"
+import { PushDelivery } from "./push/deliver"
 
 // One TeamHub per workspace holds its live connections and fans events out.
 //
@@ -32,6 +33,8 @@ export interface Connection {
   botUserId?: string
   installerUserId?: string
   connectedAt: number
+  /** rtm: when its client last said it's active (a `campflare.active` frame), 0 once it said it isn't. */
+  activeAt?: number
 }
 
 export interface PublishInput {
@@ -127,9 +130,12 @@ export class TeamHub extends DurableObject<Env> {
   private roundRobin = new Map<string, number>()
   /** Open polls, woken by each new event to look again. */
   private waiters = new Set<() => void>()
+  /** Web Push to people's devices (docs/push.md). */
+  private push: PushDelivery
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
+    this.push = new PushDelivery(ctx, env, (at) => this.scheduleAlarm(at))
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS used_tickets (nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL)")
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS events (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -611,10 +617,17 @@ export class TeamHub extends DurableObject<Env> {
       if (ws) send(ws, envelope)
     }
     await Promise.all(posts)
-    const next = this.ctx.storage.sql
+    await this.push.retryDue(now)
+    const unacked = this.ctx.storage.sql
       .exec<{ due: number | null }>("SELECT MIN(due) AS due FROM unacked")
       .toArray()[0]?.due
-    if (next !== null && next !== undefined) await this.ctx.storage.setAlarm(next)
+    const next = Math.min(unacked ?? Infinity, this.push.nextDue() ?? Infinity)
+    if (next !== Infinity) await this.ctx.storage.setAlarm(next)
+  }
+
+  /** Someone's push subscriptions changed: read them again for the next activity item. */
+  async pushSubscriptionsChanged(): Promise<void> {
+    this.push.forget()
   }
 
   /** The last event number handed out (0 before the first). */
@@ -738,11 +751,24 @@ export class TeamHub extends DurableObject<Env> {
   /** Several events, in order, in one RPC: each person's own activity item, say. */
   async publishEach(inputs: PublishInput[]): Promise<number> {
     let delivered = 0
-    for (const input of inputs) delivered += await this.publish(input)
+    for (const input of inputs) delivered += await this.send(input)
+    // After every link has them: activity items that notify go to people's devices.
+    await this.pushItems(inputs)
     return delivered
   }
 
   async publish(input: PublishInput): Promise<number> {
+    const delivered = await this.send(input)
+    await this.pushItems([input])
+    return delivered
+  }
+
+  /** Push failing must not fail publishing: the events went out. */
+  private async pushItems(inputs: PublishInput[]) {
+    await this.push.deliver(inputs).catch((error: unknown) => console.error("push failed", error))
+  }
+
+  private async send(input: PublishInput): Promise<number> {
     const { event, audience } = input
     if (input.ephemeral) this.keepEphemeral(input.ephemeral)
     const eventTs = (event.event_ts as string | undefined) ?? `${(Date.now() / 1000).toFixed(6)}`
@@ -926,7 +952,7 @@ export class TeamHub extends DurableObject<Env> {
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string") return
-    let frame: { type?: string; id?: unknown; envelope_id?: string; payload?: unknown }
+    let frame: { type?: string; id?: unknown; envelope_id?: string; payload?: unknown; active?: unknown }
     try {
       frame = JSON.parse(message) as typeof frame
     } catch {
@@ -938,6 +964,11 @@ export class TeamHub extends DurableObject<Env> {
       this.interactions.get(frame.envelope_id)?.(frame.payload)
     }
     if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong", reply_to: frame.id }))
+    // A client saying whether its person is looking at it: no push while they are (docs/push.md).
+    if (frame.type === "campflare.active") {
+      const conn = ws.deserializeAttachment() as Connection | null
+      if (conn?.kind === "rtm") ws.serializeAttachment({ ...conn, activeAt: frame.active === true ? Date.now() : 0 })
+    }
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {

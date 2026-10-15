@@ -33,4 +33,12 @@ export interface Env {
    * campflare:// link) and the web app, instead of redirecting to APP_URL.
    */
   OFFER_DESKTOP_APP?: string
+  /**
+   * Web Push (docs/push.md; off without the keys): the VAPID key pair in Web
+   * Push's encoding (the public key's uncompressed point and the private d,
+   * base64url), and a mailto: or https: contact for push services.
+   */
+  VAPID_PUBLIC_KEY?: string
+  VAPID_PRIVATE_KEY?: string
+  VAPID_SUBJECT?: string
 }

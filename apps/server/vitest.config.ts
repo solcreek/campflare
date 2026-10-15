@@ -21,6 +21,10 @@ export default defineConfig(async () => {
             WORKERS_AI_TOKEN: "test-workers-ai-token",
             // Where permalinks send the browser; a query of its own, which the redirect keeps.
             APP_URL: "https://app.campflare.test/?team=dev",
+            // Web Push: a key pair made for the tests (push services are faked with setPushFetch).
+            VAPID_PUBLIC_KEY: "BJQiCS-kDdMSnJJm-oewJ2ESIFX-sq5HFIE2TXDesZbHULYpnrUjid9rwNDjDehUKIZ8G_x_JsIRQA8jDTw20aA",
+            VAPID_PRIVATE_KEY: "7dyzr08oHg1CxK68ptek_5k4dxYlkMOk5w3GDpCH8n8",
+            VAPID_SUBJECT: "mailto:push@campflare.test",
           },
         },
       }),
