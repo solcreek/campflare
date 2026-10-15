@@ -1,7 +1,7 @@
 import { all, first, isUniqueViolation, run, stmt } from "../db/query"
 import type { AppRow, TokenRow, UserRow } from "../db/rows"
 import { APP_SCOPES, issueToken } from "../api/auth"
-import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES } from "../api/scopes"
+import { expandScopes, FULL_USER_SCOPES, GRANTABLE_USER_SCOPES, missingScope } from "../api/scopes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { invalidArguments, CampflareError } from "../api/errors"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
@@ -290,8 +290,7 @@ function grantedScopes(ctx: Ctx<Actor>): string[] {
   const unknown = asked.filter((s) => !GRANTABLE_USER_SCOPES.has(s))
   if (unknown.length) throw invalidArguments(`unknown scopes or presets: ${unknown.join(", ")}`)
   const missing = expandScopes(asked.join(",")).filter((s) => !held.has(s))
-  if (missing.length)
-    throw new CampflareError("missing_scope", { needed: missing.join(","), provided: ctx.auth.scopes.join(",") })
+  if (missing.length) throw missingScope(ctx.auth, missing)
   // A preset grows as features add scopes; stored by name only when the caller holds everything it can grow into.
   return full ? [...new Set(asked)] : expandScopes(asked.join(","))
 }

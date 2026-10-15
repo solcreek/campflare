@@ -4,7 +4,7 @@ import type { ConversationRow, MemberRow, UserRow } from "../db/rows"
 import { conversationJson, presenceOf, userJson } from "../api/shapes"
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError } from "../api/errors"
-import { requireScope } from "../api/scopes"
+import { requireConversationScope } from "../api/scopes"
 import { imPeer } from "../db/conversations"
 import { nowSeconds } from "../api/ids"
 
@@ -111,11 +111,12 @@ method("users.profile.set", "user", async (ctx) => {
   return { profile: userJson(user, ctx.origin).profile }
 })
 
-const TYPE_FILTERS: Record<string, { sql: string; scope: string }> = {
-  public_channel: { sql: "(c.kind = 'channel' AND c.is_private = 0)", scope: "channels:read" },
-  private_channel: { sql: "(c.kind = 'channel' AND c.is_private = 1)", scope: "groups:read" },
-  mpim: { sql: "c.kind = 'mpim'", scope: "mpim:read" },
-  im: { sql: "c.kind = 'im'", scope: "im:read" },
+/** Each `types` value: its SQL, and the kind of conversation whose :read scope it wants. */
+const TYPE_FILTERS: Record<string, { sql: string; kind: Pick<ConversationRow, "kind" | "is_private"> }> = {
+  public_channel: { sql: "(c.kind = 'channel' AND c.is_private = 0)", kind: { kind: "channel", is_private: 0 } },
+  private_channel: { sql: "(c.kind = 'channel' AND c.is_private = 1)", kind: { kind: "channel", is_private: 1 } },
+  mpim: { sql: "c.kind = 'mpim'", kind: { kind: "mpim", is_private: 1 } },
+  im: { sql: "c.kind = 'im'", kind: { kind: "im", is_private: 1 } },
 }
 
 /**
@@ -126,7 +127,7 @@ export function typesFilter(ctx: Ctx<Actor>, types: string[]): string {
   const filters = (types.length ? types : ["public_channel"]).map((t) => {
     const f = TYPE_FILTERS[t]
     if (!f) throw new CampflareError("invalid_types")
-    requireScope(ctx.auth, [f.scope])
+    requireConversationScope(ctx.auth, f.kind, "read")
     return f.sql
   })
   return `(${filters.join(" OR ")})`
