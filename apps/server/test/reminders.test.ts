@@ -17,8 +17,7 @@ type Reminder = {
 }
 
 const scheduler = (teamId: string) => env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId))
-const alarmOf = (teamId: string) =>
-  runInDurableObject(scheduler(teamId), (_s, state) => state.storage.getAlarm())
+const alarmOf = (teamId: string) => runInDurableObject(scheduler(teamId), (_s, state) => state.storage.getAlarm())
 
 const add = (token: string, text: string, time: string | number) =>
   ok<{ reminder: Reminder }>("reminders.add", { text, time }, token).then((r) => r.reminder)

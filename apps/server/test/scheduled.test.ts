@@ -15,8 +15,7 @@ type Listed = {
 type History = { messages: Record<string, unknown>[] }
 
 const scheduler = (teamId: string) => env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId))
-const alarmOf = (teamId: string) =>
-  runInDurableObject(scheduler(teamId), (_s, state) => state.storage.getAlarm())
+const alarmOf = (teamId: string) => runInDurableObject(scheduler(teamId), (_s, state) => state.storage.getAlarm())
 
 /** Makes a scheduled message due now, as if its time had come. */
 const makeDue = (id: string) =>
