@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers"
 import { describe, expect, it } from "vitest"
 import { groupMembers, subteamMentions } from "../src/db/usergroups"
-import { connect, expectError, ok, workspace } from "./helpers"
+import { connect, expectError, ok, settle, workspace } from "./helpers"
 
 type Group = {
   id: string
@@ -239,10 +239,17 @@ describe("usergroups", () => {
     await ok("usergroups.users.update", { usergroup: a.id, users: bob.id }, w.owner.token)
 
     const link = await live(w.owner.token)
-    const off = await ok<{ usergroup: Group }>("usergroups.disable", { usergroup: b.id }, bob.token)
+    // Two at once: both answer the disabled group, one tells everyone.
+    const [off, twin] = await Promise.all([
+      ok<{ usergroup: Group }>("usergroups.disable", { usergroup: b.id }, bob.token),
+      ok<{ usergroup: Group }>("usergroups.disable", { usergroup: b.id }, w.owner.token),
+    ])
     expect(off.usergroup.date_delete).toBeGreaterThan(0)
-    expect(off.usergroup.deleted_by).toBe(bob.id)
+    expect(twin.usergroup.date_delete).toBe(off.usergroup.date_delete)
+    expect([bob.id, w.owner.id]).toContain(off.usergroup.deleted_by)
     expect(await link.next((f) => f.type === "subteam_updated")).toMatchObject({ subteam: { id: b.id } })
+    await settle(200)
+    expect(link.frames.filter((f) => f.type === "subteam_updated")).toEqual([])
     link.close()
     // Again: as it is.
     expect(

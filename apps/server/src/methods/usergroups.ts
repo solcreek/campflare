@@ -182,16 +182,42 @@ method("usergroups.update", "actor", async (ctx) => {
   return { usergroup: json }
 })
 
-/** Disables or enables a group; one already so is answered as it is, with no event. */
+/**
+ * Disables or enables a group: one UPDATE guarded on the current state, read back in the same
+ * batch. One already so is answered as it is, with no event; of two concurrent calls, only
+ * the one whose UPDATE changed the row announces it.
+ */
 async function setEnabled(ctx: Ctx<Actor>, enabled: boolean) {
   const id = ctx.args.req("usergroup", "no_such_subteam")
-  const current = await getGroup(ctx, id)
-  if (enabled === (current.date_delete === 0)) return { usergroup: usergroupJson(current, membersOf(current)) }
-  const group = enabled
-    ? await updateGroup(ctx, id, "date_delete = 0, deleted_by = NULL")
-    : await updateGroup(ctx, id, "date_delete = ?, deleted_by = ?", nowSeconds(), ctx.auth.user.id)
+  const now = nowSeconds()
+  const [changed, read] = await ctx.env.DB.batch([
+    enabled
+      ? stmt(
+          ctx.env.DB,
+          `UPDATE usergroups SET date_delete = 0, deleted_by = NULL, date_update = ?, updated_by = ?
+           WHERE id = ? AND team_id = ? AND date_delete != 0 RETURNING id`,
+          now,
+          ctx.auth.user.id,
+          id,
+          ctx.auth.team.id,
+        )
+      : stmt(
+          ctx.env.DB,
+          `UPDATE usergroups SET date_delete = ?, deleted_by = ?, date_update = ?, updated_by = ?
+           WHERE id = ? AND team_id = ? AND date_delete = 0 RETURNING id`,
+          now,
+          ctx.auth.user.id,
+          now,
+          ctx.auth.user.id,
+          id,
+          ctx.auth.team.id,
+        ),
+    groupStatement(ctx, id),
+  ])
+  const group = read!.results[0] as UsergroupWithMembers | undefined
+  if (!group) throw new CampflareError("no_such_subteam")
   const json = usergroupJson(group, membersOf(group))
-  announce(ctx, "subteam_updated", json)
+  if (changed!.results.length) announce(ctx, "subteam_updated", json)
   return { usergroup: json }
 }
 
