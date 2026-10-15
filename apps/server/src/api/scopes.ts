@@ -106,6 +106,7 @@ export const NEEDS: Record<string, Need> = {
   "users.profile.set": ["users.profile:write"],
   "users.setPhoto": ["users.profile:write"],
   "users.deletePhoto": ["users.profile:write"],
+  "campflare.users.setTimezone": ["users.profile:write"],
 
   "usergroups.list": ["usergroups:read"],
   "usergroups.users.list": ["usergroups:read"],
@@ -123,6 +124,7 @@ export const NEEDS: Record<string, Need> = {
   "dnd.setSnooze": ["dnd:write"],
   "dnd.endSnooze": ["dnd:write"],
   "dnd.endDnd": ["dnd:write"],
+  "campflare.dnd.setSchedule": ["dnd:write"],
 
   "chat.scheduleMessage": ["chat:write"],
   "chat.scheduledMessages.list": ["chat:write"],

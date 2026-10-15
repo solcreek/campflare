@@ -33,7 +33,7 @@ const MAX_RELATIVE_SECONDS = 86_400
 /** Hours and minutes when a day is named without a time. */
 const DEFAULT_TIME = { hour: 9, minute: 0 }
 
-interface Wall {
+export interface Wall {
   year: number
   month: number
   day: number
@@ -53,8 +53,34 @@ export function validZone(tz: string | undefined): string {
   }
 }
 
+/**
+ * The zone's canonical name if `tz` is an IANA time zone the runtime knows
+ * ("europe/paris" is Europe/Paris); undefined for anything else, a fixed
+ * offset like "+02:00" included: a person's zone follows its DST rules.
+ */
+export function ianaZone(tz: string | undefined): string | undefined {
+  if (!tz || /^[+-]|^\d/.test(tz.trim())) return undefined
+  try {
+    const zone = new Intl.DateTimeFormat("en-US", { timeZone: tz.trim() }).resolvedOptions().timeZone
+    return /^[+-]/.test(zone) ? undefined : zone
+  } catch {
+    return undefined
+  }
+}
+
+/** How far the zone's wall clock is ahead of UTC at an instant (epoch seconds), in seconds: Slack's tz_offset. */
+export function zoneOffset(tz: string, at = Math.floor(Date.now() / 1000)): number {
+  return offsetMs(tz, at * 1000) / 1000
+}
+
+/** The zone's name for people at an instant, as Slack's tz_label: "Central European Summer Time". */
+export function zoneLabel(tz: string, at = Math.floor(Date.now() / 1000)): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "long" }).formatToParts(at * 1000)
+  return parts.find((p) => p.type === "timeZoneName")?.value ?? tz
+}
+
 /** The wall-clock time in a zone at an instant (ms). */
-function wallIn(tz: string, ms: number): Wall {
+export function wallIn(tz: string, ms: number): Wall {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric",

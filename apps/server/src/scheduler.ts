@@ -4,17 +4,22 @@ import { CampflareError } from "./api/errors"
 import { nowSeconds, randomSecret } from "./api/ids"
 import { requireWritable } from "./db/conversations"
 import { postMessage } from "./db/messages"
-import { first, stmt } from "./db/query"
+import { all, first, stmt } from "./db/query"
 import type { AppRow, ConversationRow, ReminderRow, ScheduledMessageRow, TeamRow, UserRow } from "./db/rows"
+import { userJson } from "./api/shapes"
+import { dndEvents, nextWindow } from "./dnd"
 import type { Env } from "./env"
-import { publish } from "./events"
+import { publish, publishEach } from "./events"
+import type { PublishInput } from "./hub"
 import { dmFromSystem, serverCtx, systemActor } from "./system-bot"
 
-// Scheduled messages and reminders fire from here (docs/scheduling.md). D1 is
-// the truth; this object, one per workspace, only holds an alarm at the
-// earliest due time. Each run claims a due row (a lease), posts, and finishes
-// the row in the post's own batch, so a row is posted once however often the
-// alarm runs.
+// Scheduled messages and reminders fire from here (docs/scheduling.md), and
+// statuses expire and DND windows move on (docs/dnd.md). D1 is the truth; this
+// object, one per workspace, only holds an alarm at the earliest due time.
+// Each run claims a due row (a lease), posts, and finishes the row in the
+// post's own batch, so a row is posted once however often the alarm runs.
+// Statuses and windows need no claim: one guarded UPDATE each changes them,
+// and only the run whose UPDATE did announces it.
 
 /** How long a claim holds a row: a runner that dies mid-post leaves it to be tried again after this. */
 export const CLAIM_SECONDS = 60
@@ -63,8 +68,8 @@ export async function claimRow<T>(env: Env, table: Claimed, id: string, now = no
 
 export class Scheduler extends DurableObject<Env> {
   /** Makes sure the alarm rings by `at` (epoch seconds). */
-  async arm(teamId: string, at: number): Promise<void> {
-    await this.ctx.storage.put("team", teamId)
+  async arm(teamId: string, at: number, origin?: string): Promise<void> {
+    await this.ctx.storage.put(origin ? { team: teamId, origin } : { team: teamId })
     const current = await this.ctx.storage.getAlarm()
     if (current === null || current > at * 1000) await this.ctx.storage.setAlarm(at * 1000)
   }
@@ -75,11 +80,12 @@ export class Scheduler extends DurableObject<Env> {
    * fail, for Cloudflare to retry it.
    */
   override async alarm(): Promise<void> {
-    const teamId = await this.ctx.storage.get<string>("team")
+    const stored = await this.ctx.storage.get<string>(["team", "origin"])
+    const teamId = stored.get("team")
     if (!teamId) return
     const pending: Promise<unknown>[] = []
     try {
-      await runDue(this.env, teamId, (p) => pending.push(p))
+      await runDue(this.env, teamId, (p) => pending.push(p), nowSeconds(), stored.get("origin"))
     } catch (error) {
       console.error("scheduler run failed", teamId, error)
     }
@@ -107,6 +113,8 @@ interface Run {
   waitUntil: WaitUntil
   now: number
   bot: () => Promise<Actor>
+  /** The server's origin, for the URLs in a user_change. */
+  origin: string
 }
 
 /** Runs `fn` over `items`, at most `limit` at a time. */
@@ -127,9 +135,12 @@ async function isolated(kind: string, id: string, fire: Promise<void>) {
   }
 }
 
-/** Sets the workspace's alarm to ring by `at`: after the row is written, before the method answers. */
-export async function armScheduler(env: Env, teamId: string, at: number): Promise<void> {
-  await env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId)).arm(teamId, at)
+/**
+ * Sets the workspace's alarm to ring by `at`: after the row is written, before the method answers.
+ * `origin`, the server's, is kept for what the alarm sends without a row to say it (user_change).
+ */
+export async function armScheduler(env: Env, teamId: string, at: number, origin?: string): Promise<void> {
+  await env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId)).arm(teamId, at, origin)
 }
 
 /**
@@ -137,7 +148,13 @@ export async function armScheduler(env: Env, teamId: string, at: number): Promis
  * PER_RUN of each): CONCURRENCY at a time, each conversation's messages in
  * due order.
  */
-export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()): Promise<void> {
+export async function runDue(
+  env: Env,
+  teamId: string,
+  waitUntil: WaitUntil,
+  now = nowSeconds(),
+  origin = "http://localhost",
+): Promise<void> {
   const db = env.DB
   const [messages, reminders, team] = await db.batch([
     stmt(
@@ -163,7 +180,7 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
   const teamRow = team!.results[0] as TeamRow | undefined
   if (!teamRow) return
   let bot: Promise<Actor> | undefined
-  const run: Run = { env, team: teamRow, waitUntil, now, bot: () => (bot ??= systemActor(env, teamRow)) }
+  const run: Run = { env, team: teamRow, waitUntil, now, origin, bot: () => (bot ??= systemActor(env, teamRow)) }
   const byChannel = new Map<string, string[]>()
   for (const { id, channel_id } of messages!.results as { id: string; channel_id: string }[]) {
     byChannel.set(channel_id, [...(byChannel.get(channel_id) ?? []), id])
@@ -175,6 +192,8 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
     pool(reminders!.results as { id: string }[], CONCURRENCY, ({ id }) =>
       isolated("reminder", id, fireReminder(run, id)),
     ),
+    isolated("status expiry", teamId, expireStatuses(run)),
+    isolated("dnd window", teamId, moveDndWindows(run)),
   ])
 }
 
@@ -185,7 +204,11 @@ export async function nextDue(env: Env, teamId: string): Promise<number | undefi
     `SELECT MIN(due) AS due FROM (
        SELECT MAX(post_at, COALESCE(claimed_until, 0)) AS due FROM scheduled_messages WHERE team_id = ?1
        UNION ALL
-       SELECT MAX(time, COALESCE(claimed_until, 0)) FROM reminders WHERE team_id = ?1 AND fired = 0 AND complete_ts = 0)`,
+       SELECT MAX(time, COALESCE(claimed_until, 0)) FROM reminders WHERE team_id = ?1 AND fired = 0 AND complete_ts = 0
+       UNION ALL
+       SELECT MIN(status_expiration) FROM users WHERE team_id = ?1 AND status_expiration > 0 AND deleted = 0
+       UNION ALL
+       SELECT MIN(dnd_window_end) FROM users WHERE team_id = ?1 AND dnd_window_end > 0 AND deleted = 0)`,
     teamId,
   )
   return row?.due ?? undefined
@@ -351,5 +374,78 @@ export function reminderChanged(env: Env, r: ReminderRow, waitUntil: WaitUntil) 
       rtmOnly: true,
       event: { type: "reminder_changed", reminder: reminderJson(r) },
     },
+  )
+}
+
+/**
+ * Clears the statuses past their status_expiration (up to PER_RUN) and tells
+ * the workspace (user_change), as Slack does when a status expires. One
+ * statement both finds and clears them, so a status set again meanwhile, with
+ * a later expiration or none, isn't touched, and only the run that cleared a
+ * status announces it.
+ */
+async function expireStatuses(run: Run) {
+  const { env, team, now } = run
+  const cleared = await all<UserRow>(
+    env.DB,
+    `UPDATE users SET status_text = '', status_emoji = '', status_expiration = 0, updated = ?2
+     WHERE id IN (SELECT id FROM users WHERE team_id = ?1 AND status_expiration > 0 AND status_expiration <= ?2
+                    AND deleted = 0 LIMIT ?3)
+       AND status_expiration > 0 AND status_expiration <= ?2
+     RETURNING *`,
+    team.id,
+    now,
+    PER_RUN,
+  )
+  publishEach(
+    run,
+    team.id,
+    cleared.map((u): PublishInput => ({
+      teamId: team.id,
+      audience: "team",
+      event: { type: "user_change", user: userJson(u, run.origin) },
+    })),
+  )
+}
+
+/**
+ * Moves each DND window that has ended (up to PER_RUN) on to the person's next
+ * one, and tells them and the workspace (dnd_updated, dnd_updated_user): their
+ * next_dnd_* changed. Each move is guarded on the row as read, so a schedule
+ * or time zone changed meanwhile keeps the window its change computed, and a
+ * second run moves nothing twice.
+ */
+async function moveDndWindows(run: Run) {
+  const { env, team, now } = run
+  const db = env.DB
+  const ended = await all<UserRow>(
+    db,
+    "SELECT * FROM users WHERE team_id = ? AND dnd_window_end > 0 AND dnd_window_end <= ? AND deleted = 0 LIMIT ?",
+    team.id,
+    now,
+    PER_RUN,
+  )
+  if (ended.length === 0) return
+  const moves = ended.map((u) => {
+    const w = nextWindow(u, now)
+    return stmt(
+      db,
+      `UPDATE users SET dnd_window_start = ?, dnd_window_end = ?
+       WHERE id = ? AND dnd_window_end = ? AND dnd_start = ? AND dnd_end = ? AND dnd_days = ? AND tz = ? RETURNING *`,
+      w?.start ?? 0,
+      w?.end ?? 0,
+      u.id,
+      u.dnd_window_end,
+      u.dnd_start,
+      u.dnd_end,
+      u.dnd_days,
+      u.tz,
+    )
+  })
+  const moved = (await db.batch(moves)).flatMap((r) => r.results as UserRow[])
+  publishEach(
+    run,
+    team.id,
+    moved.flatMap((u) => dndEvents(team.id, u, now)),
   )
 }

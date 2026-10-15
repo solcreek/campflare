@@ -27,10 +27,15 @@ export function mentionsOf(text: string): { users: string[]; everyone: boolean }
 /**
  * Whether an item notifies, as SQL over the recipient `r` (user_id, kind), their
  * user row `u` and their levels `pc` (the conversation's) and `pd` (default):
- * not while snoozed; `all` lets everything through, `mentions` mentions and DMs.
+ * not while snoozed or within their DND hours (the window stored on the row,
+ * which the Scheduler moves on); `all` lets everything through, `mentions`
+ * mentions and DMs.
  * `now` is the parameter holding the time, in seconds.
  */
-const notify = (now: string) => `(u.snooze_until <= ${now} AND CASE COALESCE(pc.level, pd.level, 'all')
+const notify = (
+  now: string,
+) => `(u.snooze_until <= ${now} AND NOT (u.dnd_window_start <= ${now} AND ${now} < u.dnd_window_end)
+  AND CASE COALESCE(pc.level, pd.level, 'all')
   WHEN 'all' THEN 1 WHEN 'mentions' THEN r.kind IN ('mention', 'dm') ELSE 0 END)`
 
 /** The recipients `r` joined to what notify() reads; `?2` is the conversation. */
