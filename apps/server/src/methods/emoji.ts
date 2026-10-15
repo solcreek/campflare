@@ -1,5 +1,5 @@
 import { decodeCursor, encodeCursor } from "../api/args"
-import { method, type Actor, type Ctx } from "../api/context"
+import { bodyLimits, method, type Actor, type Ctx } from "../api/context"
 import {
   EMOJI_CATEGORIES,
   EMOJI_MAX_BYTES,
@@ -139,12 +139,16 @@ method("admin.emoji.add", "user", async (ctx) => {
   return { emoji: added }
 })
 
+// Room for the image, the name and a token, with the multipart boundaries around them.
+bodyLimits.set("campflare.emoji.add", EMOJI_MAX_BYTES + 16 * 1024)
+
 /** An emoji from an uploaded file (multipart `image`): what the CLI and the app use. */
 method("campflare.emoji.add", "user", async (ctx) => {
   const name = newName(ctx.args.str("name"))
   const file = ctx.args.file("image")
   if (!file) throw new CampflareError("error_no_image")
-  // Checked before reading: a client could send any size.
+  // The body was parsed already (bodyLimits refused a bigger one before that), but the
+  // file within it may still be over the limit.
   if (file.size > EMOJI_MAX_BYTES) throw new CampflareError("error_too_big")
   await requireFree(ctx, name)
   const bytes = new Uint8Array(await file.arrayBuffer())

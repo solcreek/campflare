@@ -154,6 +154,17 @@ describe("campflare.emoji.add", () => {
     const big = new Uint8Array(EMOJI_MAX_BYTES + 1)
     big.set(await makePng(8, 8))
     expect((await upload(w.owner.token, "big", big)).error).toBe("error_too_big")
+    // A body bigger than any emoji needs is refused before it's parsed, whatever the image.
+    const padded = new FormData()
+    padded.set("name", "padded")
+    padded.set("image", new File([await makePng(8, 8)], "e.png"))
+    padded.set("padding", "x".repeat(EMOJI_MAX_BYTES + 32 * 1024))
+    const res = await SELF.fetch(`${ORIGIN}/api/campflare.emoji.add`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${w.owner.token}` },
+      body: padded,
+    })
+    expect(await res.json()).toMatchObject({ ok: false, error: "error_too_big" })
     const png = await makePng(24, 24)
     const jpeg = await convert(env.IMAGES!, png, "image/jpeg")
     expect((await added(w.owner.token, "photo-jpeg", jpeg)).url).toMatch(/\.jpg$/)

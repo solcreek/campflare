@@ -51,6 +51,12 @@ export interface MethodDef {
 
 export const methods = new Map<string, MethodDef>()
 
+/**
+ * The most a method's request body may declare (Content-Length), refused before it is
+ * parsed, for methods that take a small upload: by default only the platform's limit holds.
+ */
+export const bodyLimits = new Map<string, number>()
+
 export function method(name: string, access: "none", handler: Handler<undefined>): void
 export function method(name: string, access: "app", handler: Handler<Auth>): void
 export function method(name: string, access: "user" | "bot" | "actor", handler: Handler<Actor>): void

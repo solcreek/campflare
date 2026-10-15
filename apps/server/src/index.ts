@@ -37,7 +37,7 @@ import { handleResponseUrl } from "./interactivity"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
-import { authorize, methods, type Auth, type Ctx } from "./api/context"
+import { authorize, bodyLimits, methods, type Auth, type Ctx } from "./api/context"
 import { acceptedScopes, NEEDS, type Verb } from "./api/scopes"
 import { CampflareError } from "./api/errors"
 import { readTicket } from "./api/tickets"
@@ -93,6 +93,10 @@ app.on(["GET", "POST"], "/api/:method", async (c) => {
   if (accepted.length) scopeHeaders["x-accepted-oauth-scopes"] = accepted.join(",")
 
   try {
+    const limit = bodyLimits.get(name)
+    if (limit !== undefined && Number(c.req.header("content-length") ?? 0) > limit) {
+      throw new CampflareError("error_too_big")
+    }
     const args = await Args.from(c.req.raw)
     let auth: Auth | undefined
     let verb: Verb | undefined
