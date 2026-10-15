@@ -99,21 +99,54 @@ export function ianaZone(tz: string | undefined): string | undefined {
   return zone
 }
 
+/**
+ * Formatters by zone: making one costs far more than using it (users.list
+ * serialises hundreds of users), and a Worker isolate sees few zones.
+ */
+const wallFormats = new Map<string, Intl.DateTimeFormat>()
+const labelFormats = new Map<string, Intl.DateTimeFormat>()
+
+function formatter(cache: Map<string, Intl.DateTimeFormat>, tz: string, options: Intl.DateTimeFormatOptions) {
+  let f = cache.get(tz)
+  if (!f) {
+    if (cache.size > 1000) cache.clear()
+    f = new Intl.DateTimeFormat("en-US", { timeZone: tz, ...options })
+    cache.set(tz, f)
+  }
+  return f
+}
+
+/** Each zone's label and offset for the minute they were last asked for: a DST change lands on a minute. */
+const zoneNow = new Map<string, { minute: number; label: string; offset: number }>()
+
+function zoneAt(tz: string, at: number) {
+  const minute = Math.floor(at / 60)
+  const known = zoneNow.get(tz)
+  if (known?.minute === minute) return known
+  const parts = formatter(labelFormats, tz, { timeZoneName: "long" }).formatToParts(minute * 60_000)
+  const info = {
+    minute,
+    label: parts.find((p) => p.type === "timeZoneName")?.value ?? tz,
+    offset: offsetMs(tz, minute * 60_000) / 1000,
+  }
+  if (zoneNow.size > 1000) zoneNow.clear()
+  zoneNow.set(tz, info)
+  return info
+}
+
 /** How far the zone's wall clock is ahead of UTC at an instant (epoch seconds), in seconds: Slack's tz_offset. */
 export function zoneOffset(tz: string, at = Math.floor(Date.now() / 1000)): number {
-  return offsetMs(tz, at * 1000) / 1000
+  return zoneAt(tz, at).offset
 }
 
 /** The zone's name for people at an instant, as Slack's tz_label: "Central European Summer Time". */
 export function zoneLabel(tz: string, at = Math.floor(Date.now() / 1000)): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "long" }).formatToParts(at * 1000)
-  return parts.find((p) => p.type === "timeZoneName")?.value ?? tz
+  return zoneAt(tz, at).label
 }
 
 /** The wall-clock time in a zone at an instant (ms). */
 export function wallIn(tz: string, ms: number): Wall {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
+  const parts = formatter(wallFormats, tz, {
     year: "numeric",
     month: "numeric",
     day: "numeric",
