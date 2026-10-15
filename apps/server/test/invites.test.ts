@@ -122,6 +122,33 @@ describe("campflare.invites.create", () => {
     await invite(w.owner.token, { channels: secret.id })
   })
 
+  it("joins a private channel only while the inviter is still in it", async () => {
+    const w = await workspace()
+    const ada = await w.addUser("ada", { is_admin: true })
+    const { channel: secret } = await ok<{ channel: { id: string } }>(
+      "conversations.create",
+      { name: "secret", is_private: true },
+      ada.token,
+    )
+    const { channel: open } = await ok<{ channel: { id: string } }>("conversations.create", { name: "open" }, ada.token)
+    const { url } = await invite(ada.token, { channels: `${secret.id},${open.id}`, max_uses: 2 })
+    const first = await accept(url, { name: "first" })
+    const ids = async (token: string) =>
+      (
+        await ok<{ channels: { id: string }[] }>(
+          "users.conversations",
+          { types: "public_channel,private_channel" },
+          token,
+        )
+      ).channels
+        .map((c) => c.id)
+        .toSorted()
+    expect(await ids(first.token)).toEqual([secret.id, open.id, w.general].toSorted())
+    await ok("conversations.leave", { channel: secret.id }, ada.token)
+    const second = await accept(url, { name: "second" })
+    expect(await ids(second.token)).toEqual([open.id, w.general].toSorted())
+  })
+
   it("mails an invite to its address when the server can send email", async () => {
     const sent: EmailMessage[] = []
     setEmailSender({ send: async (m) => void sent.push(m) })

@@ -192,18 +192,22 @@ export async function acceptInvite(lc: LinkContext, joining: Joining): Promise<U
         now,
         id,
       ),
-      // Everyone is in #general, as in Slack; then the invite's conversations that are still open.
+      // Everyone is in #general, as in Slack; then the invite's conversations that are still open,
+      // a private one only while the inviter is still in it (as when the invite was made).
       stmt(
         env.DB,
         `INSERT OR IGNORE INTO members (conversation_id, user_id, joined)
          SELECT c.id, ?1, ?2 FROM conversations c
          WHERE c.team_id = ?3 AND c.kind = 'channel' AND c.is_archived = 0
-           AND (c.is_general = 1 OR c.id IN (SELECT value FROM json_each(?4)))
+           AND (c.is_general = 1 OR (c.id IN (SELECT value FROM json_each(?4))
+             AND (c.is_private = 0
+               OR EXISTS (SELECT 1 FROM members m WHERE m.conversation_id = c.id AND m.user_id = ?5))))
            AND EXISTS (SELECT 1 FROM users WHERE id = ?1)`,
         id,
         now,
         invite.team_id,
         invite.channels,
+        invite.inviter,
       ),
       stmt(env.DB, "SELECT * FROM users WHERE id = ?", id),
       // Who hears of each conversation joined: its members, the newcomer among them.
