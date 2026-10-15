@@ -79,6 +79,11 @@ export const NEEDS: Record<string, Need> = {
   "pins.remove": ["pins:write"],
   "pins.list": ["pins:read"],
 
+  "bookmarks.add": ["bookmarks:write"],
+  "bookmarks.edit": ["bookmarks:write"],
+  "bookmarks.remove": ["bookmarks:write"],
+  "bookmarks.list": ["bookmarks:read"],
+
   "files.getUploadURLExternal": ["files:write"],
   "files.completeUploadExternal": ["files:write"],
   "files.delete": ["files:write"],
@@ -191,6 +196,7 @@ const READ = [
   "files:read",
   "reactions:read",
   "pins:read",
+  "bookmarks:read",
   "emoji:read",
   "dnd:read",
   "team:read",
@@ -208,6 +214,7 @@ const WRITE = [
   "chat:write",
   "reactions:write",
   "pins:write",
+  "bookmarks:write",
   "files:write",
   "views:write",
 ]
@@ -252,6 +259,8 @@ export const DEFAULT_BOT_SCOPES = [
   "reactions:write",
   "pins:read",
   "pins:write",
+  "bookmarks:read",
+  "bookmarks:write",
   "team:read",
   "users:read",
   "users.profile:read",

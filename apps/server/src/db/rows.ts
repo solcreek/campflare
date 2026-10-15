@@ -158,3 +158,19 @@ export interface FileRow {
   channels: string
   created: number
 }
+
+export interface BookmarkRow {
+  id: string
+  team_id: string
+  channel_id: string
+  title: string
+  link: string
+  emoji: string
+  entity_id: string | null
+  app_id: string | null
+  rank: string
+  created_by: string
+  updated_by: string
+  date_created: number
+  date_updated: number
+}
