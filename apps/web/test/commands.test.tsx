@@ -86,9 +86,28 @@ describe("slash commands in the composer", () => {
     expect(calls(server, "campflare.commands.invoke")).toHaveLength(1)
   })
 
-  it("says when a command fails", async () => {
-    const { user, box } = await signedIn({ "campflare.commands.invoke": () => new Error("app_unreachable") })
-    await user.type(box, "/deploy{Enter}")
+  it("keeps the draft while the command is on its way, and gives it back when it fails", async () => {
+    let answer: (value: Record<string, unknown> | Error) => void = () => {}
+    const { server, user, box } = await signedIn()
+    // An answer the test releases: the call stays pending until then.
+    const pending = () => new Promise<Record<string, unknown> | Error>((resolve) => (answer = resolve))
+    const call = server.api.client.call.bind(server.api.client)
+    server.api.client.call = (async (method: string, args?: Parameters<typeof call>[1]) => {
+      if (method !== "campflare.commands.invoke") return call(method, args)
+      const r = await pending()
+      if (r instanceof Error) throw Object.assign(r, { code: r.message })
+      return r
+    }) as typeof server.api.client.call
+    await user.type(box, "/deploy prod{Enter}")
+    expect((box as HTMLTextAreaElement).value).toBe("/deploy prod")
+    expect(box.getAttribute("aria-busy")).toBe("true")
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true)
+    act(() => answer(new Error("app_unreachable")))
     expect(await screen.findByText("Couldn't run /deploy: app_unreachable")).toBeTruthy()
+    expect((box as HTMLTextAreaElement).value).toBe("/deploy prod")
+    expect(box.getAttribute("aria-busy")).toBeNull()
+    await user.type(box, "{Enter}")
+    act(() => answer({ ok: true, delivered: "http" }))
+    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(""))
   })
 })

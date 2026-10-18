@@ -142,6 +142,8 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
   const listId = useId()
   const [active, setActive] = useState(0)
   const [dismissed, setDismissed] = useState<string>()
+  /** A command on its way to its app: the draft stays (read-only) until it's taken, and comes back if it fails. */
+  const [running, setRunning] = useState(false)
   // Commands run in the conversation, as on Slack: a thread's composer sends text as it is.
   const offered = threadTs || dismissed === text ? [] : commandSuggestions(text, commands)
   const highlighted = Math.min(active, offered.length - 1)
@@ -158,14 +160,19 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
   }
 
   const send = () => {
-    if (!text.trim() && files.length === 0) return
+    if (running || (!text.trim() && files.length === 0)) return
     const command = threadTs || files.length > 0 ? undefined : commandIn(text, commands)
-    setText("")
     if (command) {
-      // The app's answer comes as a message (only you see an ephemeral one); a failure is a toast.
-      workspace.invokeCommand(channel, command.command, command.text).catch(reportError(`run ${command.command}`))
+      // The app's answer comes as a message (only you see an ephemeral one). A failure is a toast, and the
+      // draft is still there to fix or send again.
+      setRunning(true)
+      workspace
+        .invokeCommand(channel, command.command, command.text)
+        .then(() => setText(""), reportError(`run ${command.command}`))
+        .finally(() => setRunning(false))
       return
     }
+    setText("")
     if (files.length > 0) {
       setFiles([])
       Promise.all(files.map(readFile))
@@ -270,6 +277,8 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
           placeholder={placeholder}
           value={text}
           disabled={disabled}
+          readOnly={running}
+          aria-busy={running || undefined}
           rows={1}
           className="max-h-48 min-h-9 resize-none"
           aria-autocomplete={commands.length > 0 && !threadTs ? "list" : undefined}
@@ -282,7 +291,12 @@ export function Composer({ channel, threadTs, placeholder, disabled, ref }: Comp
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
-        <Button type="submit" size="icon" aria-label="Send" disabled={disabled || (!text.trim() && files.length === 0)}>
+        <Button
+          type="submit"
+          size="icon"
+          aria-label="Send"
+          disabled={disabled || running || (!text.trim() && files.length === 0)}
+        >
           <SendHorizontalIcon />
         </Button>
       </div>
