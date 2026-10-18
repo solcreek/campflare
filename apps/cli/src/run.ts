@@ -1559,15 +1559,20 @@ const commands: Record<string, Command> = {
     if (extra.length || (values.days !== undefined && action !== "hours")) throw new UsageError(DND_USAGE)
     if (action === "hours") {
       const span = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/.exec(arg ?? "")
-      if (arg === "off") await s.client.call("campflare.dnd.setSchedule", { enabled: false })
-      else if (span) {
+      if (arg === "off") {
+        // Days belong to hours being set; with none to set they'd be ignored, so say so instead.
+        if (values.days !== undefined) throw new UsageError("--days goes with hours to set, not with hours off")
+        await s.client.call("campflare.dnd.setSchedule", { enabled: false })
+      } else if (span) {
         const days = str(values.days)
         await s.client.call("campflare.dnd.setSchedule", { start: span[1], end: span[2], ...(days ? { days } : {}) })
       } else throw new UsageError(DND_USAGE)
     } else if (action === "off" && !arg) {
       await s.client.call("campflare.dnd.setSchedule", { enabled: false })
     } else if (action === "snooze" && arg) {
-      await s.client.call("dnd.setSnooze", { num_minutes: Math.max(1, Math.ceil(seconds(arg) / 60)) })
+      const length = seconds(arg)
+      if (length <= 0) throw new UsageError("dnd snooze takes a length above zero: 30m, 2h")
+      await s.client.call("dnd.setSnooze", { num_minutes: Math.ceil(length / 60) })
     } else if (action === "end" && !arg) {
       await s.client.call("dnd.endDnd")
     } else if (action !== undefined) {

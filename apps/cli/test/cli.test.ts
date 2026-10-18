@@ -1290,6 +1290,9 @@ describe("time zone and do not disturb", () => {
     expect(await cli.run("dnd", "end")).toBe(0)
     expect(cli.out).not.toContain("Snoozed")
     cli.clear()
+    expect(await cli.run("dnd", "hours", "off")).toBe(0)
+    expect(cli.out).toContain("Hours: none")
+    cli.clear()
     expect(await cli.run("dnd", "off")).toBe(0)
     expect(cli.out).toContain("Hours: none")
     for (const bad of [
@@ -1299,6 +1302,9 @@ describe("time zone and do not disturb", () => {
       ["dnd", "snooze", "soon"],
       ["dnd", "loud"],
       ["dnd", "off", "--days", "mon"],
+      ["dnd", "hours", "off", "--days", "mon"],
+      ["dnd", "snooze", "0"],
+      ["dnd", "snooze", "0m"],
     ]) {
       expect(await cli.run(...bad)).toBe(2)
     }
