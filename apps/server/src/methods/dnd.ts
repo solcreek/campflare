@@ -4,7 +4,16 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { parseDays, parseHour } from "../api/dnd-hours"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds } from "../api/ids"
-import { currentWindow, dndChanged, dndStatus, nextWindow, ROW_TRIES, scheduleJson, staleWindow } from "../dnd"
+import {
+  currentWindow,
+  dndChanged,
+  dndStatus,
+  nextWindow,
+  ROW_TRIES,
+  scheduleJson,
+  snoozeState,
+  staleWindow,
+} from "../dnd"
 import { armScheduler } from "../scheduler"
 
 // Do Not Disturb (docs/dnd.md): scheduled hours in the person's time zone,
@@ -59,8 +68,7 @@ method("dnd.setSnooze", "user", async (ctx) => {
     ctx.auth.user.id,
   ))!
   dndChanged(ctx, ctx.auth.team.id, user)
-  const { snooze_enabled, snooze_endtime, snooze_remaining, snooze_is_indefinite } = dndStatus(user)
-  return { snooze_enabled, snooze_endtime, snooze_remaining, snooze_is_indefinite }
+  return snoozeState(user)
 })
 
 method("dnd.endSnooze", "user", async (ctx) => {
