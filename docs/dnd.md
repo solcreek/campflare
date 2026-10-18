@@ -14,8 +14,16 @@ it (its clients send it through settings), so:
 - **`campflare.users.setTimezone`** (xoxp, `users.profile:write`): `tz`, an
   IANA zone (`Europe/Paris`, any case). A fixed offset (`+02:00`) or an
   unknown name is `invalid_timezone`: a person's zone follows its DST rules,
-  an offset doesn't. A name the runtime knows by an older one
-  (`Asia/Kolkata`, which ICU calls `Asia/Calcutta`) keeps the name given.
+  an offset doesn't. It is stored in IANA's case whatever the case typed
+  (`europe/paris` is `Europe/Paris`), matched against the runtime's zone list.
+  A link the runtime knows only by another name stays the link meant
+  (`asia/kolkata` is `Asia/Kolkata`, which workerd's ICU calls
+  `Asia/Calcutta`), cased word by word with codes in capitals (`US/Eastern`,
+  `Etc/GMT+5`); the few links with capitals inside a word
+  (`America/Argentina/ComodRivadavia`) are the spellings this can't know.
+  `tz_label` and `tz_offset` are computed with formatters cached per zone, and
+  per zone per minute, since building them per user made `users.list` (500
+  people) five times slower.
   Answers the `user` and sends `user_change`; with DND hours set, the stored
   window moves to the same wall-clock hours in the new zone (`dnd_updated`,
   `dnd_updated_user`), keeping a window skipped with `dnd.endDnd` skipped. The
@@ -34,9 +42,11 @@ when it expires, as Slack tells them:
 
 - `users.profile.set` with a future `status_expiration` arms the workspace's
   `Scheduler` (`docs/scheduling.md`) at that time before it answers.
-- The alarm clears every status due in one statement:
+- The alarm's run reads the statuses due (up to 50) and the ended DND windows
+  in the same first batch as its scheduled messages and reminders, so a run
+  with none costs nothing more. With some due, one statement clears them:
   `UPDATE users SET status_text = '', status_emoji = '', status_expiration = 0
-… WHERE id IN (… due, LIMIT 50) AND status_expiration > 0 AND
+… WHERE id IN (the ids read) AND status_expiration > 0 AND
 status_expiration <= now RETURNING *`, then sends `user_change` for each row
   it returned.
 - **Races.** The UPDATE checks the row as it is when it runs, so a status set
