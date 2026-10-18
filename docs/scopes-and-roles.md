@@ -77,14 +77,14 @@ and, when the method asks for any, `x-accepted-oauth-scopes`. The official
 | `users.info`, `.list`, `.getPresence`, `bots.info`                                                                                                | `users:read`                                 |
 | `users.lookupByEmail`                                                                                                                             | `users:read.email`                           |
 | `users.setPresence`                                                                                                                               | `users:write`                                |
-| `users.profile.get` / `.set`, `users.setPhoto`, `.deletePhoto`                                                                                    | `users.profile:read` / `users.profile:write` |
+| `users.profile.get` / `.set`, `users.setPhoto`, `.deletePhoto`, `campflare.users.setTimezone`                                                     | `users.profile:read` / `users.profile:write` |
 | `usergroups.list`, `.users.list` / `usergroups.create`, `.update`, `.disable`, `.enable`, `.users.update`                                         | `usergroups:read` / `usergroups:write`       |
 | `pins.add`, `.remove` / `pins.list`                                                                                                               | `pins:write` / `pins:read`                   |
 | `bookmarks.add`, `.edit`, `.remove` / `bookmarks.list`                                                                                            | `bookmarks:write` / `bookmarks:read`         |
 | `stars.add`, `.remove` / `stars.list` (user tokens)                                                                                               | `stars:write` / `stars:read`                 |
 | `team.info`                                                                                                                                       | `team:read`                                  |
 | `emoji.list`, `admin.emoji.list`                                                                                                                  | `emoji:read`                                 |
-| `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`                                                                                | `dnd:read` / `dnd:write`                     |
+| `dnd.info`, `.teamInfo` / `dnd.setSnooze`, `.endSnooze`, `.endDnd`, `campflare.dnd.setSchedule`                                                   | `dnd:read` / `dnd:write`                     |
 | `chat.scheduleMessage`, `.scheduledMessages.list`, `.deleteScheduledMessage`                                                                      | `chat:write`                                 |
 | `reminders.info`, `.list` / `reminders.add`, `.complete`, `.delete`                                                                               | `reminders:read` / `reminders:write`         |
 | `assistant.threads.setStatus`                                                                                                                     | `assistant:write` or `chat:write`            |

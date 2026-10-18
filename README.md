@@ -136,10 +136,10 @@ argument. Answers are HTTP 200 with `{ "ok": true, … }` or
 | pins/bookmarks/stars     | `pins.add`, `remove`, `list` (messages; `pinned_to` in history, `pin_count`); `bookmarks.add`, `edit`, `remove`, `list` (http(s) links); `stars.add`, `remove`, `list` (saved messages, files and conversations; `is_starred` in history)        |
 | files                    | `getUploadURLExternal`, `completeUploadExternal`, `info`, `list`, `delete`; `url_private` downloads with range support                                                                                                                           |
 | search                   | `search.messages`: words, `"phrases"`, `-exclusions`, `in:`, `from:`, `before:`, `after:`, `on:`, `during:`, `has:link/reaction/file`, `is:thread/dm`                                                                                            |
-| users                    | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set` (with `status_expiration`), `setPhoto`, `deletePhoto`; `user_change` on every change                                                                 |
+| users                    | `info`, `list`, `lookupByEmail`, `getPresence`, `setPresence`, `profile.get`, `profile.set` (with `status_expiration`, announced when it expires), `setPhoto`, `deletePhoto`, `campflare.users.setTimezone`; `user_change` on every change       |
 | usergroups               | `create`, `list`, `update`, `disable`, `enable`, `users.list`, `users.update`; `subteam_*` events; mentioned as `<!subteam^S…\|@handle>`                                                                                                         |
 | activity (`campflare.*`) | `activity.list`, `activity.mark` (the inbox: mentions, DMs, thread replies, reactions); `prefs.get`, `prefs.set` (notification levels); `push.vapidKey`, `push.subscribe`, `push.unsubscribe`, `push.list`, `push.test` (Web Push)               |
-| dnd                      | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`                                                                                                                                                                                           |
+| dnd                      | `info`, `teamInfo`, `setSnooze`, `endSnooze`, `endDnd`; DND hours with `campflare.dnd.setSchedule`                                                                                                                                               |
 | realtime                 | `apps.connections.open` (Socket Mode), `rtm.connect`; the Events API over HTTP (signed `event_callback` POSTs to a Request URL)                                                                                                                  |
 | interactivity            | `block_actions` for buttons, icon buttons, feedback buttons, select and overflow menus (ephemeral messages' too), over Socket Mode or signed to an Interactivity Request URL; `response_url`; clicks by `campflare.blocks.action`                |
 | views (modals)           | `views.open`, `views.push`, `views.update` with the `trigger_id` of an interaction; `view_submission` (with `response_action`) and `view_closed`; the person's side: `campflare.views.list`, `submit`, `close`                                   |
@@ -267,8 +267,8 @@ pages them newest first with the message and unread counts by kind
 to one (`up_to`) or `all` read. Items of a conversation the person left are
 hidden, and a deleted message takes its items with it. Each item says whether
 it should `notify`, from the person's level for that conversation
-(`campflare.prefs.set`: `all`, `mentions` or `none`, and a default) and their
-snooze, so a push sender or a client just follows it; items are recorded
+(`campflare.prefs.set`: `all`, `mentions` or `none`, and a default), their
+snooze and their DND hours, so a push sender or a client just follows it; items are recorded
 whatever the level. Clients learn of changes over RTM (`activity_added`,
 `activity_marked`, `activity_removed`, `prefs_changed`). See
 [docs/activity.md](docs/activity.md).
@@ -295,6 +295,24 @@ pushes per person per minute, and a push service's 404/410 forgets the device;
 ```sh
 campflare push list                    # your devices; push remove <id>
 campflare push test                    # a test notification to each of them, now
+```
+
+### Time zones and do not disturb
+
+A person sets their time zone with `campflare.users.setTimezone` (an IANA name;
+users carry Slack's `tz`, `tz_label` and `tz_offset`, DST included), and
+reminders and DND hours are read in it. `campflare.dnd.setSchedule` sets DND
+hours (`22:00` to `08:00`, on some days), which `dnd.info` and `dnd.teamInfo`
+report as Slack's `next_dnd_start_ts`/`next_dnd_end_ts` and which keep activity
+items from notifying; `dnd.endDnd` skips the window in progress. A status set
+with `status_expiration` is cleared when it expires and the workspace gets a
+`user_change`. The workspace's `Scheduler` does both: it clears due statuses and
+moves ended DND windows on. See [docs/dnd.md](docs/dnd.md).
+
+```sh
+campflare profile --tz Europe/Paris     # or --tz local
+campflare dnd hours 22:00-08:00 --days mon-fri
+campflare dnd snooze 30m               # dnd end, dnd off; `campflare dnd` shows them
 ```
 
 ## Realtime
@@ -655,12 +673,8 @@ client and CLI bundles. The Worker is bundled by wrangler.
   ([docs/push.md](docs/push.md)).
 - Claiming an import's placeholder for a real account, and Enterprise Grid
   exports ([docs/import.md](docs/import.md)).
-- An admin setting restricting who may manage user groups or custom emoji,
-  scheduled DND hours, setting a person's time zone (reminders read `tz`,
-  which no method sets yet). Pinning files (pin the message that shares one),
+- An admin setting restricting who may manage user groups or custom emoji. Pinning files (pin the message that shares one),
   file comments, bookmark folders and message or file bookmarks.
-- A `user_change` when a status expires (it reads as cleared at once, but
-  clients holding the profile learn only on their next read).
 - Recurring reminders, and reminders for someone else
   ([docs/scheduling.md](docs/scheduling.md)).
 - Sharding a very large workspace's hub across several Durable Objects.

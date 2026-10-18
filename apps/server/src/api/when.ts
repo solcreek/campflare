@@ -33,7 +33,7 @@ const MAX_RELATIVE_SECONDS = 86_400
 /** Hours and minutes when a day is named without a time. */
 const DEFAULT_TIME = { hour: 9, minute: 0 }
 
-interface Wall {
+export interface Wall {
   year: number
   month: number
   day: number
@@ -43,20 +43,110 @@ interface Wall {
   weekday: number
 }
 
-/** The zone if the runtime knows it, else UTC. */
-export function validZone(tz: string | undefined): string {
-  if (!tz) return "UTC"
+/** The zone if the runtime knows it (an IANA name, as ianaZone() takes them), else UTC. */
+export const validZone = (tz: string | undefined): string => ianaZone(tz) ?? "UTC"
+
+/** The runtime's zone names by their lowercase: how a name typed in any case is spelled. */
+let zoneNames: Map<string, string> | undefined
+const namesByLowercase = () =>
+  (zoneNames ??= new Map(Intl.supportedValuesOf("timeZone").map((z) => [z.toLowerCase(), z])))
+
+/** Words of zone names that are written in capitals (US/Eastern, Etc/GMT+5, EST5EDT, GB-Eire's GB). */
+const CAPITAL_WORDS =
+  /^(?:us|gb|nz|prc|roc|rok|utc|uct|gmt(?:[+-]\d+)?|est|mst|hst|cet|met|wet|eet|[a-z]st\d[a-z]dt|w|su|chat)$/
+
+/**
+ * A link's name (one the runtime knows only as another: Asia/Kolkata is its
+ * Asia/Calcutta) in IANA's case: each word capitalised (Asia/Kolkata,
+ * Europe/Kyiv), codes in capitals (US/Pacific, Etc/GMT+5, EST5EDT). The few
+ * links with capitals inside a word (America/Argentina/ComodRivadavia,
+ * America/Knox_IN) are the IANA spellings this can't know.
+ */
+const linkCase = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^_\-/]+/g, (word) =>
+      CAPITAL_WORDS.test(word) ? word.toUpperCase() : word[0]!.toUpperCase() + word.slice(1),
+    )
+
+const zoneCache = new Map<string, string | null>()
+
+/**
+ * `tz` as an IANA time zone the runtime knows, spelled in IANA's case whatever
+ * the case typed ("europe/paris" is Europe/Paris); undefined for anything
+ * else, a fixed offset like "+02:00" included: a person's zone follows its DST
+ * rules. A link stays the link the person meant (Asia/Kolkata, which the
+ * runtime calls Asia/Calcutta), as Slack sends the current names.
+ */
+export function ianaZone(tz: string | undefined): string | undefined {
+  const name = tz?.trim()
+  if (!name || /^[+-]|^\d/.test(name)) return undefined
+  const cached = zoneCache.get(name)
+  if (cached !== undefined) return cached ?? undefined
+  let zone: string | undefined
   try {
-    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone
+    const resolved = new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone
+    if (!/^[+-]/.test(resolved)) {
+      const lower = name.toLowerCase()
+      zone = namesByLowercase().get(lower) ?? (resolved.toLowerCase() === lower ? resolved : linkCase(name))
+    }
   } catch {
-    return "UTC"
+    zone = undefined
   }
+  // Names come from stored rows, so they are few; the bound only keeps junk input from growing it.
+  if (zoneCache.size > 1000) zoneCache.clear()
+  zoneCache.set(name, zone ?? null)
+  return zone
+}
+
+/**
+ * Formatters by zone: making one costs far more than using it (users.list
+ * serialises hundreds of users), and a Worker isolate sees few zones.
+ */
+const wallFormats = new Map<string, Intl.DateTimeFormat>()
+const labelFormats = new Map<string, Intl.DateTimeFormat>()
+
+function formatter(cache: Map<string, Intl.DateTimeFormat>, tz: string, options: Intl.DateTimeFormatOptions) {
+  let f = cache.get(tz)
+  if (!f) {
+    if (cache.size > 1000) cache.clear()
+    f = new Intl.DateTimeFormat("en-US", { timeZone: tz, ...options })
+    cache.set(tz, f)
+  }
+  return f
+}
+
+/** Each zone's label and offset for the minute they were last asked for: a DST change lands on a minute. */
+const zoneNow = new Map<string, { minute: number; label: string; offset: number }>()
+
+function zoneAt(tz: string, at: number) {
+  const minute = Math.floor(at / 60)
+  const known = zoneNow.get(tz)
+  if (known?.minute === minute) return known
+  const parts = formatter(labelFormats, tz, { timeZoneName: "long" }).formatToParts(minute * 60_000)
+  const info = {
+    minute,
+    label: parts.find((p) => p.type === "timeZoneName")?.value ?? tz,
+    offset: offsetMs(tz, minute * 60_000) / 1000,
+  }
+  if (zoneNow.size > 1000) zoneNow.clear()
+  zoneNow.set(tz, info)
+  return info
+}
+
+/** How far the zone's wall clock is ahead of UTC at an instant (epoch seconds), in seconds: Slack's tz_offset. */
+export function zoneOffset(tz: string, at = Math.floor(Date.now() / 1000)): number {
+  return zoneAt(tz, at).offset
+}
+
+/** The zone's name for people at an instant, as Slack's tz_label: "Central European Summer Time". */
+export function zoneLabel(tz: string, at = Math.floor(Date.now() / 1000)): string {
+  return zoneAt(tz, at).label
 }
 
 /** The wall-clock time in a zone at an instant (ms). */
-function wallIn(tz: string, ms: number): Wall {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
+export function wallIn(tz: string, ms: number): Wall {
+  const parts = formatter(wallFormats, tz, {
     year: "numeric",
     month: "numeric",
     day: "numeric",

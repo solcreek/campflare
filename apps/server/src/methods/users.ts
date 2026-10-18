@@ -10,6 +10,9 @@ import { nowSeconds, randomSecret } from "../api/ids"
 import { displaySize, imageSize, isAnimated } from "../api/media"
 import { dropPhoto, photoPrefix, photoType, type Crop } from "../api/photos"
 import { userChanged } from "../events"
+import { ianaZone } from "../api/when"
+import { dndChanged, hoursOf, nextWindow, ROW_TRIES } from "../dnd"
+import { armScheduler } from "../scheduler"
 
 export async function getUser(ctx: Ctx<Actor>, id: string) {
   const user = await first<UserRow>(
@@ -103,15 +106,60 @@ method("users.profile.set", "user", async (ctx) => {
   if (name) changes[name] = ctx.args.str("value") ?? ""
   const sets = Object.entries(changes).filter(([k]) => k in PROFILE_FIELDS)
   if (sets.length === 0) throw new CampflareError("invalid_profile")
+  // A status keeps the origin it was set at, for the user_change the Scheduler sends when it expires.
+  const status = sets.some(([k]) => k.startsWith("status_")) ? ", status_origin = ?" : ""
   const user = (await first<UserRow>(
     ctx.env.DB,
-    `UPDATE users SET ${sets.map(([k]) => `${PROFILE_FIELDS[k]} = ?`).join(", ")}, updated = ? WHERE id = ? RETURNING *`,
+    `UPDATE users SET ${sets.map(([k]) => `${PROFILE_FIELDS[k]} = ?`).join(", ")}${status}, updated = ?
+     WHERE id = ? RETURNING *`,
     ...sets.map(([k, v]) => (k === "status_expiration" ? Number(v) || 0 : String(v ?? ""))),
+    ...(status ? [ctx.origin] : []),
     nowSeconds(),
     ctx.auth.user.id,
   ))!
   userChanged(ctx, user)
+  // The workspace learns when it expires, from the Scheduler (user_change); answered once that's armed.
+  if (user.status_expiration > nowSeconds()) await armScheduler(ctx.env, ctx.auth.team.id, user.status_expiration)
   return { profile: userJson(user, ctx.origin).profile }
+})
+
+/**
+ * Sets the caller's time zone (an IANA name: Europe/Paris), which reminders' times and DND hours
+ * are read in. Not part of users.profile.set, which on Slack doesn't carry it.
+ */
+method("campflare.users.setTimezone", "user", async (ctx) => {
+  const tz = ianaZone(ctx.args.req("tz"))
+  if (!tz) throw new CampflareError("invalid_timezone")
+  let me: UserRow | undefined = ctx.auth.user
+  // The same zone changes nothing: the window, a skipped one included, stays as it is.
+  if (me.tz === tz) return { user: userJson(me, ctx.origin) }
+  let user: UserRow | undefined
+  let w: ReturnType<typeof nextWindow>
+  for (let tries = 0; me && !user && tries < ROW_TRIES; tries++) {
+    // DND hours stay at the same wall-clock times: the window moves with the zone, and a window
+    // skipped with dnd.endDnd stays skipped (dnd_skipped_at). Guarded on what it computed from.
+    w = nextWindow({ ...me, tz }, nowSeconds())
+    user = await first<UserRow>(
+      ctx.env.DB,
+      `UPDATE users SET tz = ?1, updated = ?2, dnd_window_start = ?3, dnd_window_end = ?4
+       WHERE id = ?5 AND dnd_start = ?6 AND dnd_end = ?7 AND dnd_days = ?8 AND dnd_skipped_at = ?9 RETURNING *`,
+      tz,
+      nowSeconds(),
+      w?.start ?? 0,
+      w?.end ?? 0,
+      me.id,
+      me.dnd_start,
+      me.dnd_end,
+      me.dnd_days,
+      me.dnd_skipped_at,
+    )
+    if (!user) me = await first<UserRow>(ctx.env.DB, "SELECT * FROM users WHERE id = ?", ctx.auth.user.id)
+  }
+  if (!user) throw new CampflareError("internal_error")
+  if (w) await armScheduler(ctx.env, ctx.auth.team.id, w.end)
+  userChanged(ctx, user)
+  if (hoursOf(user)) dndChanged(ctx, ctx.auth.team.id, user)
+  return { user: userJson(user, ctx.origin) }
 })
 
 /** Photos up to this many bytes, and pixels on a side. */

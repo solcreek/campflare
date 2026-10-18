@@ -13,6 +13,7 @@ import type { Env } from "../env"
 import { ACTIVE_WINDOW } from "./auth"
 import { PHOTO_SIZES, photoJson } from "./photos"
 import { imagesOf, thumbsJson } from "./thumbs"
+import { validZone, zoneLabel, zoneOffset } from "./when"
 
 // Rows → the JSON shapes Slack's Web API returns. Fields Slack always sends
 // are sent (with neutral values where Campflare has no such concept), so
@@ -58,6 +59,7 @@ export function teamJson(team: Pick<TeamRow, "id" | "name" | "domain">, origin: 
 export function userJson(user: UserRow, origin: string) {
   const realName = user.real_name || user.name
   const [firstName = "", ...rest] = realName.split(" ")
+  const zone = validZone(user.tz)
   return {
     id: user.id,
     team_id: user.team_id,
@@ -65,9 +67,10 @@ export function userJson(user: UserRow, origin: string) {
     deleted: Boolean(user.deleted),
     color: color(user.id),
     real_name: realName,
-    tz: user.tz,
-    tz_label: user.tz,
-    tz_offset: 0,
+    // The zone's name and offset now, DST included, as Slack sends them.
+    tz: zone,
+    tz_label: zoneLabel(zone),
+    tz_offset: zoneOffset(zone),
     profile: {
       title: user.title,
       phone: "",

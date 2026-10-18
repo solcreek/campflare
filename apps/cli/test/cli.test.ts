@@ -1345,3 +1345,60 @@ describe("push", () => {
     expect(await cli.run("push", "list", "extra")).toBe(2)
   })
 })
+
+describe("time zone and do not disturb", () => {
+  it("sets and shows a time zone", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("profile")).toBe(0)
+    expect(cli.out).toContain("Time zone: UTC (Coordinated Universal Time, UTC+00:00)")
+    cli.clear()
+    expect(await cli.run("profile", "--tz", "Asia/Kolkata")).toBe(0)
+    expect(cli.out).toContain("Time zone: Asia/Kolkata (India Standard Time, UTC+05:30)")
+    cli.clear()
+    expect(await cli.run("profile", "--tz", "America/Sao_Paulo", "--json")).toBe(0)
+    expect(JSON.parse(cli.out)).toMatchObject({ tz: "America/Sao_Paulo", tz_offset: -10_800 })
+    cli.clear()
+    expect(await cli.run("profile", "--tz", "local", "--json")).toBe(0)
+    expect(JSON.parse(cli.out).tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    expect(await cli.run("profile", "--tz", "Mars/Olympus")).toBe(1)
+    expect(cli.err).toContain("invalid_timezone")
+  })
+
+  it("sets DND hours, snoozes, ends and clears them", async () => {
+    const cli = await loggedIn()
+    expect(await cli.run("dnd")).toBe(0)
+    expect(cli.out).toContain("Hours: none")
+    cli.clear()
+    expect(await cli.run("dnd", "hours", "22:00-08:00", "--days", "mon-fri")).toBe(0)
+    expect(cli.out).toContain("Hours: 22:00-08:00 on mon,tue,wed,thu,fri")
+    expect(cli.out).toMatch(/Next: \d{4}-.*Z to \d{4}-.*Z|Do not disturb now, until/)
+    cli.clear()
+    expect(await cli.run("dnd", "snooze", "90m", "--json")).toBe(0)
+    const snoozed = JSON.parse(cli.out) as { dnd_enabled: boolean; snooze_enabled: boolean; snooze_endtime: number }
+    expect(snoozed).toMatchObject({ dnd_enabled: true, snooze_enabled: true })
+    expect(snoozed.snooze_endtime).toBeGreaterThan(Date.now() / 1000 + 89 * 60)
+    cli.clear()
+    expect(await cli.run("dnd", "end")).toBe(0)
+    expect(cli.out).not.toContain("Snoozed")
+    cli.clear()
+    expect(await cli.run("dnd", "hours", "off")).toBe(0)
+    expect(cli.out).toContain("Hours: none")
+    cli.clear()
+    expect(await cli.run("dnd", "off")).toBe(0)
+    expect(cli.out).toContain("Hours: none")
+    for (const bad of [
+      ["dnd", "hours", "22-08"],
+      ["dnd", "hours"],
+      ["dnd", "snooze"],
+      ["dnd", "snooze", "soon"],
+      ["dnd", "loud"],
+      ["dnd", "off", "--days", "mon"],
+      ["dnd", "hours", "off", "--days", "mon"],
+      ["dnd", "snooze", "0"],
+      ["dnd", "snooze", "0m"],
+    ]) {
+      expect(await cli.run(...bad)).toBe(2)
+    }
+    expect(await cli.run("dnd", "hours", "22:00-22:00")).toBe(1)
+  })
+})

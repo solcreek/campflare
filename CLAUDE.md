@@ -574,7 +574,7 @@ over `members` (members only; a thread's participants from `thread_participants`
 edits record nothing. Each row stores `notify`, decided then: the
 conversation's level in `notification_prefs`, else the person's default
 (`conversation_id` ''), else `all`; `mentions` notifies only mention and dm;
-`none` nothing; snoozed nothing. Items are recorded whatever the level. The
+`none` nothing; snoozed or within DND hours (the stored window, `docs/dnd.md`) nothing. Items are recorded whatever the level. The
 returned rows go out as RTM-only `activity_added` (with the message), one per
 recipient, in the same hub call as the message or reaction event and after it
 (`publishEach()`, so order holds). Deleting a message (or tombstoning
@@ -621,6 +621,37 @@ Answers are plain text with Slack's statuses (`STATUS`); 429 carries
 reconnect) with `invokeCommand()`, and `commandIn()`/`commandSuggestions()`
 for the composer, which runs a matching draft (not in threads) and shows a
 "Commands" listbox. MCP: `list_commands`, `run_command`.
+
+**Time zones, status expiry, DND hours** (`docs/dnd.md`, migration 0027).
+`campflare.users.setTimezone` (`users.profile:write`) stores an IANA `tz`
+(`ianaZone()` in `src/api/when.ts`: no fixed offsets; spelled in IANA's case, a
+link as the link meant, since workerd's ICU knows Asia/Kolkata only as
+Asia/Calcutta); `userJson` sends `tz_label`/`tz_offset` for now via `Intl`
+(`zoneLabel()`, `zoneOffset()`; formatters cached per zone, label and offset
+per zone per minute: building them per user made `users.list` 5x slower), so
+DST needs no write. `users.profile.set`
+with a future `status_expiration` arms the `Scheduler`, and any status change
+stores the request's origin in `users.status_origin` for `user_change`'s URLs
+(none on a status from before: cleared, not announced); `runDue()`'s first batch also reads
+the statuses due and the ended windows, and only then `expireStatuses()` runs
+one `UPDATE … WHERE id IN (those) AND status_expiration <= now RETURNING *` (a
+status set again meanwhile isn't due, a second run clears nothing) and
+`moveDndWindows()` its guarded moves. DND hours (`campflare.dnd.setSchedule`,
+`dnd:write`; `users.dnd_start`/`dnd_end`/`dnd_days`, `src/api/dnd-hours.ts`'s
+`windowAt()` computes windows from wall-clock times through `zonedTime()`, so
+they follow DST) store the window in progress or next on the user
+(`dnd_window_start`/`_end`) so activity's `notify()` checks it in SQL; the
+Scheduler, armed at the window's end, moves ended windows on, guarded on the
+row as read. `src/dnd.ts` builds `dnd.info`'s Slack shape (the caller also gets
+`dnd_schedule`; a stale stored window is recomputed) and the `dnd_updated`
+(to the person, with the snooze) / `dnd_updated_user` (the workspace, without)
+pair sent on every change. `dnd.endDnd` skips the window in progress (kept as
+`dnd_skipped_at`, so it stays skipped across a zone change; new hours forget
+it) and ends a snooze. endDnd, setSchedule and setTimezone guard their writes
+on the hours, zone and skip they computed from and re-read and retry
+(`ROW_TRIES`), never answering ok without the write; setTimezone to the same
+zone writes nothing. `dnd.info`/`teamInfo` arm the Scheduler when they see a
+window that ended without moving on (`staleWindow()`). CLI: `campflare dnd`, `campflare profile --tz`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a

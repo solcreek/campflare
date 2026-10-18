@@ -29,6 +29,17 @@ export interface UserRow {
   manual_presence: string
   last_activity: number
   snooze_until: number
+  /** DND hours (migration 0027): "22:00", "08:00", "mon,tue,…"; '' when unset. */
+  dnd_start: string
+  dnd_end: string
+  dnd_days: string
+  /** The DND window in progress or next (epoch seconds), 0 without a schedule; the Scheduler moves it on. */
+  dnd_window_start: number
+  dnd_window_end: number
+  /** When dnd.endDnd was last called: the window in progress then is skipped. 0: never. */
+  dnd_skipped_at: number
+  /** The origin of the request that set the status (migration 0027), for the user_change when it expires. */
+  status_origin: string | null
   /** The profile photo's id (migration 0021), or null: the initials are drawn instead. */
   photo: string | null
   photo_type: string | null

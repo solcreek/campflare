@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { deliveryLines, messageLine, plain, time } from "../src/format"
 import { matchUsers } from "../src/resolve"
-import { deviceLine } from "../src/run"
+import { deviceLine, describeDnd, offsetText } from "../src/run"
 
 describe("plain", () => {
   it("renders mrkdwn entities for a terminal", () => {
@@ -81,5 +81,19 @@ describe("deviceLine", () => {
       last_used: created + 86_400,
     })
     expect(line).toBe("P1  (no label)  fcm.googleapis.com  since 2026-10-15, last 2026-10-16")
+  })
+})
+
+describe("do not disturb", () => {
+  it("says whether DND holds now, or when it comes next", () => {
+    const base = { dnd_enabled: true, next_dnd_start_ts: 1000, next_dnd_end_ts: 2000, snooze_enabled: false }
+    const hours = { start: "22:00", end: "08:00", days: ["sat", "sun"] }
+    expect(describeDnd({ ...base, dnd_schedule: hours }, 1500)).toBe(
+      "Hours: 22:00-08:00 on sat,sun (your time zone)\nDo not disturb now, until 1970-01-01T00:33:20Z\n",
+    )
+    expect(describeDnd({ ...base, snooze_enabled: true, snooze_endtime: 900 }, 500)).toBe(
+      "Hours: none (campflare dnd hours 22:00-08:00)\nNext: 1970-01-01T00:16:40Z to 1970-01-01T00:33:20Z\nSnoozed until 1970-01-01T00:15:00Z\n",
+    )
+    expect(offsetText(-12_600)).toBe("-03:30")
   })
 })

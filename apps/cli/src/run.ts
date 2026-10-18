@@ -85,6 +85,13 @@ Attention (Campflare)
   push list [--json]               the devices you get push notifications on (turned on in the app)
   push remove <id>                 stop pushing to one
   push test [<id>] [--json]        send a test notification to your devices (or one) now
+  dnd [--json]                     do not disturb: your hours, the next window, a snooze
+  dnd hours 22:00-08:00 [--days mon-fri|weekdays|mon,wed]
+                                   no notifications in those hours, in your time zone
+                                   (an end before the start is the next morning)
+  dnd hours off | dnd off          no DND hours
+  dnd snooze 30m                   no notifications for a while
+  dnd end                          end the snooze and the DND hours in progress, now
 
 Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   stream <#channel|@person|id> [--thread <ts>] [--to @person] [--status <text>] [--blocks <json>]
@@ -94,9 +101,11 @@ Apps (with a bot token: CAMPFLARE_TOKEN=xoxb-…)
   status <#channel|id> <thread ts> [text]   the app's status in a thread; no text clears it
 
 People and groups
-  profile [@person] [--json]       a profile: names, title, status, photo
+  profile [@person] [--json]       a profile: names, title, status, time zone, photo
   profile [--title <t>] [--status <text> [--emoji :e:] [--until 30m|2h|1d]] [--photo <file>]
-          [--remove-photo]         set yours; --status '' clears the status
+          [--remove-photo] [--tz <zone>|local]
+                                   set yours; --status '' clears the status; --tz sets
+                                   your time zone (Europe/Paris; local: this machine's)
   groups [--all] [--json]          user groups (@handle mentions) and their members; --all: disabled too
   group create <handle> [--name <n>] [--description <d>] [--members @a,@b] [--channels #a,#b]
   group show|disable|enable <handle>
@@ -1387,6 +1396,7 @@ const commands: Record<string, Command> = {
       until: { type: "string" },
       photo: { type: "string" },
       "remove-photo": { type: "boolean" },
+      tz: { type: "string" },
     })
     const s = await session(io, values)
     const changes: Record<string, string | number> = {}
@@ -1401,24 +1411,27 @@ const commands: Record<string, Command> = {
     } else if (values.emoji !== undefined || values.until !== undefined) {
       throw new UsageError("--emoji and --until go with --status")
     }
-    const setting = Object.keys(changes).length > 0 || values.photo !== undefined || values["remove-photo"]
+    const tz = values.tz === "local" ? localZone() : str(values.tz)
+    if (values.tz !== undefined && !tz) throw new UsageError("--tz takes a zone (Europe/Paris) or local")
+    const setting =
+      Object.keys(changes).length > 0 || values.photo !== undefined || values["remove-photo"] || tz !== undefined
     if (setting && positionals.length > 0) throw new UsageError("profile sets only your own profile")
     if (values.photo !== undefined && values["remove-photo"])
       throw new UsageError("--photo or --remove-photo, not both")
     if (Object.keys(changes).length > 0) await s.client.call("users.profile.set", { profile: changes })
+    if (tz) await s.client.call("campflare.users.setTimezone", { tz })
     const photo = str(values.photo)
     if (photo) {
       const bytes = await io.readFile(photo)
       await s.client.call("users.setPhoto", { image: new File([bytes], basename(photo)) })
     }
     if (values["remove-photo"]) await s.client.call("users.deletePhoto")
-    const user = positionals[0] ? await resolveUser(s.client, positionals[0], s.self) : undefined
-    const { profile } = await s.client.call<{ ok: boolean; profile: ProfileJson }>(
-      "users.profile.get",
-      user ? { user } : {},
-    )
-    if (values.json) return s.print(profile)
-    io.stdout(describeProfile(profile))
+    const user = positionals[0] ? await resolveUser(s.client, positionals[0], s.self) : await s.self()
+    // users.info: the profile, and the time zone, which Slack keeps on the user.
+    const { user: info } = await s.client.call<{ ok: boolean; user: UserJson }>("users.info", { user })
+    const shown = { ...info.profile, tz: info.tz, tz_label: info.tz_label, tz_offset: info.tz_offset }
+    if (values.json) return s.print(shown)
+    io.stdout(describeProfile(shown))
   },
 
   async groups(argv, io) {
@@ -1745,6 +1758,40 @@ const commands: Record<string, Command> = {
     if (res.failed) parts.push(`${res.failed} failed (retry later)`)
     if (res.removed) parts.push(`${res.removed} gone and removed`)
     io.stdout(`${parts.join("; ")}\n`)
+  },
+
+  async dnd(argv, io) {
+    const { values, positionals } = parse(argv, { days: { type: "string" } })
+    const [action, arg, ...extra] = positionals
+    const s = await session(io, values)
+    if (extra.length || (values.days !== undefined && action !== "hours")) throw new UsageError(DND_USAGE)
+    if (action === "hours") {
+      const span = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/.exec(arg ?? "")
+      if (arg === "off") {
+        // Days belong to hours being set; with none to set they'd be ignored, so say so instead.
+        if (values.days !== undefined) throw new UsageError("--days goes with hours to set, not with hours off")
+        await s.client.call("campflare.dnd.setSchedule", { enabled: false })
+      } else if (span) {
+        const days = str(values.days)
+        await s.client.call("campflare.dnd.setSchedule", { start: span[1], end: span[2], ...(days ? { days } : {}) })
+      } else throw new UsageError(DND_USAGE)
+    } else if (action === "off" && !arg) {
+      await s.client.call("campflare.dnd.setSchedule", { enabled: false })
+    } else if (action === "snooze" && arg) {
+      const length = seconds(arg)
+      if (length <= 0) throw new UsageError("dnd snooze takes a length above zero: 30m, 2h")
+      await s.client.call("dnd.setSnooze", { num_minutes: Math.ceil(length / 60) })
+    } else if (action === "end" && !arg) {
+      await s.client.call("dnd.endDnd")
+    } else if (action !== undefined) {
+      throw new UsageError(DND_USAGE)
+    }
+    const status = await s.client.call<DndJson>("dnd.info")
+    if (values.json) {
+      const { ok: _ok, ...rest } = status
+      return s.print(rest)
+    }
+    io.stdout(describeDnd(status))
   },
 
   async api(argv, io) {
@@ -2127,12 +2174,64 @@ interface ProfileJson {
   status_expiration?: number
   is_custom_image?: boolean
   image_192?: string
+  /** From the user, beside the profile. */
+  tz?: string
+  tz_label?: string
+  tz_offset?: number
 }
 
-/** A profile for people: names, title, status (with when it ends), and the photo. */
+interface UserJson {
+  tz: string
+  tz_label: string
+  tz_offset: number
+  profile: ProfileJson
+}
+
+const DND_USAGE = "dnd [hours <HH:MM-HH:MM> [--days mon-fri] | hours off | off | snooze <30m> | end]"
+
+type DndJson = {
+  ok: boolean
+  dnd_enabled: boolean
+  next_dnd_start_ts: number
+  next_dnd_end_ts: number
+  snooze_enabled: boolean
+  snooze_endtime?: number
+  dnd_schedule?: { start: string; end: string; days: string[] } | null
+}
+
+/** Do not disturb for people: the hours, whether they hold now or when next, and a snooze. */
+export function describeDnd(d: Omit<DndJson, "ok">, now = Date.now() / 1000): string {
+  const h = d.dnd_schedule
+  const lines = [
+    h
+      ? `Hours: ${h.start}-${h.end} on ${h.days.join(",")} (your time zone)`
+      : "Hours: none (campflare dnd hours 22:00-08:00)",
+  ]
+  if (d.dnd_enabled) {
+    lines.push(
+      d.next_dnd_start_ts <= now
+        ? `Do not disturb now, until ${isoTime(d.next_dnd_end_ts)}`
+        : `Next: ${isoTime(d.next_dnd_start_ts)} to ${isoTime(d.next_dnd_end_ts)}`,
+    )
+  }
+  if (d.snooze_enabled && d.snooze_endtime) lines.push(`Snoozed until ${isoTime(d.snooze_endtime)}`)
+  return `${lines.join("\n")}\n`
+}
+
+/** This machine's time zone, for `--tz local`. */
+const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+/** "+02:00", "-03:00", "+05:30" for an offset in seconds. */
+export function offsetText(offset: number): string {
+  const abs = Math.abs(offset) / 60
+  return `${offset < 0 ? "-" : "+"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`
+}
+
+/** A profile for people: names, title, status (with when it ends), time zone, and the photo. */
 export function describeProfile(p: ProfileJson): string {
   const lines = [[p.display_name, p.real_name].filter(Boolean).join(" · ") || "(no name)"]
   if (p.title) lines.push(`Title: ${p.title}`)
+  if (p.tz) lines.push(`Time zone: ${p.tz} (${p.tz_label}, UTC${offsetText(p.tz_offset ?? 0)})`)
   if (p.status_text || p.status_emoji) {
     const until = p.status_expiration ? ` (until ${isoTime(p.status_expiration)})` : ""
     lines.push(`Status: ${[p.status_emoji, p.status_text].filter(Boolean).join(" ")}${until}`)

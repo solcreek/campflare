@@ -150,7 +150,7 @@ made afresh on its next use.
 
 ### `time`
 
-In the person's `tz` (`users.tz`; UTC if unknown, and no method sets it yet), case-insensitive:
+In the person's `tz` (`users.tz`, set by `campflare.users.setTimezone`, docs/dnd.md; UTC until set), case-insensitive:
 
 | form                                                    | means                                                   |
 | ------------------------------------------------------- | ------------------------------------------------------- |

@@ -4,17 +4,22 @@ import { CampflareError } from "./api/errors"
 import { nowSeconds, randomSecret } from "./api/ids"
 import { requireWritable } from "./db/conversations"
 import { postMessage } from "./db/messages"
-import { first, stmt } from "./db/query"
+import { all, first, stmt } from "./db/query"
 import type { AppRow, ConversationRow, ReminderRow, ScheduledMessageRow, TeamRow, UserRow } from "./db/rows"
+import { userJson } from "./api/shapes"
+import { dndEvents, nextWindow } from "./dnd"
 import type { Env } from "./env"
-import { publish } from "./events"
+import { publish, publishEach } from "./events"
+import type { PublishInput } from "./hub"
 import { dmFromSystem, serverCtx, systemActor } from "./system-bot"
 
-// Scheduled messages and reminders fire from here (docs/scheduling.md). D1 is
-// the truth; this object, one per workspace, only holds an alarm at the
-// earliest due time. Each run claims a due row (a lease), posts, and finishes
-// the row in the post's own batch, so a row is posted once however often the
-// alarm runs.
+// Scheduled messages and reminders fire from here (docs/scheduling.md), and
+// statuses expire and DND windows move on (docs/dnd.md). D1 is the truth; this
+// object, one per workspace, only holds an alarm at the earliest due time.
+// Each run claims a due row (a lease), posts, and finishes the row in the
+// post's own batch, so a row is posted once however often the alarm runs.
+// Statuses and windows need no claim: one guarded UPDATE each changes them,
+// and only the run whose UPDATE did announces it.
 
 /** How long a claim holds a row: a runner that dies mid-post leaves it to be tried again after this. */
 export const CLAIM_SECONDS = 60
@@ -139,7 +144,7 @@ export async function armScheduler(env: Env, teamId: string, at: number): Promis
  */
 export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()): Promise<void> {
   const db = env.DB
-  const [messages, reminders, team] = await db.batch([
+  const [messages, reminders, team, statuses, windows] = await db.batch([
     stmt(
       db,
       `SELECT id, channel_id FROM scheduled_messages WHERE team_id = ? AND post_at <= ? AND (claimed_until IS NULL OR claimed_until <= ?)
@@ -159,6 +164,21 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
       PER_RUN,
     ),
     stmt(db, "SELECT * FROM teams WHERE id = ?", teamId),
+    // Statuses due to expire and DND windows that ended: read here, so a run with none costs no round trip.
+    stmt(
+      db,
+      "SELECT id FROM users WHERE team_id = ? AND status_expiration > 0 AND status_expiration <= ? AND deleted = 0 LIMIT ?",
+      teamId,
+      now,
+      PER_RUN,
+    ),
+    stmt(
+      db,
+      "SELECT * FROM users WHERE team_id = ? AND dnd_window_end > 0 AND dnd_window_end <= ? AND deleted = 0 LIMIT ?",
+      teamId,
+      now,
+      PER_RUN,
+    ),
   ])
   const teamRow = team!.results[0] as TeamRow | undefined
   if (!teamRow) return
@@ -175,6 +195,8 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
     pool(reminders!.results as { id: string }[], CONCURRENCY, ({ id }) =>
       isolated("reminder", id, fireReminder(run, id)),
     ),
+    isolated("status expiry", teamId, expireStatuses(run, statuses!.results as { id: string }[])),
+    isolated("dnd window", teamId, moveDndWindows(run, windows!.results as UserRow[])),
   ])
 }
 
@@ -185,7 +207,11 @@ export async function nextDue(env: Env, teamId: string): Promise<number | undefi
     `SELECT MIN(due) AS due FROM (
        SELECT MAX(post_at, COALESCE(claimed_until, 0)) AS due FROM scheduled_messages WHERE team_id = ?1
        UNION ALL
-       SELECT MAX(time, COALESCE(claimed_until, 0)) FROM reminders WHERE team_id = ?1 AND fired = 0 AND complete_ts = 0)`,
+       SELECT MAX(time, COALESCE(claimed_until, 0)) FROM reminders WHERE team_id = ?1 AND fired = 0 AND complete_ts = 0
+       UNION ALL
+       SELECT MIN(status_expiration) FROM users WHERE team_id = ?1 AND status_expiration > 0 AND deleted = 0
+       UNION ALL
+       SELECT MIN(dnd_window_end) FROM users WHERE team_id = ?1 AND dnd_window_end > 0 AND deleted = 0)`,
     teamId,
   )
   return row?.due ?? undefined
@@ -351,5 +377,75 @@ export function reminderChanged(env: Env, r: ReminderRow, waitUntil: WaitUntil) 
       rtmOnly: true,
       event: { type: "reminder_changed", reminder: reminderJson(r) },
     },
+  )
+}
+
+/**
+ * Clears the statuses runDue() found past their status_expiration and tells
+ * the workspace (user_change), as Slack does when a status expires. The
+ * UPDATE checks the expiration again as it runs, so a status set again since
+ * the read, with a later expiration or none, isn't touched, and only the run
+ * whose UPDATE cleared a status announces it.
+ */
+async function expireStatuses(run: Run, due: { id: string }[]) {
+  if (due.length === 0) return
+  const { env, team, now } = run
+  const cleared = await all<UserRow>(
+    env.DB,
+    `UPDATE users SET status_text = '', status_emoji = '', status_expiration = 0, updated = ?2
+     WHERE id IN (SELECT value FROM json_each(?1)) AND status_expiration > 0 AND status_expiration <= ?2
+     RETURNING *`,
+    JSON.stringify(due.map((u) => u.id)),
+    now,
+  )
+  // At the origin the status was set at (its avatar URLs). One set before migration 0027 has none:
+  // it is cleared without a user_change rather than announced with URLs that may be wrong.
+  publishEach(
+    run,
+    team.id,
+    cleared
+      .filter((u) => u.status_origin)
+      .map((u): PublishInput => ({
+        teamId: team.id,
+        audience: "team",
+        event: { type: "user_change", user: userJson(u, u.status_origin!) },
+      })),
+  )
+}
+
+/**
+ * Moves each DND window that has ended (up to PER_RUN) on to the person's next
+ * one, and tells them and the workspace (dnd_updated, dnd_updated_user): their
+ * next_dnd_* changed. Each move is guarded on the row as read, so a schedule
+ * or time zone changed meanwhile keeps the window its change computed, and a
+ * second run moves nothing twice.
+ */
+async function moveDndWindows(run: Run, ended: UserRow[]) {
+  if (ended.length === 0) return
+  const { env, team, now } = run
+  const db = env.DB
+  const moves = ended.map((u) => {
+    const w = nextWindow(u, now)
+    return stmt(
+      db,
+      `UPDATE users SET dnd_window_start = ?, dnd_window_end = ?
+       WHERE id = ? AND dnd_window_end = ? AND dnd_start = ? AND dnd_end = ? AND dnd_days = ? AND tz = ?
+         AND dnd_skipped_at = ? RETURNING *`,
+      w?.start ?? 0,
+      w?.end ?? 0,
+      u.id,
+      u.dnd_window_end,
+      u.dnd_start,
+      u.dnd_end,
+      u.dnd_days,
+      u.tz,
+      u.dnd_skipped_at,
+    )
+  })
+  const moved = (await db.batch(moves)).flatMap((r) => r.results as UserRow[])
+  publishEach(
+    run,
+    team.id,
+    moved.flatMap((u) => dndEvents(team.id, u, now)),
   )
 }
