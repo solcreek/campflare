@@ -23,6 +23,9 @@ describe("commandIn", () => {
     expect(commandIn("  /Deploy  ", COMMANDS)).toEqual({ command: "/deploy", text: "" })
     expect(commandIn("/部署 本番\nsecond line", COMMANDS)).toEqual({ command: "/部署", text: "本番\nsecond line" })
     expect(commandIn("/café grand", COMMANDS)).toEqual({ command: "/café", text: "grand" })
+    // Decomposed (e + U+0301) is the same name.
+    expect(commandIn("/cafe\u0301 grand", COMMANDS)).toEqual({ command: "/café", text: "grand" })
+    expect(commandSuggestions("/cafe\u0301", COMMANDS).map((c) => c.command)).toEqual(["/café"])
   })
 
   it("leaves anything else a message", () => {

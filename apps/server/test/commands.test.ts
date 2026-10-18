@@ -118,6 +118,41 @@ describe("campflare.apps.setCommands", () => {
     rtm.close()
   })
 
+  it("takes names with combining marks, as NFC, whichever way they're typed", async () => {
+    const { w, app, bob } = await setup()
+    // Decomposed: "e" + U+0301, "e" + U+0302 + U+0309; and Devanagari, whose vowel signs are marks in any form.
+    const decomposed = ["/cafe\u0301", "/trie\u0302\u0309n-khai", "/तैनात"]
+    const set = await ok<{ commands: Command[] }>(
+      "campflare.apps.setCommands",
+      { app: app.id, commands: decomposed.map((command) => ({ command, url: URL })) },
+      w.owner.token,
+      { json: true },
+    )
+    expect(set.commands.map((c) => c.command)).toEqual(["/café", "/triển-khai", "/तैनात"])
+    // Composed and decomposed are one name: twice is a repeat.
+    await expectError(
+      "campflare.apps.setCommands",
+      { app: app.id, commands: [{ command: "/café" }, { command: "/cafe\u0301" }] },
+      w.owner.token,
+      "invalid_arguments",
+    )
+    // A mark can't start a name.
+    await expectError(
+      "campflare.apps.setCommands",
+      { app: app.id, commands: [{ command: "/\u0301x" }] },
+      w.owner.token,
+      "invalid_arguments",
+    )
+    answering({ text: "Un café" })
+    const res = await call<{ response?: { text: string } }>(
+      "campflare.commands.invoke",
+      { channel: w.general, command: "/cafe\u0301" },
+      bob.token,
+    )
+    expect(res.response?.text).toBe("Un café")
+    expect((await urls.next(isCommand)).body.command).toBe("/café")
+  })
+
   it("refuses bad names, repeats and URLs, and someone else's app", async () => {
     const { w, app, bob } = await setup()
     for (const commands of [

@@ -15,7 +15,8 @@ export interface SlashCommand {
 export function commandIn(draft: string, commands: SlashCommand[]): { command: string; text: string } | undefined {
   const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(draft.trim())
   if (!match) return undefined
-  const name = `/${match[1]!.toLowerCase()}`
+  // As the server stores names: NFC, so a decomposed "é" (some keyboards, pasted text) still matches.
+  const name = `/${match[1]!.normalize("NFC").toLowerCase()}`
   if (!commands.some((c) => c.command === name)) return undefined
   return { command: name, text: (match[2] ?? "").trim() }
 }
@@ -26,6 +27,6 @@ export function commandIn(draft: string, commands: SlashCommand[]): { command: s
  */
 export function commandSuggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   if (!/^\/\S*$/.test(draft)) return []
-  const typed = draft.toLowerCase()
+  const typed = draft.normalize("NFC").toLowerCase()
   return commands.filter((c) => c.command.startsWith(typed)).toSorted((a, b) => a.command.localeCompare(b.command))
 }

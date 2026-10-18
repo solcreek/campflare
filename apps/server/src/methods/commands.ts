@@ -5,7 +5,7 @@ import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { nowSeconds } from "../api/ids"
 import { requireScope } from "../api/scopes"
-import { COMMAND_NAME, commandJson, commandSettings, invokeCommand, type CommandRow } from "../commands"
+import { COMMAND_NAME, commandJson, commandName, commandSettings, invokeCommand, type CommandRow } from "../commands"
 import { publish } from "../events"
 import { requestUrlProblem } from "../request-url"
 import { ownApp } from "./admin"
@@ -34,7 +34,7 @@ function commandsOf(ctx: Ctx<Actor>): CommandInput[] {
   return given.map((entry: unknown) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw invalidArguments("each command is an object")
     const e = entry as Record<string, unknown>
-    const name = typeof e.command === "string" ? e.command.trim() : ""
+    const name = typeof e.command === "string" ? commandName(e.command) : ""
     if (!COMMAND_NAME.test(name)) {
       throw invalidArguments(`"${name}": a command is a slash and up to 31 lower-case letters, digits, - or _`)
     }
@@ -152,7 +152,7 @@ method("campflare.commands.list", "user", async (ctx) => {
 method("campflare.commands.invoke", "user", async (ctx) => {
   const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   await requireWritable(ctx, c)
-  const name = ctx.args.req("command", "command_not_found").trim().toLowerCase()
+  const name = commandName(ctx.args.req("command", "command_not_found")).toLowerCase()
   // The command, its app and the app's active bot: one row, one round trip.
   const found = await joinedRow<{ command: CommandRow; app: AppRow; bot: UserRow }>(
     ctx.env.DB,

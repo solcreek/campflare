@@ -14,10 +14,15 @@ import { authorOf, content, sendEphemeral } from "./methods/chat"
 // conversation.
 
 /**
- * A command's name: a slash, then up to 31 lower-case letters (any script),
- * digits, `-` or `_`. Slack's are lower case and have no spaces.
+ * A command's name, NFC-normalized (commandName()): a slash, then up to 31
+ * lower-case letters (any script, with their combining marks: Devanagari
+ * vowel signs, Vietnamese tones), digits, `-` or `_`, not starting with a
+ * mark. Slack's are lower case and have no spaces.
  */
-export const COMMAND_NAME = /^\/[\p{Ll}\p{Lo}\p{N}_-]{1,31}$/u
+export const COMMAND_NAME = /^\/[\p{Ll}\p{Lo}\p{N}_-][\p{Ll}\p{Lo}\p{M}\p{N}_-]{0,30}$/u
+
+/** A name as given, as it's stored and looked up: trimmed, NFC (so "é" is one name however it was typed). */
+export const commandName = (given: string) => given.trim().normalize("NFC")
 
 export interface CommandRow {
   team_id: string

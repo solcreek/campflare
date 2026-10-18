@@ -88,7 +88,7 @@ token (`apps:write`), or the app itself with its bot token, for its own app
 only: `commands`, Slack's bot scope for apps with commands, now in
 `DEFAULT_BOT_SCOPES`. An agent can register its own commands when it starts.
 
-A name is a slash and up to 31 lower-case letters (any script, so `/部署` and
+A name is NFC-normalized when registered and run, then a slash and up to 31 lower-case letters (any script, with combining marks, so `/部署`, `/तैनात` and
 `/café` work), digits, `-` or `_`. A name is the workspace's: the table's key
 is `(team_id, name)`. Setting a name another live app holds is
 `command_taken`, naming it, and nothing of the list is kept (the deletes and
