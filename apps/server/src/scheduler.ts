@@ -144,7 +144,7 @@ export async function armScheduler(env: Env, teamId: string, at: number): Promis
  */
 export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()): Promise<void> {
   const db = env.DB
-  const [messages, reminders, team] = await db.batch([
+  const [messages, reminders, team, statuses, windows] = await db.batch([
     stmt(
       db,
       `SELECT id, channel_id FROM scheduled_messages WHERE team_id = ? AND post_at <= ? AND (claimed_until IS NULL OR claimed_until <= ?)
@@ -164,6 +164,21 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
       PER_RUN,
     ),
     stmt(db, "SELECT * FROM teams WHERE id = ?", teamId),
+    // Statuses due to expire and DND windows that ended: read here, so a run with none costs no round trip.
+    stmt(
+      db,
+      "SELECT id FROM users WHERE team_id = ? AND status_expiration > 0 AND status_expiration <= ? AND deleted = 0 LIMIT ?",
+      teamId,
+      now,
+      PER_RUN,
+    ),
+    stmt(
+      db,
+      "SELECT * FROM users WHERE team_id = ? AND dnd_window_end > 0 AND dnd_window_end <= ? AND deleted = 0 LIMIT ?",
+      teamId,
+      now,
+      PER_RUN,
+    ),
   ])
   const teamRow = team!.results[0] as TeamRow | undefined
   if (!teamRow) return
@@ -180,8 +195,8 @@ export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now
     pool(reminders!.results as { id: string }[], CONCURRENCY, ({ id }) =>
       isolated("reminder", id, fireReminder(run, id)),
     ),
-    isolated("status expiry", teamId, expireStatuses(run)),
-    isolated("dnd window", teamId, moveDndWindows(run)),
+    isolated("status expiry", teamId, expireStatuses(run, statuses!.results as { id: string }[])),
+    isolated("dnd window", teamId, moveDndWindows(run, windows!.results as UserRow[])),
   ])
 }
 
@@ -366,24 +381,22 @@ export function reminderChanged(env: Env, r: ReminderRow, waitUntil: WaitUntil) 
 }
 
 /**
- * Clears the statuses past their status_expiration (up to PER_RUN) and tells
- * the workspace (user_change), as Slack does when a status expires. One
- * statement both finds and clears them, so a status set again meanwhile, with
- * a later expiration or none, isn't touched, and only the run that cleared a
- * status announces it.
+ * Clears the statuses runDue() found past their status_expiration and tells
+ * the workspace (user_change), as Slack does when a status expires. The
+ * UPDATE checks the expiration again as it runs, so a status set again since
+ * the read, with a later expiration or none, isn't touched, and only the run
+ * whose UPDATE cleared a status announces it.
  */
-async function expireStatuses(run: Run) {
+async function expireStatuses(run: Run, due: { id: string }[]) {
+  if (due.length === 0) return
   const { env, team, now } = run
   const cleared = await all<UserRow>(
     env.DB,
     `UPDATE users SET status_text = '', status_emoji = '', status_expiration = 0, updated = ?2
-     WHERE id IN (SELECT id FROM users WHERE team_id = ?1 AND status_expiration > 0 AND status_expiration <= ?2
-                    AND deleted = 0 LIMIT ?3)
-       AND status_expiration > 0 AND status_expiration <= ?2
+     WHERE id IN (SELECT value FROM json_each(?1)) AND status_expiration > 0 AND status_expiration <= ?2
      RETURNING *`,
-    team.id,
+    JSON.stringify(due.map((u) => u.id)),
     now,
-    PER_RUN,
   )
   // At the origin the status was set at (its avatar URLs). One set before migration 0027 has none:
   // it is cleared without a user_change rather than announced with URLs that may be wrong.
@@ -407,17 +420,10 @@ async function expireStatuses(run: Run) {
  * or time zone changed meanwhile keeps the window its change computed, and a
  * second run moves nothing twice.
  */
-async function moveDndWindows(run: Run) {
+async function moveDndWindows(run: Run, ended: UserRow[]) {
+  if (ended.length === 0) return
   const { env, team, now } = run
   const db = env.DB
-  const ended = await all<UserRow>(
-    db,
-    "SELECT * FROM users WHERE team_id = ? AND dnd_window_end > 0 AND dnd_window_end <= ? AND deleted = 0 LIMIT ?",
-    team.id,
-    now,
-    PER_RUN,
-  )
-  if (ended.length === 0) return
   const moves = ended.map((u) => {
     const w = nextWindow(u, now)
     return stmt(
