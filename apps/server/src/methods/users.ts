@@ -106,18 +106,20 @@ method("users.profile.set", "user", async (ctx) => {
   if (name) changes[name] = ctx.args.str("value") ?? ""
   const sets = Object.entries(changes).filter(([k]) => k in PROFILE_FIELDS)
   if (sets.length === 0) throw new CampflareError("invalid_profile")
+  // A status keeps the origin it was set at, for the user_change the Scheduler sends when it expires.
+  const status = sets.some(([k]) => k.startsWith("status_")) ? ", status_origin = ?" : ""
   const user = (await first<UserRow>(
     ctx.env.DB,
-    `UPDATE users SET ${sets.map(([k]) => `${PROFILE_FIELDS[k]} = ?`).join(", ")}, updated = ? WHERE id = ? RETURNING *`,
+    `UPDATE users SET ${sets.map(([k]) => `${PROFILE_FIELDS[k]} = ?`).join(", ")}${status}, updated = ?
+     WHERE id = ? RETURNING *`,
     ...sets.map(([k, v]) => (k === "status_expiration" ? Number(v) || 0 : String(v ?? ""))),
+    ...(status ? [ctx.origin] : []),
     nowSeconds(),
     ctx.auth.user.id,
   ))!
   userChanged(ctx, user)
   // The workspace learns when it expires, from the Scheduler (user_change); answered once that's armed.
-  if (user.status_expiration > nowSeconds()) {
-    await armScheduler(ctx.env, ctx.auth.team.id, user.status_expiration, ctx.origin)
-  }
+  if (user.status_expiration > nowSeconds()) await armScheduler(ctx.env, ctx.auth.team.id, user.status_expiration)
   return { profile: userJson(user, ctx.origin).profile }
 })
 

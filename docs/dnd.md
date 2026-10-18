@@ -47,7 +47,10 @@ status_expiration <= now RETURNING *`, then sends `user_change` for each row
 - A crash after the UPDATE and before the event loses the `user_change` (the
   status still reads as cleared everywhere). Deactivated people are skipped.
 - `user_change` carries URLs (avatars), and an alarm has no request: the
-  Scheduler keeps the origin of the last `arm()` that passed one in its storage.
+  status keeps the origin of the request that set it (`users.status_origin`),
+  as a scheduled message keeps its own. A status set before migration 0027 has
+  none: it is cleared without a `user_change` rather than announced with URLs
+  that might point at the wrong server.
 
 ## DND hours
 

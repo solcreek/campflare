@@ -589,8 +589,9 @@ INSERT, in SQL (`?7`, the groups named). CLI: `campflare inbox`,
 (`ianaZone()` in `src/api/when.ts`: no fixed offsets; a link keeps the name
 given); `userJson` sends `tz_label`/`tz_offset` for now via `Intl`
 (`zoneLabel()`, `zoneOffset()`), so DST needs no write. `users.profile.set`
-with a future `status_expiration` arms the `Scheduler` (passing the origin,
-kept in its storage for `user_change`'s URLs); `runDue()` also runs
+with a future `status_expiration` arms the `Scheduler`, and any status change
+stores the request's origin in `users.status_origin` for `user_change`'s URLs
+(none on a status from before: cleared, not announced); `runDue()` also runs
 `expireStatuses()`, one `UPDATE … WHERE id IN (due) AND status_expiration <=
 now RETURNING *` (a status set again meanwhile isn't due, a second run clears
 nothing), and `moveDndWindows()`. DND hours (`campflare.dnd.setSchedule`,

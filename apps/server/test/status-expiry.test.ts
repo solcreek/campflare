@@ -95,7 +95,7 @@ describe("status expiry", () => {
     expect(await runDurableObjectAlarm(scheduler(w.teamId))).toBe(true)
     const change = await link.next((f) => f.type === "user_change")
     expect((change.user as User).profile).toMatchObject({ status_text: "", status_emoji: "", status_expiration: 0 })
-    // Its avatar URLs point at the server, as the request that armed it.
+    // Its avatar URLs point at the server the status was set at.
     expect((change.user as User).profile.image_72).toContain(ORIGIN)
     const row = await env.DB.prepare("SELECT status_text, status_expiration FROM users WHERE id = ?")
       .bind(bob.id)
@@ -115,7 +115,7 @@ describe("status expiry", () => {
     }
     const link = await rtm(w.owner.token)
     const pending: Promise<unknown>[] = []
-    await Promise.all([1, 2, 3].map(() => runDue(env, w.teamId, (p) => pending.push(p), nowSeconds(), ORIGIN)))
+    await Promise.all([1, 2, 3].map(() => runDue(env, w.teamId, (p) => pending.push(p))))
     await Promise.allSettled(pending)
     await settle(100)
     const changes = link.frames.filter((f) => f.type === "user_change").map((f) => (f.user as User).id)
@@ -143,6 +143,35 @@ describe("status expiry", () => {
     await ok("users.profile.set", { profile: { status_text: "Vacances", status_expiration: 0 } }, bob.token)
     await runDue(env, w.teamId, () => {}, later + 1)
     expect((await info(bob.token, bob.id)).profile).toMatchObject({ status_text: "Vacances", status_expiration: 0 })
+  })
+
+  it("announces each status at the origin it was set at, and one with none without a user_change", async () => {
+    const w = await workspace()
+    const ana = await w.addUser("ana")
+    const bob = await w.addUser("bob")
+    for (const p of [ana, bob]) {
+      await ok(
+        "users.profile.set",
+        { profile: { status_text: "Sieste", status_expiration: nowSeconds() + 60 } },
+        p.token,
+      )
+      await expireNow(p.id)
+    }
+    // Ana's was set at another of the server's origins; Bob's before statuses kept one.
+    await env.DB.prepare("UPDATE users SET status_origin = ? WHERE id = ?")
+      .bind("https://chat.example.test", ana.id)
+      .run()
+    await env.DB.prepare("UPDATE users SET status_origin = NULL WHERE id = ?").bind(bob.id).run()
+    const link = await rtm(w.owner.token)
+    const pending: Promise<unknown>[] = []
+    await runDue(env, w.teamId, (p) => pending.push(p))
+    await Promise.allSettled(pending)
+    await settle(100)
+    const changes = link.frames.filter((f) => f.type === "user_change").map((f) => f.user as User)
+    expect(changes.map((u) => u.id)).toEqual([ana.id])
+    expect(changes[0]!.profile.image_72).toContain("https://chat.example.test/")
+    expect((await info(bob.token, bob.id)).profile).toMatchObject({ status_text: "" })
+    link.close()
   })
 
   it("leaves deactivated people alone", async () => {

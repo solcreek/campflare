@@ -17,6 +17,11 @@ ALTER TABLE users ADD COLUMN dnd_window_end INTEGER NOT NULL DEFAULT 0;
 -- window in progress then is skipped, in whatever zone the window is computed.
 ALTER TABLE users ADD COLUMN dnd_skipped_at INTEGER NOT NULL DEFAULT 0;
 
+-- The origin of the request that set the status, as scheduled messages keep
+-- theirs: the user_change sent when it expires carries URLs (avatars), and the
+-- alarm that sends it has no request. NULL for statuses set before this.
+ALTER TABLE users ADD COLUMN status_origin TEXT;
+
 -- What the Scheduler looks for: statuses to clear when they expire, windows to move on.
 CREATE INDEX users_status_expiry ON users (team_id, status_expiration) WHERE status_expiration > 0;
 CREATE INDEX users_dnd_window ON users (team_id, dnd_window_end) WHERE dnd_window_end > 0;

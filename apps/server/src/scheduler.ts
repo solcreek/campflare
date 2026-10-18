@@ -68,8 +68,8 @@ export async function claimRow<T>(env: Env, table: Claimed, id: string, now = no
 
 export class Scheduler extends DurableObject<Env> {
   /** Makes sure the alarm rings by `at` (epoch seconds). */
-  async arm(teamId: string, at: number, origin?: string): Promise<void> {
-    await this.ctx.storage.put(origin ? { team: teamId, origin } : { team: teamId })
+  async arm(teamId: string, at: number): Promise<void> {
+    await this.ctx.storage.put("team", teamId)
     const current = await this.ctx.storage.getAlarm()
     if (current === null || current > at * 1000) await this.ctx.storage.setAlarm(at * 1000)
   }
@@ -80,12 +80,11 @@ export class Scheduler extends DurableObject<Env> {
    * fail, for Cloudflare to retry it.
    */
   override async alarm(): Promise<void> {
-    const stored = await this.ctx.storage.get<string>(["team", "origin"])
-    const teamId = stored.get("team")
+    const teamId = await this.ctx.storage.get<string>("team")
     if (!teamId) return
     const pending: Promise<unknown>[] = []
     try {
-      await runDue(this.env, teamId, (p) => pending.push(p), nowSeconds(), stored.get("origin"))
+      await runDue(this.env, teamId, (p) => pending.push(p))
     } catch (error) {
       console.error("scheduler run failed", teamId, error)
     }
@@ -113,8 +112,6 @@ interface Run {
   waitUntil: WaitUntil
   now: number
   bot: () => Promise<Actor>
-  /** The server's origin, for the URLs in a user_change. */
-  origin: string
 }
 
 /** Runs `fn` over `items`, at most `limit` at a time. */
@@ -135,12 +132,9 @@ async function isolated(kind: string, id: string, fire: Promise<void>) {
   }
 }
 
-/**
- * Sets the workspace's alarm to ring by `at`: after the row is written, before the method answers.
- * `origin`, the server's, is kept for what the alarm sends without a row to say it (user_change).
- */
-export async function armScheduler(env: Env, teamId: string, at: number, origin?: string): Promise<void> {
-  await env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId)).arm(teamId, at, origin)
+/** Sets the workspace's alarm to ring by `at`: after the row is written, before the method answers. */
+export async function armScheduler(env: Env, teamId: string, at: number): Promise<void> {
+  await env.SCHEDULER.get(env.SCHEDULER.idFromName(teamId)).arm(teamId, at)
 }
 
 /**
@@ -148,13 +142,7 @@ export async function armScheduler(env: Env, teamId: string, at: number, origin?
  * PER_RUN of each): CONCURRENCY at a time, each conversation's messages in
  * due order.
  */
-export async function runDue(
-  env: Env,
-  teamId: string,
-  waitUntil: WaitUntil,
-  now = nowSeconds(),
-  origin = "http://localhost",
-): Promise<void> {
+export async function runDue(env: Env, teamId: string, waitUntil: WaitUntil, now = nowSeconds()): Promise<void> {
   const db = env.DB
   const [messages, reminders, team] = await db.batch([
     stmt(
@@ -180,7 +168,7 @@ export async function runDue(
   const teamRow = team!.results[0] as TeamRow | undefined
   if (!teamRow) return
   let bot: Promise<Actor> | undefined
-  const run: Run = { env, team: teamRow, waitUntil, now, origin, bot: () => (bot ??= systemActor(env, teamRow)) }
+  const run: Run = { env, team: teamRow, waitUntil, now, bot: () => (bot ??= systemActor(env, teamRow)) }
   const byChannel = new Map<string, string[]>()
   for (const { id, channel_id } of messages!.results as { id: string; channel_id: string }[]) {
     byChannel.set(channel_id, [...(byChannel.get(channel_id) ?? []), id])
@@ -397,14 +385,18 @@ async function expireStatuses(run: Run) {
     now,
     PER_RUN,
   )
+  // At the origin the status was set at (its avatar URLs). One set before migration 0027 has none:
+  // it is cleared without a user_change rather than announced with URLs that may be wrong.
   publishEach(
     run,
     team.id,
-    cleared.map((u): PublishInput => ({
-      teamId: team.id,
-      audience: "team",
-      event: { type: "user_change", user: userJson(u, run.origin) },
-    })),
+    cleared
+      .filter((u) => u.status_origin)
+      .map((u): PublishInput => ({
+        teamId: team.id,
+        audience: "team",
+        event: { type: "user_change", user: userJson(u, u.status_origin!) },
+      })),
   )
 }
 
