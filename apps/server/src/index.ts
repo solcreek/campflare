@@ -9,6 +9,7 @@ import "./methods/blocks"
 import "./methods/bookmarks"
 import "./methods/chat"
 import "./methods/chat-stream"
+import "./methods/commands"
 import "./methods/conversations"
 import "./methods/dnd"
 import "./methods/emoji"
@@ -31,11 +32,13 @@ import "./methods/stars"
 import "./methods/users"
 import "./methods/usergroups"
 import "./methods/views"
+import "./methods/webhooks"
 import { mountAuth } from "./auth/routes"
 import { mountLinks } from "./auth/links"
 import { handlePermalink, offersDesktop } from "./permalinks"
 import { handleMcp } from "./mcp"
 import { handleResponseUrl } from "./interactivity"
+import { handleWebhook } from "./webhooks"
 import { Args } from "./api/args"
 import { publicOrigin } from "./api/origin"
 import { authenticate, tokenOf, touch } from "./api/auth"
@@ -155,6 +158,11 @@ app.all("/mcp", (c) => handleMcp(c.env, c.req.raw, (p) => c.executionCtx.waitUnt
 /** response_urls handed to apps with a click (block_actions): the app's answer. */
 app.post("/actions/:token", (c) =>
   handleResponseUrl(c.env, c.req.raw, c.req.param("token"), (p) => c.executionCtx.waitUntil(p)),
+)
+
+/** Incoming webhooks from campflare.apps.createWebhook: a message in the webhook's conversation. */
+app.post("/services/:secret", (c) =>
+  handleWebhook(c.env, c.req.raw, c.req.param("secret"), (p) => c.executionCtx.waitUntil(p)),
 )
 
 /** Upload URLs handed out by files.getUploadURLExternal. */

@@ -4,9 +4,12 @@ import type { PublishInput } from "./hub"
 import type { Actor, Ctx } from "./api/context"
 import { userJson } from "./api/shapes"
 
+/** The workspace's TeamHub (hub.ts): its live connections, event log, triggers, views and response_urls. */
+export const hubOf = (ctx: Pick<Ctx, "env">, teamId: string) => ctx.env.HUB.get(ctx.env.HUB.idFromName(teamId))
+
 /** Sends an event to the workspace's live connections, after the response. */
 export function publish(ctx: Pick<Ctx, "env" | "waitUntil">, input: PublishInput): void {
-  const stub = ctx.env.HUB.get(ctx.env.HUB.idFromName(input.teamId))
+  const stub = hubOf(ctx, input.teamId)
   ctx.waitUntil(
     stub.publish(input).catch((error: unknown) => {
       console.error("publish failed", input.event.type, error)
@@ -29,7 +32,7 @@ export function userChanged(ctx: Pick<Ctx<Actor>, "env" | "waitUntil" | "origin"
  */
 export async function sendEach(env: Ctx["env"], teamId: string, inputs: PublishInput[]): Promise<void> {
   if (inputs.length === 0) return
-  const stub = env.HUB.get(env.HUB.idFromName(teamId))
+  const stub = hubOf({ env }, teamId)
   await stub.publishEach(inputs).catch((error: unknown) => {
     console.error("publish failed", inputs[0]!.event.type, error)
   })

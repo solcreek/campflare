@@ -18,6 +18,36 @@ export async function all<T>(db: D1Database, sql: string, ...params: unknown[]):
   ).results
 }
 
+/**
+ * One row of a join of whole tables, split back into one object per table:
+ * `SELECT 1 AS "#hook", w.*, (a.id IS NOT NULL) AS "#app", a.* FROM … LEFT JOIN …`.
+ * Each `"#name"` column starts the columns of `name`, up to the next marker;
+ * a falsy marker (a LEFT JOIN that found nothing) makes it null. Tables share
+ * column names (`id`), which a plain row object would merge, so it reads the
+ * row raw, with its column names. One query, one round trip; undefined when
+ * there's no row.
+ */
+export async function joinedRow<T extends Record<string, unknown>>(
+  db: D1Database,
+  sql: string,
+  ...params: unknown[]
+): Promise<{ [K in keyof T]: T[K] | null } | undefined> {
+  const [names, row] = (await db
+    .prepare(sql)
+    .bind(...params)
+    .raw<unknown[]>({ columnNames: true })) as [string[], unknown[] | undefined]
+  if (!row) return undefined
+  const out: Record<string, Record<string, unknown> | null> = {}
+  let current: Record<string, unknown> | null = null
+  names.forEach((name, i) => {
+    if (name.startsWith("#")) {
+      current = row[i] ? {} : null
+      out[name.slice(1)] = current
+    } else if (current) current[name] = row[i]
+  })
+  return out as { [K in keyof T]: T[K] | null }
+}
+
 export async function run(db: D1Database, sql: string, ...params: unknown[]): Promise<D1Result> {
   return db
     .prepare(sql)

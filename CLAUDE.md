@@ -445,7 +445,11 @@ sends an `interactive` envelope on one link and waits up to 3 s for its ack, in
 memory, never kept or resent; else a signed form POST (`payload=<json>`,
 `postSigned()` with a content type) to `apps.interactivity_request_url`
 (migration 0013, `campflare.apps.setInteractivity`, not challenged). No
-retries: a miss is the clicker's `app_unreachable`, as Slack shows an error.
+retries. One error mapping for clicks, submissions and slash commands alike:
+no ack or no answer is the person's `app_unreachable`, an answer that is
+non-2xx (or not JSON when one is wanted) `dispatch_failed`. Slash commands go
+through the same `deliverInteraction()` with an `InteractionRoute` (envelope
+`type`, `url`, form `body` of fields, plain-text answers).
 Stored blocks get a `block_id`, and interactive elements (actions elements, a
 section's accessory, an input's element) an `action_id`, when the poster gave
 none (`withBlockIds()` in `methods/chat.ts`), as Slack fills them in. The
@@ -584,6 +588,39 @@ messages, their reactions and the unread counts are one batch.
 `mention` for its members in the conversation: they join the named set in the
 INSERT, in SQL (`?7`, the groups named). CLI: `campflare inbox`,
 `campflare notify`; MCP: `get_activity`, `mark_activity_read`.
+
+**Slash commands and incoming webhooks** (`docs/commands-webhooks.md`,
+migration 0025). `app_commands` is keyed `(team_id, name)`, so a name is one
+app's; `campflare.apps.setCommands` (`src/methods/commands.ts`; the installer
+with `apps:write`, or the app's own bot with `commands`) replaces an app's set
+in one batch that first drops the clashing names of apps whose bot is
+deactivated (a clash is `command_taken`), and publishes RTM `commands_changed`.
+`campflare.commands.invoke` (xoxp, `chat:write`, `requireWritable`) builds
+Slack's fields and hands them to `invokeCommand()` (`src/commands.ts`), which
+delivers through `deliverInteraction()`: a `slash_commands` envelope, else a
+signed form of the fields to the command's `url`; `app_unreachable` also when
+there's nowhere to send it. The answer (the
+ack's payload, the body as JSON, or plain text) is shown as the app's bot
+(`asApp()` in `src/api/as-app.ts`, which `handleResponseUrl()` uses too):
+posted for `in_channel`, else `sendEphemeral()` to the invoker, and returned as
+`response`. Its `response_url` has no `ts` (`ResponseUrlClaims.ts` is
+optional): `delete_original` is `message_not_found`, `replace_original`
+posts anew. Incoming webhooks: `campflare.apps.createWebhook`,
+`.webhooks.list`, `.webhooks.revoke` (`src/methods/webhooks.ts`, `ownApp()`)
+keep a SHA-256 of the secret; `POST /services/:secret` (`handleWebhook()` in
+`src/webhooks.ts`) reads the body (JSON whatever the type, or a form's
+`payload`), reads the webhook with its bucket's tokens, app, team, bot,
+conversation and the bot's membership as one joined row (`joinedRow()` in
+`src/db/query.ts`: `"#name"` marker columns split it per table), checks
+everything, answers 429 when there's no token (10 burst, 1/s), and posts
+through `postMessage()` with the token's spend in the post's batch, so a
+refused request spends nothing. `campflare.commands.invoke` reads the
+command, app and bot the same way.
+Answers are plain text with Slack's statuses (`STATUS`); 429 carries
+`Retry-After`. Core keeps `state.commands` (reloaded on `commands_changed` and
+reconnect) with `invokeCommand()`, and `commandIn()`/`commandSuggestions()`
+for the composer, which runs a matching draft (not in threads) and shows a
+"Commands" listbox. MCP: `list_commands`, `run_command`.
 
 **Admin.** `campflare.*` methods (`src/methods/admin.ts`) do what Slack's admin
 UI and OAuth do: `campflare.bootstrap` (needs `BOOTSTRAP_SECRET`) creates a

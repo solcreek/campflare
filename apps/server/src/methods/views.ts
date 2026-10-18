@@ -1,6 +1,7 @@
 import { method, type Actor, type Ctx } from "../api/context"
 import { CampflareError, invalidArguments } from "../api/errors"
 import { first } from "../db/query"
+import { hubOf } from "../events"
 import type { AppRow } from "../db/rows"
 import { deliverInteraction, interactor, requireChoices, triggerId } from "../interactivity"
 import {
@@ -8,7 +9,6 @@ import {
   findView,
   formState,
   givenValues,
-  hubOf,
   MAX_STACK,
   newView,
   saveStack,
@@ -28,7 +28,7 @@ import {
 async function spendTrigger(ctx: Ctx<Actor>): Promise<string> {
   const trigger = ctx.args.str("trigger_id") ?? ctx.args.str("interactivity_pointer")
   if (!trigger) throw invalidArguments("missing required field: trigger_id")
-  const taken = await hubOf(ctx).takeTrigger(trigger, ctx.auth.app!.id)
+  const taken = await hubOf(ctx, ctx.auth.team.id).takeTrigger(trigger, ctx.auth.app!.id)
   if ("error" in taken) throw new CampflareError(taken.error)
   return taken.userId
 }

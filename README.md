@@ -408,8 +408,9 @@ campflare admin app A0123 --interactivity-url https://helper.example/slack/event
 ```
 
 (`campflare.apps.setInteractivity`, `app`, `request_url`; not challenged, as
-on Slack). Clicks aren't retried: an app that doesn't ack, or answer 2xx,
-within 3 seconds gives the clicker `app_unreachable`. The `response_url` takes
+on Slack). Clicks aren't retried: an app that doesn't ack, or answer at all,
+within 3 seconds gives the clicker `app_unreachable`; a URL answering non-2xx
+(or, for a submission, not JSON) gives `dispatch_failed`. The `response_url` takes
 the app's answer for 30 minutes, 5 times: `replace_original`,
 `delete_original`, `response_type: "in_channel"`, or by default a message only
 the clicker sees (ephemeral). Posted as the app's bot, in the clicked message's
@@ -444,6 +445,45 @@ body) decides: `response_action` `errors` (shown under the inputs), `update`,
 `push`, `clear`, or nothing, which closes the view. Closing one sends
 `view_closed` when it has `notify_on_close`. A click in a modal is
 `block_actions` with `container.type: "view"` and the view's state so far.
+
+### Slash commands and incoming webhooks
+
+An app registers slash commands (Slack's manifest `slash_commands`), with its
+installer's user token or its own bot token (`commands` scope):
+
+```sh
+campflare admin app A0123 --command '/deploy:Deploy a branch:[branch]' --command-url https://ci.example/commands
+```
+
+(`campflare.apps.setCommands`, `app`, `commands`: `[{ command, description,
+usage_hint, url }]`; a name belongs to one app in the workspace,
+`command_taken`). People run them from the app's composer, which offers the
+matching commands as the name is typed, or with `campflare command '#ops'
+/deploy staging` (`campflare.commands.invoke`; `campflare.commands.list`
+lists them). The app gets them as Slack sends them: a `slash_commands` Socket
+Mode envelope, whose ack payload is the answer, else a signed form POST to the
+command's URL with Slack's fields (`command`, `text`, `user_id`,
+`channel_id`, `response_url`, `trigger_id`…), whose body is. The answer is
+shown to the person alone, or posted in the conversation with
+`response_type: "in_channel"`; the `response_url` works as a click's (30
+minutes, 5 uses) and the `trigger_id` opens a modal. Errors:
+`command_not_found`, `app_unreachable`, `dispatch_failed`.
+
+An incoming webhook posts in one conversation as an app's bot:
+
+```sh
+URL=$(campflare admin webhook create A0123 '#alerts' --label CI)
+curl -X POST -H 'content-type: application/json' -d '{"text":"Build passed"}' "$URL"
+campflare admin webhooks A0123          # admin webhook revoke H0123 stops one
+```
+
+`POST <origin>/services/<secret>` takes Slack's body (`text`, `blocks`,
+`attachments`, `thread_ts`; JSON, or a form's `payload`) and answers Slack's
+plain text: `ok`, or `invalid_payload`, `no_text`, `no_service`,
+`channel_not_found`, `channel_is_archived`, `action_prohibited` with Slack's
+statuses. Each webhook takes a burst of 10, then one a second (429 with
+`Retry-After`). Official clients such as `@slack/webhook` work unchanged. See
+[docs/commands-webhooks.md](docs/commands-webhooks.md).
 
 ### The event log
 
@@ -554,6 +594,7 @@ campflare listen --json                                       # RTM; --socket fo
 campflare events --cursor 120 --follow                        # the event log, resumable
 campflare inbox --unread --type mention,dm                    # what needs you (Campflare)
 campflare push test                                           # a test notification to your devices
+campflare command '#ops' /deploy staging                      # run an app's slash command; commands lists them
 campflare api conversations.list limit=5                      # any method, raw JSON
 campflare profile --status 'En réunion' --emoji :calendar: --until 1h --photo me.png
 campflare group create oncall --name 'On call' --members @ana,@kenji   # then mention @oncall

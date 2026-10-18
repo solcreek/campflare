@@ -364,6 +364,52 @@ export function buildServer(caller: Caller): McpServer {
   )
 
   server.registerTool(
+    "list_commands",
+    {
+      title: "List slash commands",
+      description: "The slash commands apps in this workspace offer (/deploy and the like): what each does and takes.",
+      annotations: READ,
+    },
+    tool(async () => {
+      const res = await invoke<{
+        commands: { command: string; description: string; usage_hint: string; app_name: string }[]
+      }>(caller, "campflare.commands.list", {})
+      return {
+        commands: res.commands.map((c) => ({
+          command: c.command,
+          description: c.description,
+          usage: c.usage_hint,
+          app: c.app_name,
+        })),
+      }
+    }),
+  )
+
+  server.registerTool(
+    "run_command",
+    {
+      title: "Run a slash command",
+      description:
+        "Run an app's slash command in a conversation, as typing it there would. Returns the app's immediate answer, shown to you alone (ephemeral) or posted in the conversation (in_channel).",
+      inputSchema: z.object({
+        conversation,
+        command: z.string().min(2).describe('The command, e.g. "/deploy" (list_commands has them)'),
+        text: z.string().max(4000).default("").describe("What follows the command"),
+      }),
+      annotations: { ...WRITE, openWorldHint: true },
+    },
+    tool(async ({ conversation: ref, command, text }) => {
+      const channel = await conversationId(caller, ref)
+      const res = await invoke<{ response?: { response_type: string; text: string; ts: string } }>(
+        caller,
+        "campflare.commands.invoke",
+        { channel, command: command.startsWith("/") ? command : `/${command}`, text },
+      )
+      return { conversation: channel, command, response: res.response ?? null }
+    }),
+  )
+
+  server.registerTool(
     "schedule_message",
     {
       title: "Schedule a message",

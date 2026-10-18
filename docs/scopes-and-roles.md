@@ -104,6 +104,9 @@ For `campflare.*` methods, named in Slack's `noun:verb` style:
 | `events:read`                      | `campflare.events.poll`                                       | the same, by cursor                                       |
 | `views:read` / `views:write`       | `campflare.views.list` / `.submit`, `.close`                  | acting in an app's modal as the person                    |
 | `chat:write`                       | `campflare.blocks.action`, `campflare.chat.stopStream`        | a click or a stop acts in the conversation                |
+| `chat:write`                       | `campflare.commands.invoke`, `.list`                          | running a slash command is saying something there         |
+| `apps:write` or `commands`         | `campflare.apps.setCommands`                                  | the installer, or the app's own bot for itself            |
+| `apps:write`                       | `campflare.apps.createWebhook`, `.webhooks.*`                 | a webhook URL posts as the app's bot                      |
 | `apps:read` / `apps:write`         | `apps.list` / `campflare.apps.*`                              | `apps.info` reveals signing secrets, so it's `apps:write` |
 | `tokens:read` / `tokens:write`     | `campflare.tokens.list` / `.create`, `.revoke`                | minting tokens is how a token would escalate              |
 | `users.password:write`             | `campflare.users.setPassword`                                 | a password is the whole account                           |
@@ -177,7 +180,7 @@ without it never expire, as before.
   `full`.
 - `campflare.apps.create`: the bot gets `bot` (`DEFAULT_BOT_SCOPES`, now with
   `assistant:write`, `mpim:write`, `channels:manage`, `rtm:stream`,
-  `events:read`, `activity:read`, `activity:write` and `emoji:read`), the app token
+  `events:read`, `activity:read`, `activity:write` `emoji:read` and `commands`), the app token
   `connections:write`.
 - `oauth.v2.access`: what the person consented to, out of the known user
   scopes and presets. The CLI, the web app and the desktop app ask for

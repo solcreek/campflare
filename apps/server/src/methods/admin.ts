@@ -8,10 +8,11 @@ import { normalizeEmail } from "../api/email-address"
 import { ids, nowSeconds, randomSecret } from "../api/ids"
 import { activePerson, HANDLE, rank, requireAdmin, requireOutranks, requireOwner } from "../api/roles"
 import { teamJson, userJson } from "../api/shapes"
-import { userChanged } from "../events"
+import { hubOf, userChanged } from "../events"
 import { checkPassword, setPassword } from "../auth/password"
 import type { Env } from "../env"
 import { EVENT_TYPE } from "../app-events"
+import { commandSettings, type CommandRow } from "../commands"
 import { requestUrlProblem, verifyRequestUrl } from "../request-url"
 
 // campflare.* — what Slack does in its admin UI and OAuth flow, as API
@@ -362,22 +363,27 @@ function appSettings(app: AppRow) {
   }
 }
 
-const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
-
 /** appSettings and how its Request URL is doing (the team hub keeps the counts). */
 async function appOut(ctx: Ctx<Actor>, app: AppRow) {
   const settings = appSettings(app)
-  const delivery = await hubOf(ctx).deliveryHealth(app.id)
-  return { ...settings, event_subscriptions: { ...settings.event_subscriptions, delivery } }
+  const [delivery, commands] = await Promise.all([
+    hubOf(ctx, ctx.auth.team.id).deliveryHealth(app.id),
+    all<CommandRow>(ctx.env.DB, "SELECT * FROM app_commands WHERE app_id = ? ORDER BY name", app.id),
+  ])
+  return {
+    ...settings,
+    event_subscriptions: { ...settings.event_subscriptions, delivery },
+    commands: commands.map(commandSettings),
+  }
 }
 
 /** An app of the caller's workspace that they installed, or any if they're an admin. */
-async function ownApp(ctx: Ctx<Actor>): Promise<AppRow> {
+export async function ownApp(ctx: Ctx<Actor>, id = ctx.args.req("app", "app_not_found")): Promise<AppRow> {
   const app = await first<AppRow>(
     ctx.env.DB,
     // The built-in bot (system-bot.ts) is the server's: nobody manages it.
     "SELECT * FROM apps WHERE id = ? AND team_id = ? AND built_in IS NULL",
-    ctx.args.req("app", "app_not_found"),
+    id,
     ctx.auth.team.id,
   )
   if (!app) throw new CampflareError("app_not_found")
@@ -434,7 +440,7 @@ method("campflare.apps.setEventSubscriptions", "user", async (ctx) => {
     app.id,
   ))!
   // A new URL (or the same one, verified again, turning delivery back on) has its failures counted afresh.
-  await hubOf(ctx).subscriptionsChanged(url ? app.id : undefined, url ? ctx.origin : undefined)
+  await hubOf(ctx, ctx.auth.team.id).subscriptionsChanged(url ? app.id : undefined, url ? ctx.origin : undefined)
   return { app: await appOut(ctx, updated) }
 })
 
@@ -454,7 +460,7 @@ method("campflare.apps.rotateSigningSecret", "user", async (ctx) => {
     app.id,
   ))!
   // The hub keeps each subscriber's secret: it must sign the next delivery with the new one.
-  await hubOf(ctx).subscriptionsChanged()
+  await hubOf(ctx, ctx.auth.team.id).subscriptionsChanged()
   return { app: await appOut(ctx, updated) }
 })
 

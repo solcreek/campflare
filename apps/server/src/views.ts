@@ -3,6 +3,7 @@ import { CampflareError, invalidArguments } from "./api/errors"
 import { randomId } from "./api/ids"
 import type { AppRow } from "./db/rows"
 import { ID_SELECTS, optionOut, optionsOf, type Choice } from "./interactivity"
+import { hubOf } from "./events"
 import { withBlockIds } from "./methods/chat"
 
 // Modals (views): an app opens one for the person whose click gave it a
@@ -165,16 +166,15 @@ export const updatedView = (view: ViewJson, input: ViewInput): ViewJson => ({
 })
 
 /** The hub of the actor's workspace. */
-export const hubOf = (ctx: Ctx<Actor>) => ctx.env.HUB.get(ctx.env.HUB.idFromName(ctx.auth.team.id))
 
 /** A person's open views, bottom first. */
 export async function stackOf(ctx: Ctx<Actor>, userId: string): Promise<ViewRecord[]> {
-  return (await hubOf(ctx).viewStack(userId)).map((body) => JSON.parse(body) as ViewRecord)
+  return (await hubOf(ctx, ctx.auth.team.id).viewStack(userId)).map((body) => JSON.parse(body) as ViewRecord)
 }
 
 /** Replaces a person's stack, and shows it on their clients. */
 export async function saveStack(ctx: Ctx<Actor>, userId: string, stack: ViewRecord[]): Promise<void> {
-  await hubOf(ctx).saveViews(
+  await hubOf(ctx, ctx.auth.team.id).saveViews(
     ctx.auth.team.id,
     userId,
     stack.map((r) => JSON.stringify(r)),
@@ -187,7 +187,7 @@ export async function findView(
   ctx: Ctx<Actor>,
   by: { id?: string; externalId?: string; appId?: string },
 ): Promise<{ userId: string; stack: ViewRecord[]; index: number } | undefined> {
-  const userId = await hubOf(ctx).findView(by)
+  const userId = await hubOf(ctx, ctx.auth.team.id).findView(by)
   if (!userId) return undefined
   const stack = await stackOf(ctx, userId)
   const index = stack.findIndex((r) =>

@@ -180,7 +180,7 @@ export interface RequestUrlHit {
   headers: Headers
   /** The raw body, as signed. */
   raw: string
-  /** The JSON: the body, or a form's `payload`. */
+  /** The JSON: the body, or a form's `payload`, or a form's fields. */
   body: Record<string, unknown>
 }
 
@@ -219,9 +219,11 @@ export function fakeRequestUrls() {
   setRequestUrlFetch(async (input, init) => {
     const raw = String(init?.body ?? "")
     const headers = new Headers(init?.headers)
-    // Interactivity POSTs a form whose `payload` is the JSON; events are JSON.
-    const form = headers.get("content-type") === "application/x-www-form-urlencoded"
-    const body = JSON.parse(form ? (new URLSearchParams(raw).get("payload") ?? "null") : raw)
+    // Interactivity POSTs a form whose `payload` is the JSON; slash commands a form of fields; events are JSON.
+    const form =
+      headers.get("content-type") === "application/x-www-form-urlencoded" ? new URLSearchParams(raw) : undefined
+    const payload = form?.get("payload")
+    const body = form ? (typeof payload === "string" ? JSON.parse(payload) : Object.fromEntries(form)) : JSON.parse(raw)
     const hit = { url: String(input), headers, raw, body }
     hits.push(hit)
     return fake.answer(hit)

@@ -208,14 +208,16 @@ describe("campflare.blocks.action over HTTP", () => {
     expect(urls.hits).toEqual([])
   })
 
-  it("tells the clicker when the app can't be reached, and doesn't retry", async () => {
+  it("tells the clicker when the app fails or can't be reached, and doesn't retry", async () => {
     const { click } = await setup()
     urls.answer = () => new Response("boom", { status: 500 })
     const failed = await click()
     expect(failed).toMatchObject({
       ok: false,
-      error: "app_unreachable",
-      response_metadata: { messages: ["[ERROR] the app didn't take it: its Interactivity Request URL answered 500"] },
+      error: "dispatch_failed",
+      response_metadata: {
+        messages: ["[ERROR] the app's answer couldn't be used: its Interactivity Request URL answered 500"],
+      },
     })
     urls.answer = () => {
       throw new DOMException("timed out", "TimeoutError")
@@ -230,7 +232,7 @@ describe("campflare.blocks.action over HTTP", () => {
   it("doesn't count towards the event Request URL's delivery health", async () => {
     const { w, app, click } = await setup()
     urls.answer = () => new Response("boom", { status: 500 })
-    expect((await click()).error).toBe("app_unreachable")
+    expect((await click()).error).toBe("dispatch_failed")
     const info = await ok<{ app: { event_subscriptions: { delivery: { attempts: number; last_attempt: unknown } } } }>(
       "campflare.apps.info",
       { app: app.id },
