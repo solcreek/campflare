@@ -1,4 +1,4 @@
-import { all, isUniqueViolation, stmt } from "../db/query"
+import { all, isUniqueViolation, joinedRow, stmt } from "../db/query"
 import { requireWritable, resolveConversation } from "../db/conversations"
 import type { AppRow, UserRow } from "../db/rows"
 import { method, type Actor, type Ctx } from "../api/context"
@@ -153,26 +153,16 @@ method("campflare.commands.invoke", "user", async (ctx) => {
   const c = await resolveConversation(ctx, ctx.args.req("channel", "channel_not_found"))
   await requireWritable(ctx, c)
   const name = ctx.args.req("command", "command_not_found").trim().toLowerCase()
-  const db = ctx.env.DB
-  const [commands, apps, bots] = await db.batch([
-    stmt(db, "SELECT * FROM app_commands WHERE team_id = ? AND name = ?", c.team_id, name),
-    stmt(
-      db,
-      "SELECT * FROM apps WHERE id = (SELECT app_id FROM app_commands WHERE team_id = ? AND name = ?)",
-      c.team_id,
-      name,
-    ),
-    stmt(
-      db,
-      `SELECT * FROM users WHERE deleted = 0 AND id = (SELECT bot_user_id FROM apps
-         WHERE id = (SELECT app_id FROM app_commands WHERE team_id = ? AND name = ?))`,
-      c.team_id,
-      name,
-    ),
-  ])
-  const command = commands!.results[0] as CommandRow | undefined
-  const app = apps!.results[0] as AppRow | undefined
-  const bot = bots!.results[0] as UserRow | undefined
+  // The command, its app and the app's active bot: one row, one round trip.
+  const found = await joinedRow<{ command: CommandRow; app: AppRow; bot: UserRow }>(
+    ctx.env.DB,
+    `SELECT 1 AS "#command", cmd.*, 1 AS "#app", a.*, 1 AS "#bot", u.*
+     FROM app_commands cmd JOIN apps a ON a.id = cmd.app_id JOIN users u ON u.id = a.bot_user_id AND u.deleted = 0
+     WHERE cmd.team_id = ? AND cmd.name = ?`,
+    c.team_id,
+    name,
+  )
+  const { command, app, bot } = found ?? {}
   if (!command || !app || !bot) throw new CampflareError("command_not_found")
   return { ...(await invokeCommand(ctx, c, { command, app, bot }, ctx.args.str("text")?.trim() ?? "")) }
 })

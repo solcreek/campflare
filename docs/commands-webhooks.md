@@ -65,14 +65,17 @@ it does.
 
 Slack allows about one message a second per webhook, with short bursts. Each
 webhook holds a token bucket in its own row (`bucket`, `bucket_at` in
-milliseconds): 10 tokens, one back per second. The take is a guarded `UPDATE
-… WHERE <tokens now> >= 1 RETURNING`, batched with the reads of the webhook,
-its app, team, bot, conversation and the bot's membership: the lookup and the
-limit cost one D1 round trip together, and two concurrent POSTs can't both
-spend the last token. A POST that finds no token answers 429 with
-`Retry-After` (how long until one is back, at least a second). A refused
-request (bad payload, no text) still spends its token: the limit is on
-requests, as on Slack.
+milliseconds): 10 tokens, one back per second. One SELECT reads the webhook
+with its tokens now, joined with its app, team, bot, conversation and the
+bot's membership (`joinedRow()` in `src/db/query.ts` splits the row per
+table): one round trip. Every check runs on that row and on the body first, so
+a refused request (bad payload, no text, a conversation the bot can't post in)
+spends nothing and doesn't count as a use. Then a POST that finds no token
+answers 429 with `Retry-After` (how long until one is back, at least a
+second); else the token is spent, and `last_used` set, by an UPDATE in the
+post's own batch (`postMessage()`'s `also`): no post, no spend, and no extra
+round trip. Two POSTs at once may both see the last token and both spend it;
+the bucket then goes below zero, and that debt is waited out.
 
 ## Slash commands
 

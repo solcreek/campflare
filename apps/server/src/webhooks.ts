@@ -4,7 +4,7 @@ import { sha256Hex } from "./api/crypto"
 import { CampflareError } from "./api/errors"
 import { nowSeconds } from "./api/ids"
 import { postMessage } from "./db/messages"
-import { stmt } from "./db/query"
+import { joinedRow, stmt } from "./db/query"
 import type { AppRow, ConversationRow, TeamRow, UserRow } from "./db/rows"
 import type { Env } from "./env"
 import { authorOf, content } from "./methods/chat"
@@ -86,59 +86,59 @@ export async function handleWebhook(
     const payload = await payloadOf(request)
     const hash = await sha256Hex(secret)
     const now = Date.now()
-    const db = env.DB
-    const live = "SELECT %s FROM webhooks WHERE hash = ?2 AND revoked IS NULL"
-    // The token taken (when there is one), the webhook, and all it posts as and to: one round trip.
-    const [taken, hooks, apps, teams, bots, conversations, members] = await db.batch([
-      stmt(
-        db,
-        `UPDATE webhooks SET bucket = ${TOKENS} - 1, bucket_at = ?1, last_used = ?3
-         WHERE hash = ?2 AND revoked IS NULL AND ${TOKENS} >= 1 RETURNING id`,
-        now,
-        hash,
-        nowSeconds(),
-      ),
-      stmt(db, `SELECT *, ${TOKENS} AS tokens FROM webhooks WHERE hash = ?2 AND revoked IS NULL`, now, hash),
-      stmt(db, `SELECT * FROM apps WHERE id = (${live.replace("%s", "app_id")})`, now, hash),
-      stmt(db, `SELECT * FROM teams WHERE id = (${live.replace("%s", "team_id")})`, now, hash),
-      stmt(
-        db,
-        `SELECT * FROM users WHERE id = (SELECT bot_user_id FROM apps WHERE id = (${live.replace("%s", "app_id")}))`,
-        now,
-        hash,
-      ),
-      stmt(db, `SELECT * FROM conversations WHERE id = (${live.replace("%s", "channel_id")})`, now, hash),
-      stmt(
-        db,
-        `SELECT 1 FROM members WHERE conversation_id = (${live.replace("%s", "channel_id")})
-           AND user_id = (SELECT bot_user_id FROM apps WHERE id = (${live.replace("%s", "app_id")}))`,
-        now,
-        hash,
-      ),
-    ])
-    const hook = hooks!.results[0] as (WebhookRow & { tokens: number }) | undefined
-    const app = apps!.results[0] as AppRow | undefined
-    const team = teams!.results[0] as TeamRow | undefined
-    const bot = bots!.results[0] as UserRow | undefined
-    const c = conversations!.results[0] as ConversationRow | undefined
+    // The webhook, its tokens now, and all it posts as and to: one row, one round trip.
+    const found = await joinedRow<{
+      hook: WebhookRow & { tokens: number }
+      app: AppRow
+      team: TeamRow
+      bot: UserRow
+      conversation: ConversationRow
+      member: { bot_member: number }
+    }>(
+      env.DB,
+      `SELECT 1 AS "#hook", w.*, ${TOKENS} AS tokens,
+         (a.id IS NOT NULL) AS "#app", a.*,
+         (t.id IS NOT NULL) AS "#team", t.*,
+         (u.id IS NOT NULL) AS "#bot", u.*,
+         (c.id IS NOT NULL) AS "#conversation", c.*,
+         1 AS "#member", (m.user_id IS NOT NULL) AS bot_member
+       FROM webhooks w
+         LEFT JOIN apps a ON a.id = w.app_id
+         LEFT JOIN teams t ON t.id = w.team_id
+         LEFT JOIN users u ON u.id = a.bot_user_id
+         LEFT JOIN conversations c ON c.id = w.channel_id AND c.team_id = w.team_id
+         LEFT JOIN members m ON m.conversation_id = c.id AND m.user_id = u.id
+       WHERE w.hash = ?2 AND w.revoked IS NULL`,
+      now,
+      hash,
+    )
+    const { hook, app, team, bot, conversation: c, member } = found ?? {}
     if (!hook || !app || !team || !bot) throw new CampflareError("no_service")
-    if (!taken!.results.length) {
-      const wait = Math.max(1, Math.ceil((1 - hook.tokens) / WEBHOOK_PER_SECOND))
-      return answer(429, "rate_limited", { "retry-after": String(wait) })
-    }
     // A deactivated bot posts nothing, as on Slack when an admin restricts an app.
     if (bot.deleted) throw new CampflareError("action_prohibited")
     if (!c) throw new CampflareError("channel_not_found")
     if (c.is_archived) throw new CampflareError("channel_is_archived")
     // As chat.postMessage lets the bot (chat:write.public): any public channel, else one it's in.
     const isPublic = c.kind === "channel" && !c.is_private
-    if (!isPublic && !members!.results.length) throw new CampflareError("channel_not_found")
+    if (!isPublic && !member?.bot_member) throw new CampflareError("channel_not_found")
     const ctx = asApp(env, request, waitUntil, { team, app, bot }, new Args(payload))
-    await postMessage(ctx, c, {
-      ...authorOf(ctx),
-      ...content(ctx),
-      thread_ts: ctx.args.ts("thread_ts") ?? null,
-    })
+    const message = { ...authorOf(ctx), ...content(ctx), thread_ts: ctx.args.ts("thread_ts") ?? null }
+    // Only a post that passed every check spends a token.
+    if (hook.tokens < 1) {
+      const wait = Math.max(1, Math.ceil((1 - hook.tokens) / WEBHOOK_PER_SECOND))
+      return answer(429, "rate_limited", { "retry-after": String(wait) })
+    }
+    // The token is spent in the post's own batch: no post, no spend. Two posts at once may both see the
+    // last token and both spend it; the bucket goes below zero and the debt is waited out.
+    await postMessage(ctx, c, message, [
+      stmt(
+        env.DB,
+        `UPDATE webhooks SET bucket = ${TOKENS} - 1, bucket_at = ?1, last_used = ?3 WHERE hash = ?2`,
+        now,
+        hash,
+        nowSeconds(),
+      ),
+    ])
     return answer(200, "ok")
   } catch (error) {
     if (error instanceof CampflareError) return answer(STATUS[error.code] ?? 400, error.code)

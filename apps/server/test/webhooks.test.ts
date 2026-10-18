@@ -193,6 +193,12 @@ describe("POST /services/<secret>", () => {
       { app: app.id, channel: w.general },
       w.owner.token,
     )
+    // Refused posts spend nothing, and don't count as a use.
+    for (let i = 0; i < 12; i++) expect((await post(hook.url, i % 2 ? {} : "nope")).status).toBe(400)
+    expect(
+      (await ok<{ webhooks: Webhook[] }>("campflare.apps.webhooks.list", { app: app.id }, w.owner.token)).webhooks[0]!
+        .last_used,
+    ).toBeNull()
     const answers: number[] = []
     for (let i = 0; i < 11; i++) answers.push((await post(hook.url, { text: `n° ${i}` })).status)
     expect(answers.slice(0, 10)).toEqual(Array(10).fill(200))

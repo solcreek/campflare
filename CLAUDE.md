@@ -608,9 +608,13 @@ posts anew. Incoming webhooks: `campflare.apps.createWebhook`,
 `.webhooks.list`, `.webhooks.revoke` (`src/methods/webhooks.ts`, `ownApp()`)
 keep a SHA-256 of the secret; `POST /services/:secret` (`handleWebhook()` in
 `src/webhooks.ts`) reads the body (JSON whatever the type, or a form's
-`payload`), then in one batch takes a token from the row's bucket (a guarded
-`UPDATE … RETURNING`, 10 burst, 1/s) and reads the webhook, app, team, bot,
-conversation and the bot's membership, and posts through `postMessage()`.
+`payload`), reads the webhook with its bucket's tokens, app, team, bot,
+conversation and the bot's membership as one joined row (`joinedRow()` in
+`src/db/query.ts`: `"#name"` marker columns split it per table), checks
+everything, answers 429 when there's no token (10 burst, 1/s), and posts
+through `postMessage()` with the token's spend in the post's batch, so a
+refused request spends nothing. `campflare.commands.invoke` reads the
+command, app and bot the same way.
 Answers are plain text with Slack's statuses (`STATUS`); 429 carries
 `Retry-After`. Core keeps `state.commands` (reloaded on `commands_changed` and
 reconnect) with `invokeCommand()`, and `commandIn()`/`commandSuggestions()`
